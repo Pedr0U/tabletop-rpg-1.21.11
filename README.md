@@ -41,38 +41,6 @@ Mod de tabletop RPG para Minecraft Fabric 1.21.11 que adiciona um menu principal
 4. Vá em "Mods" e certifique-se de que o TableTop RPG esteja ativo
 5. Jogar!
 
-## Como Testar
-
-### Testando o Menu Principal
-
-1. Inicie o Minecraft com o mod carregado
-2. Pressione a tecla **`R`** (padrão) para abrir o menu do TableTop RPG
-3. O menu deve aparecer centralizado na tela com a proporção correta
-
-### Verificando o Comportamento em Diferentes Resoluções
-
-- **Telas grandes** (1920x1080, 2560x1440): O menu deve escalar para cima, ocupando mais da tela mantendo a proporção 408x612
-- **Telas médias** (1600x900, 1366x768): O menu deve caber completamente com margens iguais
-- **Telas pequenas** (1280x720, notebooks): O menu escala para baixo, mas os botões nunca ficam menores que 100px de largura
-
-### Testando a Tela de Jogadores
-
-1. No menu principal, clique no botão **"Players"**
-2. A tela de lista de jogadores deve abrir
-3. Os botões dos jogadores devem estar centralizados e com largura consistente (entre 100-200px)
-4. Clique em "Back" para retornar ao menu principal
-
-### Testando o Modo Mestre vs Jogador
-
-- **Como Mestre**: Ao abrir o menu, você verá "Role: MASTER" e pode acessar todas as funcionalidades
-- **Como Jogador**: Ao abrir o menu, você verá "Role: PLAYER" e o botão "End Turn" aparecerá se for o seu turno
-
-## Controles
-
-| Tecla | Função |
-|-------|--------|
-| `R` | Abrir/Fechar menu principal TableTop RPG |
-
 ## Estrutura do Projeto
 
 ```
@@ -94,21 +62,6 @@ src/
         └── tabletop-rpg.client.mixins.json
 ```
 
-## Problemas Conhecidos e Correções
-
-### Problemas Resolvidos nesta versão:
-
-1. **Escalonamento do Menu**: Removido o teto `Math.min(1f, ...)` que impedia o menu de escalar em telas maiores. Agora o menu proporcionalmente se ajusta a qualquer resolução.
-
-2. **Largura Mínima dos Botões**: Adicionada proteção `MIN_BUTTON_WIDTH = 100` para evitar que botões fiquem muito estreitos em telas muito pequenas.
-
-3. **PlayerListScreen**: 
-   - Largura dos botões agora escala entre 100-200px em vez de fixa em 200px
-   - Espaçamento vertical ajustado para melhor visualização
-   - Posicionamento do botão "Back" mais consistente
-
-4. **Razão de Aspecto**: A textura do menu (408x612, proporção 1:1.5) é mantida em todas as resoluções sem distorção ou corte.
-
 ## Desenvolvimento
 
 ### Build Manual
@@ -120,12 +73,6 @@ src/
 # Ou compilar tudo
 ./gradlew build
 ```
-
-### Adicionando Novas Funcionalidades
-
-1. Edite `RpgMenuScreen.java` para alterar o layout do menu
-2. Edite `PlayerListScreen.java` para alterar a tela de jogadores
-3. Adicione novos payloads em `RpgNetworking.java` para novas funcionalidades
 4. Registre novos receptores em `TabletopRpgClient.java`
 
 ## Licença
