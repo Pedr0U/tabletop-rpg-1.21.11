@@ -50,7 +50,7 @@ public final class CinematicCameraController {
     private static final int TRANSITION_TICKS = 50;
 
     /** Inclinação extra para baixo (graus) aplicada ao ângulo da câmera. */
-    private static final float PITCH_BIAS = 5.0f;
+    private static final float PITCH_BIAS = -10.0f;
 
     private CinematicCameraController() {
     }

@@ -52,6 +52,10 @@ public class RpgMenuScreen extends Screen {
     private int panelWidth;
     private int panelHeight;
     private int buttonWidth;
+    private float scale;
+
+    // Margem mínima para os botões, para evitar que fiquem muito estreitos em telas pequenas.
+    private static final int MIN_BUTTON_WIDTH = 100;
 
     public RpgMenuScreen(boolean isMaster, boolean isMyTurn, String sessionName,
                          String modeName, String activePlayerName, List<String> playerNames) {
@@ -68,20 +72,24 @@ public class RpgMenuScreen extends Screen {
     protected void init() {
         super.init();
 
-        // Redimensiona o painel para caber na tela mantendo a proporção 1:1.5.
         int availW = this.width - SCREEN_MARGIN * 2;
         int availH = this.height - SCREEN_MARGIN * 2;
-        float scale = Math.min(1f,
-            Math.min((float) availW / TEXTURE_WIDTH, (float) availH / TEXTURE_HEIGHT));
+        
+        // Salva a escala na variável de instância
+        this.scale = Math.min((float) availW / TEXTURE_WIDTH, (float) availH / TEXTURE_HEIGHT);
 
         panelWidth = Math.max(1, (int) (TEXTURE_WIDTH * scale));
         panelHeight = Math.max(1, (int) (TEXTURE_HEIGHT * scale));
         panelX = (this.width - panelWidth) / 2;
         panelY = (this.height - panelHeight) / 2;
 
-        buttonWidth = panelWidth - PANEL_MARGIN * 2;
+        // Limita a largura dos botões à parte útil do papel (aproximadamente 65%)
+        buttonWidth = (int) (panelWidth * 0.65f);
         if (buttonWidth > 220) {
             buttonWidth = 220;
+        }
+        if (buttonWidth < MIN_BUTTON_WIDTH) {
+            buttonWidth = MIN_BUTTON_WIDTH;
         }
 
         buildMenu();
@@ -93,24 +101,22 @@ public class RpgMenuScreen extends Screen {
 
     private void buildMenu() {
         int x = panelX + (panelWidth - buttonWidth) / 2;
-        int y = panelY + 56;
+        int y = panelY + (int)(220 * this.scale);
 
-        // Informações de status (apenas texto, sem ação).
         addLabel("Role: " + (isMaster ? "MASTER" : "PLAYER"), x, y);
         y += BUTTON_GAP;
         addLabel("Mode: " + modeName, x, y);
         y += BUTTON_GAP;
         addLabel("Turn: " + activePlayerName, x, y);
-        y += 16;
+        
+        y += BUTTON_GAP; 
 
-        // Navegação.
         y = addButton("Players", x, y, () -> openPlayers());
         y = addButton("Rolls", x, y, () -> { /* placeholder */ });
         y = addButton("Settings", x, y, () -> { /* placeholder */ });
 
-        // Finalizar turno (só para o jogador, quando for a vez dele).
         if (!isMaster && isMyTurn) {
-            y += 16;
+            y += BUTTON_GAP; // Mantém a padronização de espaçamento
             addButton("End Turn", x, y, () -> {
                 sendCommand("rpg turn finish");
                 this.onClose();
@@ -156,31 +162,37 @@ public class RpgMenuScreen extends Screen {
 
     @Override
     public void render(GuiGraphics graphics, int mouseX, int mouseY, float delta) {
-        // super.render() chama renderBackground() (nosso painel) e desenha os botões.
         super.render(graphics, mouseX, mouseY, delta);
 
-        // Título: nome da sessão centralizado.
         String title = "\"" + sessionName + "\"";
         int titleX = panelX + (panelWidth - this.font.width(title)) / 2;
-        graphics.drawString(this.font, title, titleX, panelY + 26, 0xFFFFAA, false);
+        
+        // Multiplicamos o offset Y do título pela escala também!
+        int titleY = panelY + (int)(26 * this.scale);
+        
+        graphics.drawString(this.font, title, titleX, titleY, 0xFFFFAA, false);
     }
 
-    /**
-     * Desenha o fundo do menu (a imagem do painel).
-     *
-     * <p>Chamado automaticamente por {@code super.render()}. IMPORTANTE: não
-     * devemos chamar {@code renderBackground} manualmente, pois isso faria o
-     * blur do fundo rodar duas vezes por frame e o jogo crasharia com
-     * "Can only blur once per frame".
-     */
     @Override
     public void renderBackground(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
-        // Escurece levemente toda a tela para dar contraste ao painel.
+        // Escurece o fundo
         graphics.fill(0, 0, this.width, this.height, 0x99000000);
 
-        // Painel com a imagem do menu (em escala, sem cortar).
+        // A Mágica acontece aqui: Inicia a matriz 2D (nova sintaxe)
+        graphics.pose().pushMatrix();
+        
+        // Move o ponto de origem (Apenas X e Y, sem o 0 no final)
+        graphics.pose().translate(panelX, panelY);
+        
+        // Aplica a escala (Apenas X e Y, sem o 1.0f no final)
+        graphics.pose().scale(this.scale, this.scale);
+        
+        // Desenha a imagem sempre a partir de 0,0 usando as dimensões totais
         graphics.blit(RenderPipelines.GUI_TEXTURED, TEXTURE,
-            panelX, panelY, 0, 0, panelWidth, panelHeight, TEXTURE_WIDTH, TEXTURE_HEIGHT);
+            0, 0, 0, 0, TEXTURE_WIDTH, TEXTURE_HEIGHT, TEXTURE_WIDTH, TEXTURE_HEIGHT);
+            
+        // Finaliza a matriz 2D
+        graphics.pose().popMatrix();
     }
 
     @Override

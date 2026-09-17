@@ -33,28 +33,33 @@ public class PlayerListScreen extends Screen {
     protected void init() {
         super.init();
 
-        int buttonWidth = Math.min(200, this.width - 60);
+        // Calcula largura do botão: 200px no máximo, mas escala com largura da tela
+        // com margem de 30px total (15px de cada lado), com mínimo de 100px.
+        int buttonWidth = Math.max(100, Math.min(200, this.width - 60));
         int x = (this.width - buttonWidth) / 2;
-        int y = 46;
+        // Altura inicial com margem superior de 40px em vez de 46, para melhor espaçamento
+        int y = 40;
 
         if (playerNames.isEmpty()) {
             this.addRenderableWidget(Button.builder(Component.literal("(No players connected)"), b -> {})
                 .bounds(x, y, buttonWidth, 20).build());
-            y += 26;
+            y += 30;
         } else {
             for (String name : playerNames) {
                 String label = name.equals(activePlayerName) ? name + " (turn)" : name;
                 this.addRenderableWidget(Button.builder(Component.literal(label), b -> {})
                     .bounds(x, y, buttonWidth, 20).build());
-                y += 26;
+                y += 30;
             }
         }
 
+        // Botão Back posicionado com margem inferior de 20px da base calculada.
+        // Usamos y em vez de y + 12 para posicionamento mais consistente.
         this.addRenderableWidget(Button.builder(Component.literal("Back"), b -> {
             if (this.minecraft != null) {
                 this.minecraft.setScreen(returnTo != null ? returnTo : null);
             }
-        }).bounds(x, y + 12, buttonWidth, 20).build());
+        }).bounds(x, y + 15, buttonWidth, 20).build());
     }
 
     @Override
