@@ -1,75 +1,46 @@
-# TableTop RPG Mod - Minecraft 1.21.11
+# Tabletop RPG Mod
 
-## Visão Geral
-Mod de tabletop RPG para Minecraft Fabric 1.21.11 que adiciona um menu principal interativo com sistema de turns, modos de jogo e navegação entre telas.
+Um mod para Minecraft (Fabric 1.21.11) focado em trazer a experiência completa de sistemas de RPG de mesa (como Ordem Paranormal, Sacramento, etc.) para dentro do jogo. O mod adiciona uma interface visual temática em formato de pergaminho e um sistema seguro de rolagem de dados processado diretamente no servidor.
 
-## Requisitos
+## 📦 Requisitos
 
-- **Minecraft Launcher**: Versão 1.21.11 com Fabric
-- **Fabric Loader**: >= 0.19.5
-- **Java**: Versão 21 ou superior
-- **Fabric API**: Necessária (gerenciada automaticamente pelo gradle)
+Antes de instalar o mod, você precisará ter o seguinte instalado no seu Minecraft:
+* **Minecraft:** 1.21.11
+* **Fabric Loader:** Compatível com a versão 1.21.11
+* **Fabric API:** Essencial para o funcionamento de mods no Fabric.
 
-## Instalação
+## ⚙️ Como Instalar
 
-### Método 1: Via Gradle (Desenvolvimento)
+Siga estes passos simples para instalar o mod no seu computador (Windows):
 
-1. Clone ou extraia o projeto
-2. Execute o gradle para gerar o arquivo `.jar`:
-   ```bash
-   ./gradlew build
-   ```
-   ou no Windows:
-   ```bash
-   .\gradlew build
-   ```
+1. **Instale o Fabric:** Se você ainda não tem, baixe o [Instalador do Fabric](https://fabricmc.net/use/installer/) e instale o perfil cliente para a versão 1.21.11.
+2. **Baixe o Fabric API:** Baixe o `.jar` do [Fabric API](https://modrinth.com/mod/fabric-api) compatível com a 1.21.11.
+3. **Baixe o Tabletop RPG Mod:** Faça o download do arquivo `.jar` deste mod (na aba *Releases*).
+4. **Abra a pasta de mods:** No seu teclado, aperte `Windows + R`, digite `%appdata%\.minecraft\mods` e aperte Enter. (Se a pasta `mods` não existir, você pode criá-la).
+5. **Coloque os arquivos:** Arraste os arquivos `.jar` do Fabric API e do Tabletop RPG Mod para dentro da pasta `mods`.
+6. **Jogue!** Abra o seu Minecraft Launcher, certifique-se de selecionar o perfil do **Fabric** e inicie o jogo.
 
-3. O arquivo `.jar` será gerado em `build/libs/tabletop-rpg-*.jar`
+## 🎲 Como Abrir e Jogar
 
-4. Coloque o `.jar` na pasta `mods` do seu perfil Fabric no launcher
+Uma vez dentro do mundo ou servidor, o mod oferece ferramentas visuais e em texto para facilitar a sua campanha:
 
-### Configuração do Minecraft
+### Interface do Pergaminho
+Para acessar a interface visual de rolagem de dados e controle da sessão, utilize o atalho de teclado configurado ou interaja com o item do mod (conforme configurado pelo Mestre da campanha). 
+* Navegue até a aba **Rolls**.
+* Clique nos botões para formar a sua equação (ex: `d20`, `+10`).
+* Clique em **Roll!** para o servidor calcular e exibir o resultado na tela de todos os jogadores.
 
-1. Abra o launcher do Minecraft
-2. Crie um perfil Fabric para a versão **1.21.11**
-3. Certifique-se de que o **Fabric Loader** esteja instalado
-4. Vá em "Mods" e certifique-se de que o TableTop RPG esteja ativo
-5. Jogar!
+### Comandos de Chat
+Se preferir rodar dados de forma rápida diretamente pelo chat, o mod possui um sistema integrado e seguro:
 
-## Estrutura do Projeto
+* `/rpg roll <expressão>` - Rola os dados informados. 
+  * *Exemplo:* `/rpg roll d20+d10+9` 
+  * O servidor anunciará o valor dourado no centro da tela e os detalhes matemáticos no chat!
 
-```
-src/
-├── main/
-│   ├── java/com/pedro/tabletoprpg/
-│   │   ├── TabletopRpg.java       # ModInitializer principal
-│   │   └── RpgNetworking.java     # Payloads e handlers de rede
-│   └── resources/
-│       ├── fabric.mod.json        # Configuração do mod
-│       └── assets/tabletop-rpg/
-│           └── textures/gui/rpg_menu.png  # Textura do menu (408x612)
-└── client/
-    ├── java/com/pedro/tabletoprpg/client/
-    │   ├── TabletopRpgClient.java # ClientModInitializer
-    │   ├── RpgMenuScreen.java     # Menu principal (TEXTO CORRIGIDO)
-    │   └── PlayerListScreen.java  # Tela de lista de jogadores (TEXTO CORRIGIDO)
-    └── resources/
-        └── tabletop-rpg.client.mixins.json
-```
+## 🛠️ Para Desenvolvedores
 
-## Desenvolvimento
-
-### Build Manual
-
-```bash
-# Compilar apenas o cliente (necessário para testes)
-./gradlew client:jar
-
-# Ou compilar tudo
-./gradlew build
-```
-4. Registre novos receptores em `TabletopRpgClient.java`
-
-## Licença
-
-Este projeto está licenciado sob a licença CC0-1.0 - veja o arquivo LICENSE para mais detalhes.
+Se quiser clonar este projeto e editá-lo:
+1. Clone o repositório: `git clone https://github.com/SeuUsuario/tabletop-rpg-template.git`
+2. Abra a pasta no IntelliJ IDEA.
+3. Aguarde o Gradle sincronizar (pode demorar alguns minutos na primeira vez).
+4. Rode a task `runClient` para abrir o Minecraft em modo de teste.
