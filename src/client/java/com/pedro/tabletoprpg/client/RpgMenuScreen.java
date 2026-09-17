@@ -98,22 +98,20 @@ public class RpgMenuScreen extends Screen {
 
     private void buildMenu() {
         int x = panelX + (panelWidth - buttonWidth) / 2;
-        int y = panelY + (int)(220 * this.scale);
+        int startY = panelY + (int)(220 * this.scale);
 
-        addLabel("Role: " + (isMaster ? "MASTER" : "PLAYER"), x, y);
-        y += BUTTON_GAP;
-        addLabel("Mode: " + modeName, x, y);
-        y += BUTTON_GAP;
-        addLabel("Turn: " + activePlayerName, x, y);
-        
-        y += BUTTON_GAP; 
+        int y = startY + 60;
 
         y = addButton("Players", x, y, () -> openPlayers());
-        y = addButton("Rolls", x, y, () -> { /* placeholder */ });
+        y = addButton("Rolls", x, y, () -> {
+            if (this.minecraft != null) {
+                this.minecraft.setScreen(new DiceRollScreen(this));
+            }
+        });
         y = addButton("Settings", x, y, () -> { /* placeholder */ });
 
         if (!isMaster && isMyTurn) {
-            y += BUTTON_GAP; // Mantém a padronização de espaçamento
+            y += BUTTON_GAP;
             addButton("End Turn", x, y, () -> {
                 sendCommand("rpg turn finish");
                 this.onClose();
@@ -132,10 +130,10 @@ public class RpgMenuScreen extends Screen {
     // HELPERS
     // ------------------------------------------------------------------
 
-    private void addLabel(String text, int x, int y) {
-        this.addRenderableWidget(Button.builder(Component.literal("§l" + text), b -> {})
-            .bounds(x, y, buttonWidth, BUTTON_HEIGHT)
-            .build());
+    /** Desenha um texto centralizado no pergaminho sem fundo de botão e sem sombra */
+    private void drawCenteredText(GuiGraphics graphics, String text, int y, int color) {
+        int x = panelX + (panelWidth - this.font.width(text)) / 2;
+        graphics.drawString(this.font, text, x, y, color, false);
     }
 
     /** Adiciona um botão empilhado e retorna a próxima posição Y. */
@@ -161,13 +159,23 @@ public class RpgMenuScreen extends Screen {
     public void render(GuiGraphics graphics, int mouseX, int mouseY, float delta) {
         super.render(graphics, mouseX, mouseY, delta);
 
-        String title = "\"" + sessionName + "\"";
-        int titleX = panelX + (panelWidth - this.font.width(title)) / 2;
-        
-        // Multiplicamos o offset Y do título pela escala também!
-        int titleY = panelY + (int)(26 * this.scale);
-        
-        graphics.drawString(this.font, title, titleX, titleY, 0xFFFFAA, false);
+        // 1. O NOME DA SESSÃO NO TOPO
+        int titleY = panelY + (int)(210 * this.scale);
+        // Agora com FF no começo para ficar opaco!
+        drawCenteredText(graphics, "§l" + sessionName, titleY, 0xFF000000);
+
+        // 2. OS TEXTOS DE STATUS (Role, Mode, Turn)
+        int textY = panelY + (int)(235 * this.scale);
+        int textSpacing = 15;
+
+        // Agora com FF no começo (Cinza escuro sólido)
+        int textColor = 0xFF333333;
+
+        drawCenteredText(graphics, "Role: " + (isMaster ? "MASTER" : "PLAYER"), textY, textColor);
+        textY += textSpacing;
+        drawCenteredText(graphics, "Mode: " + modeName, textY, textColor);
+        textY += textSpacing;
+        drawCenteredText(graphics, "Turn: " + activePlayerName, textY, textColor);
     }
 
     @Override

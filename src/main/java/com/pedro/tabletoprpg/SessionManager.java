@@ -22,7 +22,7 @@ public class SessionManager {
         }
     }
 
-    private static String sessionName = "Campaign Session #1";
+    private static String sessionName = "Session Name";
     private static GameMode currentMode = GameMode.FREE;
     private static UUID masterUuid = null;
     private static String masterName = "None";
