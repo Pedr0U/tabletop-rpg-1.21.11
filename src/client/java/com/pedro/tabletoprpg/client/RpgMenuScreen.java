@@ -31,9 +31,6 @@ public class RpgMenuScreen extends Screen {
 
     // Margem entre a borda da tela e o painel.
     private static final int SCREEN_MARGIN = 16;
-    // Margem entre a borda do painel e os botões.
-    private static final int PANEL_MARGIN = 18;
-
     private static final int BUTTON_HEIGHT = 20;
     // Espaçamento vertical (folga clara entre os botões, sem empilhar).
     private static final int BUTTON_GAP = 28;
