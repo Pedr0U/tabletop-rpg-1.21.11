@@ -28,11 +28,6 @@ Mod de tabletop RPG para Minecraft Fabric 1.21.11 que adiciona um menu principal
 
 4. Coloque o `.jar` na pasta `mods` do seu perfil Fabric no launcher
 
-### Método 2: Via CurseForge / Modrinth
-
-- Baixe a versão mais recente do mod
-- Coloque na pasta `mods` do seu perfil Fabric
-
 ### Configuração do Minecraft
 
 1. Abra o launcher do Minecraft
