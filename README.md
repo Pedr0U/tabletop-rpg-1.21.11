@@ -1,6 +1,6 @@
 # Tabletop RPG Mod
 
-Um mod para Minecraft (Fabric 1.21.11) focado em trazer a experiência completa de sistemas de RPG de mesa (como Ordem Paranormal, Sacramento, etc.) para dentro do jogo. O mod adiciona uma interface visual temática em formato de pergaminho e um sistema seguro de rolagem de dados processado diretamente no servidor.
+Um mod para Minecraft (Fabric 1.21.11) focado em trazer a experiência de RPG de mesa para dentro do jogo.
 
 ## 📦 Requisitos
 
