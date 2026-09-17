@@ -15,9 +15,9 @@ Siga estes passos simples para instalar o mod no seu computador (Windows):
 
 1. **Instale o Fabric:** Se você ainda não tem, baixe o [Instalador do Fabric](https://fabricmc.net/use/installer/) e instale o perfil cliente para a versão 1.21.11.
 2. **Baixe o Fabric API:** Baixe o `.jar` do [Fabric API](https://modrinth.com/mod/fabric-api) compatível com a 1.21.11.
-3. **Baixe o Tabletop RPG Mod:** Faça o download do arquivo `.jar` deste mod (na aba *Releases*).
+3. **Copie a build do Tabletop RPG Mod:** Copie o arquivo `.jar` deste mod na aba para `tabletop-rpg-template-1.21.11-main\build\libs`
 4. **Abra a pasta de mods:** No seu teclado, aperte `Windows + R`, digite `%appdata%\.minecraft\mods` e aperte Enter. (Se a pasta `mods` não existir, você pode criá-la).
-5. **Coloque os arquivos:** Arraste os arquivos `.jar` do Fabric API e do Tabletop RPG Mod para dentro da pasta `mods`.
+5. **Coloque os arquivos:** Cole os arquivos `.jar` do Fabric API e do Tabletop RPG Mod para dentro da pasta `mods`.
 6. **Jogue!** Abra o seu Minecraft Launcher, certifique-se de selecionar o perfil do **Fabric** e inicie o jogo.
 
 ## 🎲 Como Abrir e Jogar
