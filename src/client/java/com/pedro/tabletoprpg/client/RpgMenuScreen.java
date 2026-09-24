@@ -16,9 +16,9 @@ import java.util.List;
  * automaticamente para caber na tela, sem cortar e mantendo a proporção.
  *
  * <p>Layout limpo: mostra o papel (Mestre/Jogador), o modo e o turno ativo, e
- * três botões de navegação. Apenas o botão "Players" tem ação (abre a lista de
- * jogadores) e "End Turn" finaliza o turno do jogador quando é a vez dele.
- * Os botões "Rolls" e "Settings" são placeholders (sem ação por enquanto).
+ * três botões de navegação: "Players" (lista de jogadores), "Rolls" (rolagem
+ * de dados) e "Settings" (configurações do mundo, apenas para o mestre).
+ * "End Turn" finaliza o turno do jogador quando é a vez dele.
  */
 public class RpgMenuScreen extends Screen {
 
@@ -108,7 +108,11 @@ public class RpgMenuScreen extends Screen {
                 this.minecraft.setScreen(new DiceRollScreen(this));
             }
         });
-        y = addButton("Settings", x, y, () -> { /* placeholder */ });
+        y = addButton("Settings", x, y, () -> {
+            if (this.minecraft != null) {
+                this.minecraft.setScreen(new RpgSettingsScreen(this, isMaster));
+            }
+        });
 
         if (!isMaster && isMyTurn) {
             y += BUTTON_GAP;
@@ -186,10 +190,10 @@ public class RpgMenuScreen extends Screen {
         // A Mágica acontece aqui: Inicia a matriz 2D (nova sintaxe)
         graphics.pose().pushMatrix();
         
-        // Move o ponto de origem (Apenas X e Y, sem o 0 no final)
+        // Move o ponto de origem (Matrix3x2fStack: translate(float, float))
         graphics.pose().translate(panelX, panelY);
         
-        // Aplica a escala (Apenas X e Y, sem o 1.0f no final)
+        // Aplica a escala (Matrix3x2fStack: scale(float, float))
         graphics.pose().scale(this.scale, this.scale);
         
         // Desenha a imagem sempre a partir de 0,0 usando as dimensões totais
