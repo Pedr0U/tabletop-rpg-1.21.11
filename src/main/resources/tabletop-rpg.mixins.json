@@ -5,7 +5,7 @@
   "compatibilityLevel": "JAVA_21",
   "server": [
     "ServerGamePacketListenerImplMixin",
-    "MobAccessor"
+    "ServerGamePacketListenerImplAccessor"
   ],
   "injectors": {
     "defaultRequire": 1

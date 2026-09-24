@@ -1,6 +1,5 @@
 package com.pedro.tabletoprpg;
 
-import com.pedro.tabletoprpg.mixin.MobAccessor;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.fabric.api.event.player.UseBlockCallback;
 import net.fabricmc.fabric.api.event.player.UseEntityCallback;
@@ -12,6 +11,7 @@ import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.Mob;
+import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.phys.Vec3;
 
 import java.util.ArrayList;
@@ -23,50 +23,61 @@ import java.util.Set;
 import java.util.UUID;
 
 /**
- * Controla a movimentação de monstros pelo mestre e os limites de
- * movimentação (auras) da Fase 4.
+ * Controla a movimenta├º├úo de monstros pelo mestre e os limites de
+ * movimenta├º├úo (auras) da Fase 4.
  *
- * <p>Fluxo: o mestre clica com o botão direito em um monstro (seleciona),
- * aparece uma aura azul de {@value #AURA_RADIUS} blocos ao redor da âncora
- * do monstro e da âncora do jogador ativo, e o mestre clica com o botão
- * direito em um bloco para o monstro andar até lá. O monstro sempre olha
- * para o jogador mais próximo (não fica olhando para o nada).
+ * <p>Fluxo: o mestre clica com o bot├úo direito em um monstro (seleciona),
+ * aparece uma aura azul de {@value #AURA_RADIUS} blocos ao redor da ├óncora
+ * do monstro e da ├óncora do jogador ativo, e o mestre clica com o bot├úo
+ * direito em um bloco para o monstro andar at├® l├í.
  *
- * <p>Limites: o mestre NUNCA é limitado. Apenas o jogador que está no turno
+ * <p>Regra de ouro (FASE 0.6): o monstro NUNCA se move sozinho. Ele fica
+ * congelado ({@code setNoAi(true)}) em todos os momentos ÔÇö selecionado ou
+ * n├úo. O movimento ├® feito pelo servidor em linha reta at├® o destino
+ * escolhido pelo mestre (sem IA, sem pathfinding), e a rota├º├úo (olhar para
+ * o jogador mais pr├│ximo) tamb├®m ├® aplicada manualmente.
+ *
+ * <p>Limites: o mestre NUNCA ├® limitado. Apenas o jogador que est├í no turno
  * e o monstro selecionado respeitam o limite de {@value #AURA_RADIUS} blocos
- * a partir de onde começaram (âncora). A aura não segue ninguém: ela fica
- * ancorada na posição inicial.
+ * a partir de onde come├ºaram (├óncora). A aura n├úo segue ningu├®m: ela fica
+ * ancorada na posi├º├úo inicial.
  */
 public final class CombatController {
 
-    /** Raio (em blocos) da aura de limite de movimentação. */
+    /** Raio (em blocos) da aura de limite de movimenta├º├úo. */
     public static final int AURA_RADIUS = 15;
+
+    /** Velocidade do movimento direto do monstro controlado (blocos/tick). */
+    private static final double MOVE_SPEED = 0.35;
 
     /** Monstro atualmente selecionado pelo mestre (UUID). */
     private static UUID selectedMonsterUuid = null;
 
-    /** Âncoras dos monstros: UUID do monstro -> posição onde começou. */
+    /** ├éncoras dos monstros: UUID do monstro -> posi├º├úo onde come├ºou. */
     private static final Map<UUID, BlockPos> monsterAnchors = new HashMap<>();
 
-    /** Âncoras dos jogadores: UUID do jogador -> posição onde começou. */
+    /** ├éncoras dos jogadores: UUID do jogador -> posi├º├úo onde come├ºou. */
     private static final Map<UUID, BlockPos> playerAnchors = new HashMap<>();
 
-    /** Monstros controlados (selecionados/movidos) que olham para o jogador mais próximo. */
+    /** Monstros controlados (selecionados/movidos) que olham para o jogador mais pr├│ximo. */
     private static final Set<UUID> controlledMonsters = new HashSet<>();
+
+    /** Destino atual do movimento direto: UUID do monstro -> posi├º├úo alvo. */
+    private static final Map<UUID, Vec3> monsterDestinations = new HashMap<>();
 
     /** Hover atual por jogador: UUID do jogador -> UUID da entidade com Glowing. */
     private static final Map<UUID, UUID> hoveredEntities = new HashMap<>();
 
     /**
-     * Debounce do toggle de seleção: UUID do mestre -> (UUID do mob, tempo).
-     * O cliente envia vários pacotes por clique (interactAt + interact + useItem)
-     * e o caminho "segurar o botão" do vanilla re-dispara startUseItem após
-     * ~200ms. Sem debounce, um único clique alterna a seleção 2x (selected ->
-     * deselected instantâneo).
+     * Debounce do toggle de sele├º├úo: UUID do mestre -> (UUID do mob, tempo).
+     * O cliente envia v├írios pacotes por clique (interactAt + interact + useItem)
+     * e o caminho "segurar o bot├úo" do vanilla re-dispara startUseItem ap├│s
+     * ~200ms. Sem debounce, um ├║nico clique alterna a sele├º├úo 2x (selected ->
+     * deselected instant├óneo).
      */
     private static final Map<UUID, ToggleStamp> lastToggles = new HashMap<>();
 
-    /** Carimbo do último toggle: mob clicado + instante (ms). */
+    /** Carimbo do ├║ltimo toggle: mob clicado + instante (ms). */
     private record ToggleStamp(UUID mobUuid, long time) {
     }
 
@@ -74,7 +85,7 @@ public final class CombatController {
     }
 
     public static void register() {
-        // Mestre clica com o botão direito em um monstro -> seleciona/deseleciona.
+        // Mestre clica com o bot├úo direito em um monstro -> seleciona/deseleciona.
         UseEntityCallback.EVENT.register((player, level, hand, entity, hitResult) -> {
             if (!(player instanceof ServerPlayer serverPlayer)) {
                 return InteractionResult.PASS;
@@ -84,18 +95,18 @@ public final class CombatController {
             }
             if (entity instanceof Mob mob) {
                 // O cliente envia 2 pacotes por clique (interactAt + interact).
-                // O 2º pacote (interact, sem posição) chega com hitResult == null.
+                // O 2┬║ pacote (interact, sem posi├º├úo) chega com hitResult == null.
                 // Ignoramos para o toggle disparar apenas 1x por clique.
                 if (hitResult == null) {
                     return InteractionResult.PASS;
                 }
                 toggleSelection((ServerLevel) level, serverPlayer, mob);
-                return InteractionResult.FAIL; // cancela a interação vanilla
+                return InteractionResult.FAIL; // cancela a intera├º├úo vanilla
             }
             return InteractionResult.PASS;
         });
 
-        // Mestre clica com o botão direito em um bloco com seleção ativa -> move o monstro.
+        // Mestre clica com o bot├úo direito em um bloco com sele├º├úo ativa -> move o monstro.
         UseBlockCallback.EVENT.register((player, level, hand, hitResult) -> {
             if (!(player instanceof ServerPlayer serverPlayer)) {
                 return InteractionResult.PASS;
@@ -107,19 +118,20 @@ public final class CombatController {
                 return InteractionResult.PASS;
             }
             moveSelectedMonster((ServerLevel) level, serverPlayer, hitResult.getBlockPos());
-            return InteractionResult.FAIL; // cancela a interação vanilla com o bloco
+            return InteractionResult.FAIL; // cancela a intera├º├úo vanilla com o bloco
         });
 
-        // A cada tick, os monstros controlados olham para o jogador mais próximo.
+        // A cada tick, os monstros controlados andam at├® o destino (se houver)
+        // e olham para o jogador mais pr├│ximo.
         ServerTickEvents.END_SERVER_TICK.register(CombatController::tickControlledMonsters);
     }
 
     // ------------------------------------------------------------------
-    // SELEÇÃO E MOVIMENTO
+    // SELE├ç├âO E MOVIMENTO
     // ------------------------------------------------------------------
 
     private static void toggleSelection(ServerLevel level, ServerPlayer master, Mob mob) {
-        // Debounce: o mesmo mob clicado dentro de 400ms é pacote duplicado do
+        // Debounce: o mesmo mob clicado dentro de 400ms ├® pacote duplicado do
         // mesmo clique (interactAt + interact + useItem + hold path do vanilla).
         long now = System.currentTimeMillis();
         ToggleStamp stamp = lastToggles.get(master.getUUID());
@@ -131,24 +143,29 @@ public final class CombatController {
         UUID mobUuid = mob.getUUID();
         if (mobUuid.equals(selectedMonsterUuid)) {
             // Clicou no mesmo monstro -> deseleciona (a aura some e o monstro
-            // volta a ser uma "peça" congelada da mesa).
+            // volta a ser uma "pe├ºa" congelada da mesa).
             clearSelection(level);
-            master.sendSystemMessage(Component.literal("§7[RPG] Monster deselected."));
+            master.sendSystemMessage(Component.literal("┬º7[RPG] Monster deselected."));
         } else {
             selectedMonsterUuid = mobUuid;
-            // Âncora do monstro: onde ele começou (persiste entre seleções).
-            monsterAnchors.putIfAbsent(mobUuid, mob.blockPosition());
+            // ├éncora do monstro: posi├º├úo atual do mob no momento da sele├º├úo.
+            // A aura fica ancorada aqui durante a movimenta├º├úo (n├úo segue o
+            // mob); ao re-selecionar, a ├óncora ├® atualizada para a posi├º├úo
+            // atual do mob (equivale ao "in├¡cio do turno" do mob).
+            monsterAnchors.put(mobUuid, mob.blockPosition());
             controlledMonsters.add(mobUuid);
-            prepareControlledMob(mob);
+            // Congela o mob: ele NUNCA age sozinho (FASE 0.6). Mesmo mobs
+            // naturais (n├úo inseridos por comando) viram "pe├ºas" da mesa.
+            mob.setNoAi(true);
 
-            // Âncora do jogador ativo (se houver): onde ele começou.
+            // ├éncora do jogador ativo (se houver): onde ele come├ºou.
             ServerPlayer active = findActivePlayer(level);
             if (active != null) {
                 setPlayerAnchor(active);
             }
 
-            master.sendSystemMessage(Component.literal("§b[RPG] Monster selected: §e" + mob.getName().getString()
-                    + "§b. §7Aura de " + AURA_RADIUS + " blocos ativa. Right-click a block to move it."));
+            master.sendSystemMessage(Component.literal("┬ºb[RPG] Monster selected: ┬ºe" + mob.getName().getString()
+                    + "┬ºb. ┬º7Aura de " + AURA_RADIUS + " blocos ativa. Right-click a block to move it."));
         }
         RpgNetworking.sendAuraStateToAll(level.getServer());
     }
@@ -159,40 +176,29 @@ public final class CombatController {
         }
         Entity entity = level.getEntity(selectedMonsterUuid);
         if (!(entity instanceof Mob mob)) {
-            master.sendSystemMessage(Component.literal("§c[RPG] Selected monster is no longer in the world."));
+            master.sendSystemMessage(Component.literal("┬ºc[RPG] Selected monster is no longer in the world."));
             clearSelection(level);
             RpgNetworking.sendAuraStateToAll(level.getServer());
             return;
         }
 
-        // Valida o limite da aura (15 blocos da âncora do monstro).
+        // Valida o limite da aura (15 blocos da ├óncora do monstro).
         BlockPos anchor = monsterAnchors.get(selectedMonsterUuid);
         if (anchor != null && !isWithinAura(anchor, dest.getX() + 0.5, dest.getZ() + 0.5)) {
-            master.sendSystemMessage(Component.literal("§c[RPG] Destination is beyond the monster's aura ("
+            master.sendSystemMessage(Component.literal("┬ºc[RPG] Destination is beyond the monster's aura ("
                     + AURA_RADIUS + " blocks from its start)."));
             return;
         }
 
-        prepareControlledMob(mob);
-        boolean path = mob.getNavigation().moveTo(dest.getX() + 0.5, dest.getY(), dest.getZ() + 0.5, 1.0);
-        if (!path) {
-            master.sendSystemMessage(Component.literal("§c[RPG] No path found to the destination block."));
-        } else {
-            master.sendSystemMessage(Component.literal("§a[RPG] Monster moving to §e" + dest.getX() + ", "
-                    + dest.getZ() + "§a."));
-        }
-    }
-
-    /**
-     * Prepara o mob para ser controlado: habilita o tick de IA (necessário
-     * para navigation + look control funcionarem) e remove todos os goals
-     * para ele não agir por conta própria (atacar, vagar, etc.).
-     */
-    private static void prepareControlledMob(Mob mob) {
-        mob.setNoAi(false);
-        ((MobAccessor) mob).getGoalSelector().removeAllGoals(goal -> true);
-        ((MobAccessor) mob).getTargetSelector().removeAllGoals(goal -> true);
-        mob.setTarget(null);
+        // Movimento direto (sem IA): o mob fica congelado (noAi=true) e o
+        // servidor o move em linha reta at├® o destino. O Y do destino ├® a
+        // superf├¡cie do terreno (Level.getHeight j├í retorna o primeiro Y
+        // vazio acima do bloco mais alto ÔÇö N├âO somar +1, sen├úo o mob flutua).
+        double groundY = level.getHeight(Heightmap.Types.MOTION_BLOCKING, dest.getX(), dest.getZ());
+        monsterDestinations.put(selectedMonsterUuid,
+                new Vec3(dest.getX() + 0.5, groundY, dest.getZ() + 0.5));
+        master.sendSystemMessage(Component.literal("┬ºa[RPG] Monster moving to ┬ºe" + dest.getX() + ", "
+                + dest.getZ() + "┬ºa."));
     }
 
     private static void tickControlledMonsters(MinecraftServer server) {
@@ -205,24 +211,67 @@ public final class CombatController {
                 Entity entity = level.getEntity(uuid);
                 if (entity instanceof Mob mob) {
                     found = true;
-                    ServerPlayer nearest = findNearestPlayer(level, mob);
-                    if (nearest != null) {
-                        mob.getLookControl().setLookAt(nearest, 30.0F, 30.0F);
+                    Vec3 pos = mob.position();
+                    Vec3 dest = monsterDestinations.get(uuid);
+                    if (dest != null) {
+                        // Andando: move em linha reta at├® o destino e olha para ele.
+                        Vec3 delta = dest.subtract(pos);
+                        double dist = delta.horizontalDistance();
+                        if (dist <= MOVE_SPEED) {
+                            mob.setPos(dest.x, dest.y, dest.z);
+                            monsterDestinations.remove(uuid);
+                            // A aura N├âO segue o mob: ela permanece na ├óncora
+                            // (posi├º├úo onde o mob estava ao ser selecionado).
+                            // Assim o mestre pode corrigir o destino se errou
+                            // ou mudou de ideia. A aura s├│ ir├í para a posi├º├úo
+                            // atual do mob quando o turno dele come├ºar (sistema
+                            // de turnos/iniciativa ÔÇö FASE futura). Ao
+                            // re-selecionar o mob, a ├óncora volta a ser a
+                            // posi├º├úo atual dele (toggleSelection).
+                        } else {
+                            Vec3 step = delta.normalize().scale(MOVE_SPEED);
+                            mob.setPos(pos.x + step.x, pos.y + step.y, pos.z + step.z);
+                        }
+                        lookAt(mob, dest);
+                    } else {
+                        // Parado: olha para o jogador mais pr├│ximo.
+                        ServerPlayer nearest = findNearestPlayer(level, mob);
+                        if (nearest != null) {
+                            lookAt(mob, nearest.getEyePosition());
+                        }
                     }
                     break;
                 }
             }
             if (!found) {
-                controlledMonsters.remove(uuid); // monstro não existe mais
+                controlledMonsters.remove(uuid); // monstro n├úo existe mais
+                monsterDestinations.remove(uuid);
             }
         }
+    }
+
+    /**
+     * Faz o mob olhar para um ponto (rota├º├úo manual, sem IA ÔÇö o mob est├í
+     * congelado com noAi=true, ent├úo o lookControl vanilla n├úo roda).
+     */
+    private static void lookAt(Mob mob, Vec3 target) {
+        Vec3 pos = mob.getEyePosition();
+        double dx = target.x - pos.x;
+        double dy = target.y - pos.y;
+        double dz = target.z - pos.z;
+        double horizontal = Math.sqrt(dx * dx + dz * dz);
+        float yaw = (float) Math.toDegrees(Math.atan2(-dx, dz));
+        float pitch = (float) Math.toDegrees(Math.atan2(dy, horizontal));
+        mob.setYRot(yaw);
+        mob.setXRot(pitch);
+        mob.setYHeadRot(yaw);
     }
 
     // ------------------------------------------------------------------
     // LIMITES (AURAS)
     // ------------------------------------------------------------------
 
-    /** Verifica se (x, z) está dentro do círculo de raio AURA_RADIUS ao redor da âncora. */
+    /** Verifica se (x, z) est├í dentro do c├¡rculo de raio AURA_RADIUS ao redor da ├óncora. */
     public static boolean isWithinAura(BlockPos anchor, double x, double z) {
         if (anchor == null) {
             return true;
@@ -233,26 +282,26 @@ public final class CombatController {
     }
 
     /**
-     * Verifica se o jogador está tentando sair da aura dele. O mestre nunca
-     * é limitado; apenas jogadores com âncora (o jogador ativo) são.
+     * Verifica se o jogador est├í tentando sair da aura dele. O mestre nunca
+     * ├® limitado; apenas jogadores com ├óncora (o jogador ativo) s├úo.
      */
     public static boolean isPlayerBeyondAura(ServerPlayer player, double x, double z) {
         if (SessionManager.isMaster(player)) {
-            return false; // o mestre nunca é limitado
+            return false; // o mestre nunca ├® limitado
         }
         BlockPos anchor = playerAnchors.get(player.getUUID());
         if (anchor == null) {
-            return false; // sem âncora -> sem limite
+            return false; // sem ├óncora -> sem limite
         }
         return !isWithinAura(anchor, x, z);
     }
 
     /**
-     * Projeta (x, z) de volta para dentro da aura do jogador (círculo de
-     * {@value #AURA_RADIUS} blocos ao redor da âncora). Se já estiver dentro,
-     * retorna a posição original. Usado para "barrar" o jogador na borda da
-     * aura: em vez de só cancelar o pacote de movimento (o que deixa o cliente
-     * continuar andando por predição), o servidor corrige a posição para a
+     * Projeta (x, z) de volta para dentro da aura do jogador (c├¡rculo de
+     * {@value #AURA_RADIUS} blocos ao redor da ├óncora). Se j├í estiver dentro,
+     * retorna a posi├º├úo original. Usado para "barrar" o jogador na borda da
+     * aura: em vez de s├│ cancelar o pacote de movimento (o que deixa o cliente
+     * continuar andando por predi├º├úo), o servidor corrige a posi├º├úo para a
      * borda e avisa o cliente.
      */
     public static Vec3 clampToAura(ServerPlayer player, double x, double z) {
@@ -273,7 +322,7 @@ public final class CombatController {
         return new Vec3(cx + dx * scale, player.getY(), cz + dz * scale);
     }
 
-    /** Posições das auras ativas (monstro selecionado + jogador ativo) para o payload. */
+    /** Posi├º├Áes das auras ativas (monstro selecionado + jogador ativo) para o payload. */
     public static List<RpgNetworking.AuraStatePayload.AuraData> getAuraData(MinecraftServer server) {
         List<RpgNetworking.AuraStatePayload.AuraData> list = new ArrayList<>();
         if (selectedMonsterUuid != null) {
@@ -323,53 +372,40 @@ public final class CombatController {
     }
 
     /**
-     * Define a âncora do jogador (posição onde começou o turno). Chamado
-     * quando o turno é concedido e quando um monstro é selecionado.
-     * A âncora persiste até o fim do turno (não segue o jogador).
+     * Define a ├óncora do jogador (posi├º├úo onde come├ºou o turno). Chamado
+     * quando o turno ├® concedido e quando um monstro ├® selecionado.
+     * A ├óncora persiste at├® o fim do turno (n├úo segue o jogador).
      */
     public static void setPlayerAnchor(ServerPlayer player) {
         playerAnchors.putIfAbsent(player.getUUID(), player.blockPosition());
     }
 
-    /** Remove a âncora do jogador (fim do turno). */
+    /** Remove a ├óncora do jogador (fim do turno). */
     public static void clearPlayerAnchor(UUID playerUuid) {
         playerAnchors.remove(playerUuid);
     }
 
-    /** Limpa seleção, âncoras e monstros controlados (fim do encontro). */
+    /** Limpa sele├º├úo, ├óncoras e monstros controlados (fim do encontro). */
     public static void reset(MinecraftServer server) {
-        // Restaura os monstros controlados: voltam a ser "peças" congeladas.
-        if (server != null) {
-            for (UUID uuid : new ArrayList<>(controlledMonsters)) {
-                for (ServerLevel level : server.getAllLevels()) {
-                    Entity entity = level.getEntity(uuid);
-                    if (entity instanceof Mob mob) {
-                        mob.setNoAi(true);
-                        break;
-                    }
-                }
-            }
-        }
+        // Os monstros controlados j├í est├úo congelados (noAi=true) ÔÇö nada a
+        // restaurar. S├│ limpamos o estado de controle.
         selectedMonsterUuid = null;
         monsterAnchors.clear();
         playerAnchors.clear();
         controlledMonsters.clear();
+        monsterDestinations.clear();
+        hoveredEntities.clear();
         lastToggles.clear();
     }
 
     /**
-     * Limpa a seleção e restaura o monstro deselecionado: congela de novo
-     * (setNoAi(true)) e para de fazê-lo olhar para o jogador mais próximo.
-     * A âncora do monstro persiste (o limite não muda entre seleções).
+     * Limpa a sele├º├úo: o monstro deselecionado continua congelado (noAi=true)
+     * e para de olhar para o jogador mais pr├│ximo. A ├óncora do monstro
+     * persiste (o limite n├úo muda entre sele├º├Áes).
      */
     private static void clearSelection(ServerLevel level) {
-        if (selectedMonsterUuid != null) {
-            Entity entity = level.getEntity(selectedMonsterUuid);
-            if (entity instanceof Mob mob) {
-                mob.setNoAi(true);
-            }
-            controlledMonsters.remove(selectedMonsterUuid);
-        }
+        controlledMonsters.remove(selectedMonsterUuid);
+        monsterDestinations.remove(selectedMonsterUuid);
         selectedMonsterUuid = null;
     }
 

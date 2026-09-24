@@ -36,6 +36,12 @@ public class SessionManager {
      */
     private static int hoverDistance = 32;
 
+    /**
+     * Se os jogadores (não-mestre) podem quebrar blocos. O mestre sempre pode.
+     * Configurável pelo mestre no menu de configurações (Settings).
+     */
+    private static boolean playersCanBreakBlocks = false;
+
     public static String getSessionName() {
         return sessionName;
     }
@@ -111,6 +117,14 @@ public class SessionManager {
 
     public static void setHoverDistance(int distance) {
         hoverDistance = Math.max(1, Math.min(distance, 256));
+    }
+
+    public static boolean canPlayersBreakBlocks() {
+        return playersCanBreakBlocks;
+    }
+
+    public static void setPlayersCanBreakBlocks(boolean value) {
+        playersCanBreakBlocks = value;
     }
 
     public static boolean canPlayerAct(ServerPlayer player) {
