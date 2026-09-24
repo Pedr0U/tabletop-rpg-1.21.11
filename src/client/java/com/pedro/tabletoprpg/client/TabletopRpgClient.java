@@ -11,8 +11,11 @@ import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
 import net.minecraft.world.entity.Mob;
 import net.minecraft.world.entity.projectile.ProjectileUtil;
+import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.phys.AABB;
+import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.EntityHitResult;
+import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
 import org.lwjgl.glfw.GLFW;
 import org.slf4j.Logger;
@@ -181,7 +184,20 @@ public class TabletopRpgClient implements ClientModInitializer {
         AABB box = client.player.getBoundingBox().expandTowards(look.scale(maxDist)).inflate(1.0);
         EntityHitResult hit = ProjectileUtil.getEntityHitResult(client.player, start, end, box,
                 e -> e instanceof Mob, maxDist * maxDist);
-        int hoveredId = hit != null ? hit.getEntity().getId() : -1;
+
+        // Linha de visão: o mob só é destacado se NENHUM bloco estiver entre a
+        // câmera e ele (nada de highlight através de paredes). O raycast de
+        // blocos vai até o ponto atingido na entidade; se um bloco estiver no
+        // caminho, a entidade está atrás de uma parede e não é destacada.
+        int hoveredId = -1;
+        if (hit != null) {
+            Vec3 hitPoint = hit.getLocation();
+            BlockHitResult blockHit = client.level.clip(new ClipContext(
+                    start, hitPoint, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, client.player));
+            if (blockHit.getType() == HitResult.Type.MISS) {
+                hoveredId = hit.getEntity().getId();
+            }
+        }
 
         if (hoveredId != lastHoveredId || hoverTickCounter % 20 == 0) {
             lastHoveredId = hoveredId;

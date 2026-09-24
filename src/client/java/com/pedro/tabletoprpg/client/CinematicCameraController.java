@@ -2,6 +2,10 @@ package com.pedro.tabletoprpg.client;
 
 import net.minecraft.client.CameraType;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.multiplayer.ClientLevel;
+import net.minecraft.world.level.ClipContext;
+import net.minecraft.world.phys.BlockHitResult;
+import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
 
 /**
@@ -82,10 +86,8 @@ public final class CinematicCameraController {
                 previousCameraType = client.options.getCameraType();
                 client.options.setCameraType(CameraType.THIRD_PERSON_BACK);
 
-                CinematicCameraRig.activate(
-                    computeCameraPos(0f),
-                    computeYaw(0f),
-                    computePitch(0f));
+                Vec3 camPos = computeCameraPos(0f);
+                CinematicCameraRig.activate(camPos, computeYaw(camPos), computePitch(camPos));
             } else {
                 if (transitionProgress < 1f) {
                     // Ainda saindo do personagem: não gira, só se afasta.
@@ -98,10 +100,10 @@ public final class CinematicCameraController {
                     angle += ANGULAR_SPEED;
                 }
 
-                CinematicCameraRig.update(
-                    computeCameraPos(transitionProgress),
-                    computeYaw(transitionProgress),
-                    computePitch(transitionProgress));
+                // Posição calculada UMA vez por tick (o raycast de colisão é
+                // caro; antes era feito 3x por tick via computeYaw/computePitch).
+                Vec3 camPos = computeCameraPos(transitionProgress);
+                CinematicCameraRig.update(camPos, computeYaw(camPos), computePitch(camPos));
             }
         } else if (active) {
             deactivate(client);
@@ -130,20 +132,39 @@ public final class CinematicCameraController {
     private static Vec3 computeCameraPos(float progress) {
         Vec3 orbit = orbitPosition();
         float t = smoothstep(progress);
-        return center.lerp(orbit, t);
+        return clipToWall(center, center.lerp(orbit, t));
+    }
+
+    /**
+     * Colisão da câmera (FASE 0.4): se houver um bloco entre o centro da órbita
+     * (olhos do jogador) e a posição alvo da câmera, a câmera é recuada para
+     * logo antes do bloco — igual ao comportamento da terceira pessoa vanilla
+     * (F5), que encosta na parede em vez de atravessá-la.
+     */
+    private static Vec3 clipToWall(Vec3 from, Vec3 to) {
+        ClientLevel level = Minecraft.getInstance().level;
+        if (level == null) {
+            return to;
+        }
+        BlockHitResult hit = level.clip(new ClipContext(
+                from, to, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, Minecraft.getInstance().player));
+        if (hit.getType() == HitResult.Type.MISS) {
+            return to;
+        }
+        // Recua 0.2 bloco do ponto de impacto para a câmera não "grudar" na parede.
+        Vec3 dir = to.subtract(from).normalize();
+        return hit.getLocation().subtract(dir.scale(0.2));
     }
 
     /** Yaw da câmera apontando para o centro (jogador). */
-    private static float computeYaw(float progress) {
-        Vec3 cam = computeCameraPos(progress);
+    private static float computeYaw(Vec3 cam) {
         double dx = center.x - cam.x;
         double dz = center.z - cam.z;
         return (float) Math.toDegrees(Math.atan2(-dx, dz));
     }
 
     /** Pitch da câmera olhando levemente para o centro (jogador). */
-    private static float computePitch(float progress) {
-        Vec3 cam = computeCameraPos(progress);
+    private static float computePitch(Vec3 cam) {
         double dx = center.x - cam.x;
         double dz = center.z - cam.z;
         double dy = center.y - cam.y;
