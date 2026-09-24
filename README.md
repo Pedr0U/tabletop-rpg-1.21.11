@@ -1,133 +1,46 @@
-# TableTop RPG Mod - Minecraft 1.21.11
+# Tabletop RPG Mod
 
-## Visão Geral
-Mod de tabletop RPG para Minecraft Fabric 1.21.11 que adiciona um menu principal interativo com sistema de turns, modos de jogo e navegação entre telas.
+Um mod para Minecraft (Fabric 1.21.11) focado em trazer a experiência de RPG de mesa para dentro do jogo.
 
-## Requisitos
+## 📦 Requisitos
 
-- **Minecraft Launcher**: Versão 1.21.11 com Fabric
-- **Fabric Loader**: >= 0.19.5
-- **Java**: Versão 21 ou superior
-- **Fabric API**: Necessária (gerenciada automaticamente pelo gradle)
+Antes de instalar o mod, você precisará ter o seguinte instalado no seu Minecraft:
+* **Minecraft:** 1.21.11
+* **Fabric Loader:** Compatível com a versão 1.21.11
+* **Fabric API:** Essencial para o funcionamento de mods no Fabric.
 
-## Instalação
+## ⚙️ Como Instalar
 
-### Método 1: Via Gradle (Desenvolvimento)
+Siga estes passos simples para instalar o mod no seu computador (Windows):
 
-1. Clone ou extraia o projeto
-2. Execute o gradle para gerar o arquivo `.jar`:
-   ```bash
-   ./gradlew build
-   ```
-   ou no Windows:
-   ```bash
-   .\gradlew build
-   ```
+1. **Instale o Fabric:** Se você ainda não tem, baixe o [Instalador do Fabric](https://fabricmc.net/use/installer/) e instale o perfil cliente para a versão 1.21.11.
+2. **Baixe o Fabric API:** Baixe o `.jar` do [Fabric API](https://modrinth.com/mod/fabric-api) compatível com a 1.21.11.
+3. **Copie a build do Tabletop RPG Mod:** Copie o arquivo `.jar` deste mod na aba para `tabletop-rpg-template-1.21.11-main\build\libs`.
+4. **Abra a pasta de mods:** No seu teclado, aperte `Windows + R`, digite `%appdata%\.minecraft\mods` e aperte Enter. (Se a pasta `mods` não existir, você pode criá-la).
+5. **Coloque os arquivos:** Cole os arquivos `.jar` do Fabric API e do Tabletop RPG Mod para dentro da pasta `mods`.
+6. **Jogue!** Abra o seu Minecraft Launcher, certifique-se de selecionar o perfil do **Fabric** e inicie o jogo.
 
-3. O arquivo `.jar` será gerado em `build/libs/tabletop-rpg-*.jar`
+## 🎲 Como Abrir e Jogar
 
-4. Coloque o `.jar` na pasta `mods` do seu perfil Fabric no launcher
+Uma vez dentro do mundo ou servidor, o mod oferece ferramentas visuais e em texto para facilitar a sua campanha:
 
-### Método 2: Via CurseForge / Modrinth
+### Menu TableTop RPG
+Para acessar a interface visual de rolagem de dados e controle da sessão, utilize o atalho de teclado `R`.
+* Navegue até a aba **Rolls**.
+* Clique nos botões para formar a sua equação (ex: `d20`, `+10`).
+* Clique em **Roll!** para o servidor calcular e exibir o resultado no chat para todos os jogadores.
 
-- Baixe a versão mais recente do mod
-- Coloque na pasta `mods` do seu perfil Fabric
+### Comandos de Chat
+Se preferir rodar dados de forma rápida diretamente pelo chat, o mod possui um sistema integrado e seguro:
 
-### Configuração do Minecraft
+* `/rpg roll <expressão>` - Rola os dados informados. 
+  * *Exemplo:* `/rpg roll d20+d10+9` 
+  * O servidor anunciará o valor e os detalhes matemáticos no chat!
 
-1. Abra o launcher do Minecraft
-2. Crie um perfil Fabric para a versão **1.21.11**
-3. Certifique-se de que o **Fabric Loader** esteja instalado
-4. Vá em "Mods" e certifique-se de que o TableTop RPG esteja ativo
-5. Jogar!
+## 🛠️ Para Desenvolvedores
 
-## Como Testar
-
-### Testando o Menu Principal
-
-1. Inicie o Minecraft com o mod carregado
-2. Pressione a tecla **`R`** (padrão) para abrir o menu do TableTop RPG
-3. O menu deve aparecer centralizado na tela com a proporção correta
-
-### Verificando o Comportamento em Diferentes Resoluções
-
-- **Telas grandes** (1920x1080, 2560x1440): O menu deve escalar para cima, ocupando mais da tela mantendo a proporção 408x612
-- **Telas médias** (1600x900, 1366x768): O menu deve caber completamente com margens iguais
-- **Telas pequenas** (1280x720, notebooks): O menu escala para baixo, mas os botões nunca ficam menores que 100px de largura
-
-### Testando a Tela de Jogadores
-
-1. No menu principal, clique no botão **"Players"**
-2. A tela de lista de jogadores deve abrir
-3. Os botões dos jogadores devem estar centralizados e com largura consistente (entre 100-200px)
-4. Clique em "Back" para retornar ao menu principal
-
-### Testando o Modo Mestre vs Jogador
-
-- **Como Mestre**: Ao abrir o menu, você verá "Role: MASTER" e pode acessar todas as funcionalidades
-- **Como Jogador**: Ao abrir o menu, você verá "Role: PLAYER" e o botão "End Turn" aparecerá se for o seu turno
-
-## Controles
-
-| Tecla | Função |
-|-------|--------|
-| `R` | Abrir/Fechar menu principal TableTop RPG |
-
-## Estrutura do Projeto
-
-```
-src/
-├── main/
-│   ├── java/com/pedro/tabletoprpg/
-│   │   ├── TabletopRpg.java       # ModInitializer principal
-│   │   └── RpgNetworking.java     # Payloads e handlers de rede
-│   └── resources/
-│       ├── fabric.mod.json        # Configuração do mod
-│       └── assets/tabletop-rpg/
-│           └── textures/gui/rpg_menu.png  # Textura do menu (408x612)
-└── client/
-    ├── java/com/pedro/tabletoprpg/client/
-    │   ├── TabletopRpgClient.java # ClientModInitializer
-    │   ├── RpgMenuScreen.java     # Menu principal (TEXTO CORRIGIDO)
-    │   └── PlayerListScreen.java  # Tela de lista de jogadores (TEXTO CORRIGIDO)
-    └── resources/
-        └── tabletop-rpg.client.mixins.json
-```
-
-## Problemas Conhecidos e Correções
-
-### Problemas Resolvidos nesta versão:
-
-1. **Escalonamento do Menu**: Removido o teto `Math.min(1f, ...)` que impedia o menu de escalar em telas maiores. Agora o menu proporcionalmente se ajusta a qualquer resolução.
-
-2. **Largura Mínima dos Botões**: Adicionada proteção `MIN_BUTTON_WIDTH = 100` para evitar que botões fiquem muito estreitos em telas muito pequenas.
-
-3. **PlayerListScreen**: 
-   - Largura dos botões agora escala entre 100-200px em vez de fixa em 200px
-   - Espaçamento vertical ajustado para melhor visualização
-   - Posicionamento do botão "Back" mais consistente
-
-4. **Razão de Aspecto**: A textura do menu (408x612, proporção 1:1.5) é mantida em todas as resoluções sem distorção ou corte.
-
-## Desenvolvimento
-
-### Build Manual
-
-```bash
-# Compilar apenas o cliente (necessário para testes)
-./gradlew client:jar
-
-# Ou compilar tudo
-./gradlew build
-```
-
-### Adicionando Novas Funcionalidades
-
-1. Edite `RpgMenuScreen.java` para alterar o layout do menu
-2. Edite `PlayerListScreen.java` para alterar a tela de jogadores
-3. Adicione novos payloads em `RpgNetworking.java` para novas funcionalidades
-4. Registre novos receptores em `TabletopRpgClient.java`
-
-## Licença
-
-Este projeto está licenciado sob a licença CC0-1.0 - veja o arquivo LICENSE para mais detalhes.
+Se quiser clonar este projeto e editá-lo:
+1. Clone o repositório: `git clone https://github.com/SeuUsuario/tabletop-rpg-template.git`
+2. Abra a pasta no IntelliJ IDEA.
+3. Aguarde o Gradle sincronizar (pode demorar alguns minutos na primeira vez).
+4. Rode a task `runClient` para abrir o Minecraft em modo de teste.
