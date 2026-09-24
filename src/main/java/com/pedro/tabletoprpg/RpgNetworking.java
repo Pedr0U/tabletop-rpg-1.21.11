@@ -11,10 +11,15 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.effect.MobEffectInstance;
+import net.minecraft.world.effect.MobEffects;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.level.gamerules.GameRules;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 
 /**
  * Camada de rede do TableTop RPG.
@@ -33,6 +38,9 @@ import java.util.List;
  *   <li>{@link DayNightCycleSetPayload} (C2S): mestre pausa ou retoma o ciclo dia/noite.</li>
  *   <li>{@link DayNightCycleQueryPayload} (C2S): cliente pede o estado atual do ciclo (ao abrir as Settings).</li>
  *   <li>{@link DayNightCycleStatePayload} (S2C): servidor responde com o estado atual do ciclo.</li>
+ *   <li>{@link AuraStatePayload} (S2C): posições das auras de limite de movimentação (círculos azuis).</li>
+ *   <li>{@link HoverPayload} (C2S): entidade sob o crosshair do jogador (highlight Glowing).</li>
+ *   <li>{@link HoverConfigPayload} (S2C): distância máxima do highlight para o jogador (mestre: ilimitado).</li>
  * </ul>
  */
 public final class RpgNetworking {
@@ -150,6 +158,63 @@ public final class RpgNetworking {
         }
     }
 
+    /** Servidor -> Cliente: posições das auras de limite de movimentação (círculos azuis). */
+    public record AuraStatePayload(List<AuraData> auras) implements CustomPacketPayload {
+        public static final Type<AuraStatePayload> TYPE = new Type<>(TabletopRpg.id("aura_state"));
+        public static final StreamCodec<FriendlyByteBuf, AuraStatePayload> STREAM_CODEC = StreamCodec.composite(
+                AuraData.STREAM_CODEC.apply(ByteBufCodecs.list()), AuraStatePayload::auras,
+                AuraStatePayload::new
+        );
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+
+        /** Uma aura: centro (x, y, z) e raio em blocos. O y é a altura do chão (topo do bloco da âncora). */
+        public record AuraData(double x, double y, double z, int radius) {
+            public static final StreamCodec<FriendlyByteBuf, AuraData> STREAM_CODEC = StreamCodec.composite(
+                    ByteBufCodecs.DOUBLE, AuraData::x,
+                    ByteBufCodecs.DOUBLE, AuraData::y,
+                    ByteBufCodecs.DOUBLE, AuraData::z,
+                    ByteBufCodecs.VAR_INT, AuraData::radius,
+                    AuraData::new
+            );
+        }
+    }
+
+    /** Cliente -> Servidor: entidade sob o crosshair (hover) para o highlight; -1 = nenhuma. */
+    public record HoverPayload(int entityId) implements CustomPacketPayload {
+        public static final Type<HoverPayload> TYPE = new Type<>(TabletopRpg.id("hover"));
+        public static final StreamCodec<FriendlyByteBuf, HoverPayload> STREAM_CODEC = StreamCodec.composite(
+                ByteBufCodecs.VAR_INT, HoverPayload::entityId,
+                HoverPayload::new
+        );
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
+    /**
+     * Servidor -> Cliente: distância máxima (em blocos) do highlight para este
+     * jogador. O mestre recebe um valor alto (ilimitado na prática); os demais
+     * recebem a distância configurada (/rpg hoverdistance).
+     */
+    public record HoverConfigPayload(int maxDistance) implements CustomPacketPayload {
+        public static final Type<HoverConfigPayload> TYPE = new Type<>(TabletopRpg.id("hover_config"));
+        public static final StreamCodec<FriendlyByteBuf, HoverConfigPayload> STREAM_CODEC = StreamCodec.composite(
+                ByteBufCodecs.VAR_INT, HoverConfigPayload::maxDistance,
+                HoverConfigPayload::new
+        );
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
     // ------------------------------------------------------------------
     // REGISTRO (comum a servidor e cliente)
     // ------------------------------------------------------------------
@@ -162,6 +227,9 @@ public final class RpgNetworking {
         PayloadTypeRegistry.playC2S().register(DayNightCycleSetPayload.TYPE, DayNightCycleSetPayload.STREAM_CODEC);
         PayloadTypeRegistry.playC2S().register(DayNightCycleQueryPayload.TYPE, DayNightCycleQueryPayload.STREAM_CODEC);
         PayloadTypeRegistry.playS2C().register(DayNightCycleStatePayload.TYPE, DayNightCycleStatePayload.STREAM_CODEC);
+        PayloadTypeRegistry.playS2C().register(AuraStatePayload.TYPE, AuraStatePayload.STREAM_CODEC);
+        PayloadTypeRegistry.playC2S().register(HoverPayload.TYPE, HoverPayload.STREAM_CODEC);
+        PayloadTypeRegistry.playS2C().register(HoverConfigPayload.TYPE, HoverConfigPayload.STREAM_CODEC);
     }
 
     /** Registra os receptores no lado do servidor. */
@@ -178,6 +246,7 @@ public final class RpgNetworking {
         // MenuDataPayload aqui, pois isso abriria o menu automaticamente ao entrar.
         ServerPlayConnectionEvents.JOIN.register((handler, sender, server) -> {
             sendLockToPlayer(handler.getPlayer());
+            sendHoverConfigToPlayer(handler.getPlayer());
         });
 
         // Mestre define o horário do mundo (vindo do slider do menu ou do comando).
@@ -199,6 +268,35 @@ public final class RpgNetworking {
             ServerLevel level = (ServerLevel) player.level();
             boolean enabled = level.getGameRules().get(GameRules.ADVANCE_TIME);
             ServerPlayNetworking.send(player, new DayNightCycleStatePayload(enabled));
+        });
+
+        // Cliente informa qual entidade está sob o crosshair (hover) -> aplica/remove Glowing.
+        ServerPlayNetworking.registerGlobalReceiver(HoverPayload.TYPE, (payload, context) -> {
+            ServerPlayer player = context.player();
+            ServerLevel level = (ServerLevel) player.level();
+
+            // Remove o Glowing do hover anterior deste jogador.
+            UUID prev = CombatController.getHoveredEntity(player.getUUID());
+            if (prev != null) {
+                Entity prevEntity = level.getEntity(prev);
+                if (prevEntity instanceof LivingEntity living) {
+                    living.removeEffect(MobEffects.GLOWING);
+                }
+            }
+
+            if (payload.entityId() >= 0) {
+                Entity target = level.getEntity(payload.entityId());
+                if (target instanceof LivingEntity living) {
+                    // Duração curta: o cliente reenvia o hover a cada 10 ticks,
+                    // então o efeito é renovado enquanto o jogador mantiver o mouse em cima.
+                    living.addEffect(new MobEffectInstance(MobEffects.GLOWING, 60, 0, false, false));
+                    CombatController.setHoveredEntity(player.getUUID(), living.getUUID());
+                } else {
+                    CombatController.clearHoveredEntity(player.getUUID());
+                }
+            } else {
+                CombatController.clearHoveredEntity(player.getUUID());
+            }
         });
 
         // Registra o receptor de pausar/retomar ciclo dia e noite no servidor
@@ -276,6 +374,37 @@ public final class RpgNetworking {
         }
         for (ServerPlayer player : server.getPlayerList().getPlayers()) {
             sendLockToPlayer(player);
+        }
+    }
+
+    /** Envia o estado atual das auras de limite para todos os jogadores. */
+    public static void sendAuraStateToAll(MinecraftServer server) {
+        if (server == null) {
+            return;
+        }
+        AuraStatePayload payload = new AuraStatePayload(CombatController.getAuraData(server));
+        TabletopRpg.LOGGER.info("[TabletopRPG] sendAuraStateToAll: enviando {} aura(s)", payload.auras().size());
+        for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+            ServerPlayNetworking.send(player, payload);
+        }
+    }
+
+    /** Envia a distância do highlight para um jogador (mestre: ilimitado). */
+    public static void sendHoverConfigToPlayer(ServerPlayer player) {
+        if (player == null || player.connection == null) {
+            return;
+        }
+        int maxDistance = SessionManager.isMaster(player) ? 1024 : SessionManager.getHoverDistance();
+        ServerPlayNetworking.send(player, new HoverConfigPayload(maxDistance));
+    }
+
+    /** Envia a distância do highlight para todos os jogadores. */
+    public static void sendHoverConfigToAll(MinecraftServer server) {
+        if (server == null) {
+            return;
+        }
+        for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+            sendHoverConfigToPlayer(player);
         }
     }
 }

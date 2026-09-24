@@ -29,6 +29,13 @@ public class SessionManager {
     private static UUID activePlayerUuid = null;
     private static String activePlayerName = "None";
 
+    /**
+     * Distância máxima (em blocos) do highlight (Glowing) para os jogadores
+     * (não-mestre). O mestre sempre vê de qualquer distância. Configurável
+     * pelo mestre via /rpg hoverdistance <n>.
+     */
+    private static int hoverDistance = 32;
+
     public static String getSessionName() {
         return sessionName;
     }
@@ -92,6 +99,18 @@ public class SessionManager {
 
     public static String getActivePlayerName() {
         return activePlayerName;
+    }
+
+    public static UUID getActivePlayerUuid() {
+        return activePlayerUuid;
+    }
+
+    public static int getHoverDistance() {
+        return hoverDistance;
+    }
+
+    public static void setHoverDistance(int distance) {
+        hoverDistance = Math.max(1, Math.min(distance, 256));
     }
 
     public static boolean canPlayerAct(ServerPlayer player) {

@@ -20,6 +20,9 @@ public class TabletopRpg implements ModInitializer {
 		// Registra os handlers de interação (ataque, uso de bloco/item/entidade)
 		PlayerControlHandler.register();
 
+		// Registra o controle de combate (seleção/movimento de monstros, auras, highlight)
+		CombatController.register();
+
 		// Registra os comandos do Mestre (/rpg ...)
 		MasterCommands.register();
 
