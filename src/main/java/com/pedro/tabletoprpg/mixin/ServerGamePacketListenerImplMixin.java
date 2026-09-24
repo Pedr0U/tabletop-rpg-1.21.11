@@ -43,13 +43,22 @@ public abstract class ServerGamePacketListenerImplMixin {
         // cliente (teleport), "barrando" o jogador na borda.
         if (packet.hasPosition() && CombatController.isPlayerBeyondAura(this.player,
                 packet.getX(this.player.getX()), packet.getZ(this.player.getZ()))) {
-            Vec3 clamped = CombatController.clampToAura(this.player,
-                    packet.getX(this.player.getX()), packet.getZ(this.player.getZ()));
-            // connection.teleport envia ClientboundPlayerPositionPacket (mesmo
-            // mecanismo da correção de desync do vanilla): o cliente volta para
-            // a borda da aura e o servidor atualiza a posição quando o cliente
-            // aceita o teleporte.
-            this.player.connection.teleport(clamped.x, clamped.y, clamped.z, this.player.getYRot(), this.player.getXRot());
+            // Só teleporta se NÃO houver teleporte pendente. Sem essa checagem,
+            // segurar W na borda gerava um ClientboundPlayerPositionPacket por
+            // tick com o anterior ainda pendente: o cliente nunca conseguia
+            // aceitar um antes de chegar o próximo (o accept chegava com ID
+            // defasado e era ignorado) e ficava preso em desync irreversível
+            // (bug documentado). Com a checagem, cada teleporte é aceito antes
+            // do próximo — o jogador é segurado na borda sem travar.
+            if (((ServerGamePacketListenerImplAccessor) this).awaitingPositionFromClient() == null) {
+                Vec3 clamped = CombatController.clampToAura(this.player,
+                        packet.getX(this.player.getX()), packet.getZ(this.player.getZ()));
+                // connection.teleport envia ClientboundPlayerPositionPacket (mesmo
+                // mecanismo da correção de desync do vanilla): o cliente volta para
+                // a borda da aura e o servidor atualiza a posição quando o cliente
+                // aceita o teleporte.
+                this.player.connection.teleport(clamped.x, clamped.y, clamped.z, this.player.getYRot(), this.player.getXRot());
+            }
             ci.cancel();
         }
     }

@@ -249,6 +249,48 @@ public final class RpgNetworking {
             sendHoverConfigToPlayer(handler.getPlayer());
         });
 
+        // Ao desconectar: se era o mestre, libera o cargo e pausa a sessão
+        // (modo volta para FREE, turno limpo, combate resetado). Se era o
+        // jogador ativo, limpa o turno dele. Evita estado quebrado (jogadores
+        // travados sem mestre, ou turno preso num jogador que caiu).
+        ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> {
+            ServerPlayer player = handler.getPlayer();
+            if (player == null) {
+                return;
+            }
+            boolean changed = false;
+            if (SessionManager.isMaster(player)) {
+                SessionManager.releaseMaster();
+                SessionManager.setMode(SessionManager.GameMode.FREE);
+                CombatController.reset(server);
+                changed = true;
+                // Avisa todos que o mestre saiu (ninguém fica sem saber por
+                // que a sessão "pausou").
+                server.getPlayerList().broadcastSystemMessage(
+                        Component.literal("§c[RPG] The master left the session. Mode set to FREE."), false);
+            }
+            if (SessionManager.isActivePlayer(player)) {
+                SessionManager.clearActivePlayer();
+                CombatController.clearPlayerAnchor(player.getUUID());
+                changed = true;
+            }
+            // Limpa o hover (Glowing) deste jogador, se houver: sem isso, a
+            // entidade hoverada continuava brilhando por até 60 ticks e a
+            // entrada ficava para sempre no mapa (leak).
+            UUID hovered = CombatController.getHoveredEntity(player.getUUID());
+            if (hovered != null) {
+                Entity hoveredEntity = player.level().getEntity(hovered);
+                if (hoveredEntity instanceof LivingEntity living) {
+                    living.removeEffect(MobEffects.GLOWING);
+                }
+                CombatController.clearHoveredEntity(player.getUUID());
+            }
+            if (changed) {
+                sendToAll(server);
+                sendAuraStateToAll(server);
+            }
+        });
+
         // Mestre define o horário do mundo (vindo do slider do menu ou do comando).
         ServerPlayNetworking.registerGlobalReceiver(TimeSetPayload.TYPE, (payload, context) -> {
             ServerPlayer player = context.player();
@@ -389,12 +431,12 @@ public final class RpgNetworking {
         }
     }
 
-    /** Envia a distância do highlight para um jogador (mestre: ilimitado). */
+    /** Envia a distância do highlight para um jogador (vale para todos, inclusive o mestre). */
     public static void sendHoverConfigToPlayer(ServerPlayer player) {
         if (player == null || player.connection == null) {
             return;
         }
-        int maxDistance = SessionManager.isMaster(player) ? 1024 : SessionManager.getHoverDistance();
+        int maxDistance = SessionManager.getHoverDistance();
         ServerPlayNetworking.send(player, new HoverConfigPayload(maxDistance));
     }
 
