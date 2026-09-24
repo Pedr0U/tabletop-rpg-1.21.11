@@ -23,6 +23,14 @@ public class TabletopRpgClient implements ClientModInitializer {
      */
     public static volatile boolean locked = false;
 
+    /**
+     * Estado atual do ciclo dia/noite (gamerule advance_time) conhecido pelo
+     * cliente. Atualizado via {@link RpgNetworking.DayNightCycleStatePayload}
+     * quando o mestre abre as Settings. Usado para o botão da tela de
+     * configurações refletir o estado real do servidor.
+     */
+    public static volatile boolean dayNightCycleEnabled = true;
+
     @Override
     public void onInitializeClient() {
         LOGGER.info("[TabletopRPG-Client] onInitializeClient() started.");
@@ -88,6 +96,16 @@ public class TabletopRpgClient implements ClientModInitializer {
         ClientPlayNetworking.registerGlobalReceiver(RpgNetworking.PlayerLockPayload.TYPE, (payload, context) -> {
             context.client().execute(() -> {
                 locked = payload.locked();
+            });
+        });
+
+        // Estado do ciclo dia/noite -> atualiza o campo e a tela de Settings aberta.
+        ClientPlayNetworking.registerGlobalReceiver(RpgNetworking.DayNightCycleStatePayload.TYPE, (payload, context) -> {
+            context.client().execute(() -> {
+                dayNightCycleEnabled = payload.enabled();
+                if (context.client().screen instanceof RpgSettingsScreen settings) {
+                    settings.onCycleStateReceived(payload.enabled());
+                }
             });
         });
     }

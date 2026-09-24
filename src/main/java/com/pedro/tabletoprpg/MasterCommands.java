@@ -1,25 +1,38 @@
 package com.pedro.tabletoprpg;
 
 import com.mojang.brigadier.CommandDispatcher;
+import com.mojang.brigadier.arguments.BoolArgumentType;
+import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.context.CommandContext;
+import com.mojang.brigadier.suggestion.Suggestions;
+import com.mojang.brigadier.suggestion.SuggestionsBuilder;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.minecraft.ChatFormatting;
 import net.minecraft.commands.CommandBuildContext;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
 import net.minecraft.commands.arguments.EntityArgument;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.ClickEvent;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.HoverEvent;
 import net.minecraft.network.chat.MutableComponent;
 import net.minecraft.network.chat.Style;
+import net.minecraft.resources.Identifier;
+import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.server.players.PlayerList;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.EntitySpawnReason;
+import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.entity.Mob;
+import net.minecraft.world.entity.MobCategory;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
+import java.util.concurrent.CompletableFuture;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -83,12 +96,26 @@ public class MasterCommands {
                     .then(Commands.argument("formula", StringArgumentType.greedyString())
                         .executes(ctx -> openRoll(ctx, StringArgumentType.getString(ctx, "formula")))))
 
+
+
+                // /rpg time <0-24000>  (só o mestre) -> define o horário do mundo
+                .then(Commands.literal("time")
+                    .then(Commands.argument("value", IntegerArgumentType.integer(0, 24000))
+                        .executes(MasterCommands::setWorldTime)))
+
                 // /rpg session set <nome>  (só o mestre) -> define o nome da sessão
                 .then(Commands.literal("session")
                     .then(Commands.literal("set")
                         .then(Commands.argument("name", StringArgumentType.greedyString())
                             .executes(MasterCommands::setSessionName))))
-        );
+
+                // /rpg insert enemy <type> <cam_perm true|false>
+                .then(Commands.literal("insert")
+                    .then(Commands.literal("enemy")
+                        .then(Commands.argument("type", StringArgumentType.string())
+                            .suggests(MasterCommands::suggestEntityTypes)
+                            .then(Commands.argument("cam_perm", BoolArgumentType.bool())
+                                .executes(MasterCommands::insertEnemy))))));
     }
 
     // --- COMANDOS E LÓGICA ---
@@ -117,6 +144,8 @@ public class MasterCommands {
                 return 0;
             }
         } catch (Exception e) {
+            TabletopRpg.LOGGER.error("[TabletopRPG] Error claiming master: {}", e.getMessage());
+            ctx.getSource().sendFailure(Component.literal("§c[RPG] Failed to claim Game Master role."));
             return 0;
         }
     }
@@ -135,6 +164,8 @@ public class MasterCommands {
                 return 0;
             }
         } catch (Exception e) {
+            TabletopRpg.LOGGER.error("[TabletopRPG] Error releasing master: {}", e.getMessage());
+            ctx.getSource().sendFailure(Component.literal("§c[RPG] Failed to release Game Master role."));
             return 0;
         }
     }
@@ -192,6 +223,8 @@ public class MasterCommands {
             refreshChatMenu(ctx);
             return 1;
         } catch (Exception e) {
+            TabletopRpg.LOGGER.error("[TabletopRPG] Error finishing turn: {}", e.getMessage());
+            ctx.getSource().sendFailure(Component.literal("§c[RPG] Failed to finish turn."));
             return 0;
         }
     }
@@ -214,8 +247,93 @@ public class MasterCommands {
         refreshChatMenu(ctx);
         return 1;
     }
+
+    /**
+     * Sugere tipos de entidade do registro nativo (ex: "minecraft:zombie",
+     * "minecraft:spider"). Como lê o registro, entidades adicionadas por
+     * outros mods aparecem automaticamente nas sugestões.
+     */
+    private static CompletableFuture<Suggestions> suggestEntityTypes(CommandContext<CommandSourceStack> ctx,
+                                                                     SuggestionsBuilder builder) {
+        String remaining = builder.getRemainingLowerCase();
+        for (Identifier id : BuiltInRegistries.ENTITY_TYPE.keySet()) {
+            // Só monstros/NPCs de combate (vanilla + mods), nada de flecha/barco.
+            EntityType<?> type = BuiltInRegistries.ENTITY_TYPE.getValue(id);
+            if (type == null || type.getCategory() != MobCategory.MONSTER) {
+                continue;
+            }
+            // Entidades vanilla: sugere só o nome curto ("zombie"), pois o argumento
+            // é string() e o jogador digitaria "minecraft:zombie" e falharia.
+            String suggestion = "minecraft".equals(id.getNamespace())
+                ? id.getPath()
+                : id.toString();
+            if (suggestion.startsWith(remaining)) {
+                builder.suggest(suggestion);
+            }
+        }
+        return builder.buildFuture();
+    }
+
+    private static int insertEnemy(CommandContext<CommandSourceStack> ctx) {
+        if (!verifyMasterPermission(ctx)) return 0;
+
+        String type = StringArgumentType.getString(ctx, "type").trim();
+        boolean camPerm = BoolArgumentType.getBool(ctx, "cam_perm");
+
+        try {
+            ServerPlayer master = ctx.getSource().getPlayerOrException();
+            ServerLevel serverLevel = (ServerLevel) master.level();
+
+            // Lookup do tipo de entidade no registro nativo (aceita "zombie" ou "minecraft:zombie")
+            Identifier id = Identifier.tryParse(type.contains(":") ? type : "minecraft:" + type);
+            if (id == null || !BuiltInRegistries.ENTITY_TYPE.containsKey(id)) {
+                ctx.getSource().sendFailure(Component.literal("§c[RPG] Unknown enemy type: " + type));
+                return 0;
+            }
+            EntityType<?> entityType = BuiltInRegistries.ENTITY_TYPE.getValue(id);
+
+            // Posicionar entidade na frente do mestre (2 blocos, na direção do olhar)
+            double masterX = master.getX();
+            double masterY = master.getY();
+            double masterZ = master.getZ();
+            float yaw = master.getYRot();
+            double rad = Math.toRadians(yaw);
+            double spawnX = masterX - Math.sin(rad) * 2.0;
+            double spawnZ = masterZ + Math.cos(rad) * 2.0;
+
+            // Cria a entidade com a API do 1.21.11 (EntitySpawnReason.COMMAND)
+            Entity entity = entityType.create(serverLevel, EntitySpawnReason.COMMAND);
+            if (entity == null) {
+                ctx.getSource().sendFailure(Component.literal("§c[RPG] Failed to create entity."));
+                return 0;
+            }
+
+            entity.setPos(spawnX, masterY, spawnZ);
+            serverLevel.addFreshEntity(entity);
+
+            // Se for um Mob: desativa a IA (não age sozinho) e impede despawn natural
+            if (entity instanceof Mob mob) {
+                mob.setNoAi(true);
+                mob.setPersistenceRequired();
+            }
+
+            if (camPerm) {
+                TabletopRpg.LOGGER.info("[TabletopRPG] Enemy {} summoned with cam_perm=true by {}", type, master.getName().getString());
+            }
+
+            // Mensagem de confirmação
+            broadcast(ctx, "§6§e" + type + " §fsummoned by the Master at spawn position.");
+            master.sendSystemMessage(Component.literal("§aAn enemy has been summoned!"));
+
+            return 1;
+        } catch (Exception e) {
+            TabletopRpg.LOGGER.error("[TabletopRPG] Error summoning enemy: {}", e.getMessage());
+            ctx.getSource().sendFailure(Component.literal("§c[RPG] Failed to summon enemy."));
+            return 0;
+        }
+    }
+
     private static final Pattern DICE_TERM = Pattern.compile("^(\\d*)[dD](\\d+)$");
-    // Reconhece termos que são apenas um número fixo (modificador), ex: "10"
     private static final Pattern MODIFIER_TERM = Pattern.compile("^\\d+$");
 
     /**
@@ -262,6 +380,24 @@ public class MasterCommands {
         }
         broadcast(ctx, message);
         return 1;
+    }
+
+    /** Define o horário do mundo (0-24000 ticks). Só o mestre. */
+    private static int setWorldTime(CommandContext<CommandSourceStack> ctx) {
+        if (!verifyMasterPermission(ctx)) return 0;
+
+        try {
+            ServerPlayer master = ctx.getSource().getPlayerOrException();
+            int time = IntegerArgumentType.getInteger(ctx, "value");
+            ServerLevel level = (ServerLevel) master.level();
+            level.setDayTime(time);
+            broadcast(ctx, "§6World time set to: §e" + time);
+            return 1;
+        } catch (Exception e) {
+            TabletopRpg.LOGGER.error("[TabletopRPG] Error setting world time: {}", e.getMessage());
+            ctx.getSource().sendFailure(Component.literal("§c[RPG] Failed to set world time."));
+            return 0;
+        }
     }
 
     /**
@@ -411,6 +547,7 @@ public class MasterCommands {
             menu.append(Component.literal("§f Actions: "));
             menu.append(createSuggestBtn("[Roll]", ChatFormatting.AQUA, "/rpg roll ", "Type a dice formula, ex: d20, 2d6+3"));
             menu.append(Component.literal(" "));
+            menu.append(Component.literal(" §8(open roll - everyone sees)"));
             menu.append(createBtn("[Step Down]", ChatFormatting.GRAY, "/rpg master release", "Release Master role"));
             menu.append(Component.literal("\n"));
 

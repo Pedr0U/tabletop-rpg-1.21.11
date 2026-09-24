@@ -3,9 +3,9 @@
 	"package": "com.pedro.tabletoprpg.client.mixin",
 	"compatibilityLevel": "JAVA_21",
 	"client": [
-		"ExampleClientMixin",
 		"LocalPlayerMixin",
-		"CameraMixin"
+		"CameraMixin",
+		"MinecraftMixin"
 	],
 	"injectors": {
 		"defaultRequire": 1
