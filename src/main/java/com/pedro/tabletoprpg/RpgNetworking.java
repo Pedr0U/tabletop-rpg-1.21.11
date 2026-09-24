@@ -41,6 +41,10 @@ import java.util.UUID;
  *   <li>{@link AuraStatePayload} (S2C): posições das auras de limite de movimentação (círculos azuis).</li>
  *   <li>{@link HoverPayload} (C2S): entidade sob o crosshair do jogador (highlight Glowing).</li>
  *   <li>{@link HoverConfigPayload} (S2C): distância máxima do highlight para o jogador (mestre: ilimitado).</li>
+ *   <li>{@link BlockBreakSettingPayload} (C2S): mestre libera/bloqueia a quebra de blocos pelos players.</li>
+ *   <li>{@link BlockBreakSettingQueryPayload} (C2S): cliente pede o estado da permissão de quebra (ao abrir as Settings).</li>
+ *   <li>{@link BlockBreakSettingStatePayload} (S2C): estado atual da permissão de quebra (resposta/broadcast).</li>
+ *   <li>{@link WeatherSetPayload} (C2S): mestre define o clima (0=sol, 1=chuva, 2=tempestade).</li>
  * </ul>
  */
 public final class RpgNetworking {
@@ -215,6 +219,60 @@ public final class RpgNetworking {
         }
     }
 
+    /** Cliente -> Servidor: o mestre libera (true) ou bloqueia (false) a quebra de blocos pelos players. */
+    public record BlockBreakSettingPayload(boolean enabled) implements CustomPacketPayload {
+        public static final Type<BlockBreakSettingPayload> TYPE = new Type<>(TabletopRpg.id("block_break_setting"));
+        public static final StreamCodec<FriendlyByteBuf, BlockBreakSettingPayload> STREAM_CODEC = StreamCodec.composite(
+                ByteBufCodecs.BOOL, BlockBreakSettingPayload::enabled,
+                BlockBreakSettingPayload::new
+        );
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
+    /** Cliente -> Servidor: pede o estado atual da permissão de quebra (ao abrir as Settings). */
+    public record BlockBreakSettingQueryPayload() implements CustomPacketPayload {
+        public static final Type<BlockBreakSettingQueryPayload> TYPE = new Type<>(TabletopRpg.id("block_break_setting_query"));
+        public static final StreamCodec<FriendlyByteBuf, BlockBreakSettingQueryPayload> STREAM_CODEC =
+                StreamCodec.unit(new BlockBreakSettingQueryPayload());
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
+    /** Servidor -> Cliente: estado atual da permissão de quebra de blocos (resposta à query / broadcast). */
+    public record BlockBreakSettingStatePayload(boolean enabled) implements CustomPacketPayload {
+        public static final Type<BlockBreakSettingStatePayload> TYPE = new Type<>(TabletopRpg.id("block_break_setting_state"));
+        public static final StreamCodec<FriendlyByteBuf, BlockBreakSettingStatePayload> STREAM_CODEC = StreamCodec.composite(
+                ByteBufCodecs.BOOL, BlockBreakSettingStatePayload::enabled,
+                BlockBreakSettingStatePayload::new
+        );
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
+    /** Cliente -> Servidor: o mestre define o clima (0=sol, 1=chuva, 2=tempestade). */
+    public record WeatherSetPayload(int weather) implements CustomPacketPayload {
+        public static final Type<WeatherSetPayload> TYPE = new Type<>(TabletopRpg.id("weather_set"));
+        public static final StreamCodec<FriendlyByteBuf, WeatherSetPayload> STREAM_CODEC = StreamCodec.composite(
+                ByteBufCodecs.VAR_INT, WeatherSetPayload::weather,
+                WeatherSetPayload::new
+        );
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
     // ------------------------------------------------------------------
     // REGISTRO (comum a servidor e cliente)
     // ------------------------------------------------------------------
@@ -230,6 +288,10 @@ public final class RpgNetworking {
         PayloadTypeRegistry.playS2C().register(AuraStatePayload.TYPE, AuraStatePayload.STREAM_CODEC);
         PayloadTypeRegistry.playC2S().register(HoverPayload.TYPE, HoverPayload.STREAM_CODEC);
         PayloadTypeRegistry.playS2C().register(HoverConfigPayload.TYPE, HoverConfigPayload.STREAM_CODEC);
+        PayloadTypeRegistry.playC2S().register(BlockBreakSettingPayload.TYPE, BlockBreakSettingPayload.STREAM_CODEC);
+        PayloadTypeRegistry.playC2S().register(BlockBreakSettingQueryPayload.TYPE, BlockBreakSettingQueryPayload.STREAM_CODEC);
+        PayloadTypeRegistry.playS2C().register(BlockBreakSettingStatePayload.TYPE, BlockBreakSettingStatePayload.STREAM_CODEC);
+        PayloadTypeRegistry.playC2S().register(WeatherSetPayload.TYPE, WeatherSetPayload.STREAM_CODEC);
     }
 
     /** Registra os receptores no lado do servidor. */
@@ -247,6 +309,48 @@ public final class RpgNetworking {
         ServerPlayConnectionEvents.JOIN.register((handler, sender, server) -> {
             sendLockToPlayer(handler.getPlayer());
             sendHoverConfigToPlayer(handler.getPlayer());
+        });
+
+        // Ao desconectar: se era o mestre, libera o cargo e pausa a sessão
+        // (modo volta para FREE, turno limpo, combate resetado). Se era o
+        // jogador ativo, limpa o turno dele. Evita estado quebrado (jogadores
+        // travados sem mestre, ou turno preso num jogador que caiu).
+        ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> {
+            ServerPlayer player = handler.getPlayer();
+            if (player == null) {
+                return;
+            }
+            boolean changed = false;
+            if (SessionManager.isMaster(player)) {
+                SessionManager.releaseMaster();
+                SessionManager.setMode(SessionManager.GameMode.FREE);
+                CombatController.reset(server);
+                changed = true;
+                // Avisa todos que o mestre saiu (ninguém fica sem saber por
+                // que a sessão "pausou").
+                server.getPlayerList().broadcastSystemMessage(
+                        Component.literal("§c[RPG] The master left the session. Mode set to FREE."), false);
+            }
+            if (SessionManager.isActivePlayer(player)) {
+                SessionManager.clearActivePlayer();
+                CombatController.clearPlayerAnchor(player.getUUID());
+                changed = true;
+            }
+            // Limpa o hover (Glowing) deste jogador, se houver: sem isso, a
+            // entidade hoverada continuava brilhando por até 60 ticks e a
+            // entrada ficava para sempre no mapa (leak).
+            UUID hovered = CombatController.getHoveredEntity(player.getUUID());
+            if (hovered != null) {
+                Entity hoveredEntity = player.level().getEntity(hovered);
+                if (hoveredEntity instanceof LivingEntity living) {
+                    living.removeEffect(MobEffects.GLOWING);
+                }
+                CombatController.clearHoveredEntity(player.getUUID());
+            }
+            if (changed) {
+                sendToAll(server);
+                sendAuraStateToAll(server);
+            }
         });
 
         // Mestre define o horário do mundo (vindo do slider do menu ou do comando).
@@ -268,6 +372,40 @@ public final class RpgNetworking {
             ServerLevel level = (ServerLevel) player.level();
             boolean enabled = level.getGameRules().get(GameRules.ADVANCE_TIME);
             ServerPlayNetworking.send(player, new DayNightCycleStatePayload(enabled));
+        });
+
+        // Mestre libera/bloqueia a quebra de blocos pelos players (menu de configurações).
+        ServerPlayNetworking.registerGlobalReceiver(BlockBreakSettingPayload.TYPE, (payload, context) -> {
+            ServerPlayer player = context.player();
+            if (!SessionManager.isMaster(player)) {
+                return; // só o mestre pode mudar
+            }
+            SessionManager.setPlayersCanBreakBlocks(payload.enabled());
+            sendBlockBreakSettingStateToAll(player.level().getServer());
+        });
+
+        // Cliente pede o estado atual da permissão de quebra (ao abrir as Settings).
+        ServerPlayNetworking.registerGlobalReceiver(BlockBreakSettingQueryPayload.TYPE, (payload, context) -> {
+            ServerPlayer player = context.player();
+            ServerPlayNetworking.send(player, new BlockBreakSettingStatePayload(SessionManager.canPlayersBreakBlocks()));
+        });
+
+        // Mestre define o clima (0=sol, 1=chuva, 2=tempestade) pelo menu de configurações.
+        ServerPlayNetworking.registerGlobalReceiver(WeatherSetPayload.TYPE, (payload, context) -> {
+            ServerPlayer player = context.player();
+            if (!SessionManager.isMaster(player)) {
+                return; // só o mestre pode mudar o clima
+            }
+            ServerLevel level = (ServerLevel) player.level();
+            // API verificada com javap (1.21.11): setWeatherParameters(int clearTime,
+            // int rainTime, boolean raining, boolean thundering). Mesmos valores que o
+            // comando vanilla /weather usa (verificado no bytecode de WeatherCommand).
+            switch (payload.weather()) {
+                case 0 -> level.setWeatherParameters(6000, 0, false, false);   // sol
+                case 1 -> level.setWeatherParameters(0, 6000, true, false);    // chuva
+                case 2 -> level.setWeatherParameters(0, 6000, true, true);     // tempestade
+                default -> { /* valor inválido: ignora */ }
+            }
         });
 
         // Cliente informa qual entidade está sob o crosshair (hover) -> aplica/remove Glowing.
@@ -389,12 +527,12 @@ public final class RpgNetworking {
         }
     }
 
-    /** Envia a distância do highlight para um jogador (mestre: ilimitado). */
+    /** Envia a distância do highlight para um jogador (vale para todos, inclusive o mestre). */
     public static void sendHoverConfigToPlayer(ServerPlayer player) {
         if (player == null || player.connection == null) {
             return;
         }
-        int maxDistance = SessionManager.isMaster(player) ? 1024 : SessionManager.getHoverDistance();
+        int maxDistance = SessionManager.getHoverDistance();
         ServerPlayNetworking.send(player, new HoverConfigPayload(maxDistance));
     }
 
@@ -405,6 +543,17 @@ public final class RpgNetworking {
         }
         for (ServerPlayer player : server.getPlayerList().getPlayers()) {
             sendHoverConfigToPlayer(player);
+        }
+    }
+
+    /** Envia o estado atual da permissão de quebra de blocos para todos os jogadores. */
+    public static void sendBlockBreakSettingStateToAll(MinecraftServer server) {
+        if (server == null) {
+            return;
+        }
+        BlockBreakSettingStatePayload payload = new BlockBreakSettingStatePayload(SessionManager.canPlayersBreakBlocks());
+        for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+            ServerPlayNetworking.send(player, payload);
         }
     }
 }

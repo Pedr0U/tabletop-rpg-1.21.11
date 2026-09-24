@@ -40,3 +40,25 @@
 - O usuário roda `gradlew build` e testa em jogo, reportando o resultado. Não fatiar arquivos em dezenas de chamadas. Não procurar logs antigos repetidamente.
 - Comando do servidor dedicado: `gradlew runServer` (NÃO `gradlew server` — task não existe).
 - Para testar a aura (renderização no cliente): `gradlew runClient` (single-player) ou `runServer` + `runClient` conectado em localhost.
+
+## FASE 1 (24/09/2026) — quebra de blocos configurável + clima no menu do GM
+- **API de clima (verificada com javap no jar 1.21.11)**: `ServerLevel.setWeatherParameters(int clearTime, int rainTime, boolean raining, boolean thundering)` — 4 args em 1.21.11 (NÃO 5 como em versões antigas). Valores copiados do bytecode do `WeatherCommand` vanilla: sol=`(6000,0,false,false)`, chuva=`(0,6000,true,false)`, tempestade=`(0,6000,true,true)`.
+- **Setting novo**: `SessionManager.playersCanBreakBlocks` (default false). `PlayerControlHandler.canBreakBlocks` = `isMaster || (canPlayersBreakBlocks && canPlayerAct)` — mestre sempre quebra; players só se liberado no menu E no turno.
+- **Payloads novos** (RpgNetworking): `BlockBreakSettingPayload` (C2S, toggle), `BlockBreakSettingQueryPayload` (C2S, ao abrir Settings), `BlockBreakSettingStatePayload` (S2C, resposta/broadcast), `WeatherSetPayload` (C2S, 0=sol/1=chuva/2=tempestade). Todos os C2S validam `isMaster` no servidor.
+- **Clima afeta só a dimensão atual do mestre** (`(ServerLevel) player.level()`) — mesmo comportamento do `/weather` vanilla; sem efeito visível no Nether/End.
+- **Clima = 1 botão que cicla** Sol -> Chuva -> Tempestade (estado local do cliente `weatherState`; sem sync de clima — só o mestre muda). O clima persiste no servidor até o mestre mudar.
+- **Layout Settings (mestre)**: slider +0, ciclo +28, quebra +56, clima +84, voltar +112.
+
+## UNIFICAÇÃO DE BRANCHES (24/09/2026) — CRÍTICO PARA NÃO REPETIR
+- **O projeto tem 2 branches divergentes**: `main` (HEAD 2234576) e `pasta-Net` (450d64c "Correção de Bugs e Adições", 18:48). O pasta-Net contém correções que o main NÃO tem.
+- **O usuário roda o jogo com o jar copiado manualmente em `%APPDATA%\.minecraft\mods\tabletop-rpg-1.0.0.jar`** — SEMPRE copiar o jar novo do build para lá após buildar (o `gradlew runClient` usa o build, mas o jogo normal usa a pasta mods).
+- **Correções que estavam SÓ no pasta-Net e foram unificadas no working tree do main** (24/09 19:32):
+  - `DamageControlHandler` (NOVO): jogadores e mobs imunes a dano físico via `ServerLivingEntityEvents.ALLOW_DAMAGE` (exceções: `FELL_OUT_OF_WORLD` e `GENERIC_KILL`). Registrado em `TabletopRpg.onInitialize`.
+  - `ServerGamePacketListenerImplAccessor` (NOVO) + `ServerGamePacketListenerImplMixin`: fix do player preso na barreira da aura — só teleporta se `awaitingPositionFromClient() == null` (sem flood de teleports pendentes). `MobAccessor` REMOVIDO do mixins.json.
+  - `CombatController`: mob flutuando (movimento direto `MOVE_SPEED=0.35` blocos/tick, sem IA, `setNoAi(true)` sempre), `lookAt` manual, âncora atualizada na seleção (`monsterAnchors.put`), aura NÃO segue o mob, `reset` limpa tudo.
+  - `PlayerControlHandler`: `canPlaceBlocks` + `isBlockItemInHand` (players NUNCA colocam blocos; só mestre).
+  - `RpgNetworking`: handler `DISCONNECT` (mestre sai -> releaseMaster + FREE + reset + broadcast; jogador ativo sai -> limpa turno; limpa hover/Glowing e leak).
+  - `sendHoverConfigToPlayer`: agora `getHoverDistance()` para TODOS (inclusive mestre) — fix do hoverdistance.
+  - `TabletopRpgClient.tickHover`: linha de visão (raycast de blocos) — não destaca mob através de paredes.
+  - `CinematicCameraController`: câmera não atravessa parede ao rotacionar.
+- **LIÇÃO**: antes de implementar, SEMPRE verificar `git branch -a` e `git log --all --oneline` — pode haver outro branch com trabalho não mesclado. O resumo de sessão anterior registrou a "FASE 0.7" como aplicada no main, mas ela estava no pasta-Net (relatório feedback-fixes-2.md nunca existiu).

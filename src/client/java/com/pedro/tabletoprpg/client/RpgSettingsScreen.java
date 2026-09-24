@@ -15,11 +15,16 @@ import net.minecraft.network.chat.Component;
  *   <li>Slider de horário do mundo (TimeSlider).</li>
  *   <li>Botão para pausar ({@code false}) ou retomar ({@code true}) o ciclo
  *       dia/noite, enviando um {@code DayNightCycleSetPayload} ao servidor.</li>
+ *   <li>Botão para liberar/bloquear a quebra de blocos pelos players,
+ *       enviando um {@code BlockBreakSettingPayload} ao servidor.</li>
+ *   <li>Botão de clima que cicla Sol -> Chuva -> Tempestade, enviando um
+ *       {@code WeatherSetPayload} ao servidor. O clima persiste até o mestre
+ *       mudar de novo.</li>
  *   <li>Botão "Voltar" para retornar ao menu principal.</li>
  * </ul>
  *
- * <p>Jogadores não-mestres não veem os controles de horário/ciclo, apenas o
- * botão "Voltar".
+ * <p>Jogadores não-mestres não veem os controles de horário/ciclo/quebra/clima,
+ * apenas o botão "Voltar".
  */
 public class RpgSettingsScreen extends Screen {
 
@@ -29,8 +34,12 @@ public class RpgSettingsScreen extends Screen {
     private final Screen parent;
     private final boolean isMaster;
     private boolean cycleEnabled = true;
+    private boolean breakBlocksEnabled = false;
+    private int weatherState = 0; // 0=sol, 1=chuva, 2=tempestade
 
     private Button cycleButton;
+    private Button breakBlocksButton;
+    private Button weatherButton;
     private TimeSlider timeSlider;
 
     public RpgSettingsScreen(Screen parent, boolean isMaster) {
@@ -81,13 +90,50 @@ public class RpgSettingsScreen extends Screen {
 
             this.addRenderableWidget(this.cycleButton);
 
+            // Estado inicial da permissão de quebra: último valor conhecido pelo cliente.
+            // A query abaixo atualiza com o valor real do servidor.
+            this.breakBlocksEnabled = TabletopRpgClient.playersCanBreakBlocks;
+
+            // Botão para liberar/bloquear a quebra de blocos pelos players
+            this.breakBlocksButton = Button.builder(
+                            Component.literal(breakBlocksLabel()),
+                            btn -> {
+                                this.breakBlocksEnabled = !this.breakBlocksEnabled;
+                                ClientPlayNetworking.send(new RpgNetworking.BlockBreakSettingPayload(this.breakBlocksEnabled));
+                                btn.setMessage(Component.literal(breakBlocksLabel()));
+                            }
+                    )
+                    .bounds(centerX - (BUTTON_WIDTH / 2), startY + 56, BUTTON_WIDTH, BUTTON_HEIGHT)
+                    .build();
+
+            this.addRenderableWidget(this.breakBlocksButton);
+
+            // Botão de clima: um único botão que cicla sol -> chuva -> tempestade.
+            // O clima aplicado persiste no servidor até o mestre mudar de novo.
+            this.weatherButton = Button.builder(
+                            Component.literal(weatherLabel()),
+                            btn -> {
+                                this.weatherState = (this.weatherState + 1) % 3;
+                                ClientPlayNetworking.send(new RpgNetworking.WeatherSetPayload(this.weatherState));
+                                btn.setMessage(Component.literal(weatherLabel()));
+                            }
+                    )
+                    .bounds(centerX - (BUTTON_WIDTH / 2), startY + 84, BUTTON_WIDTH, BUTTON_HEIGHT)
+                    .build();
+
+            this.addRenderableWidget(this.weatherButton);
+
             // Pede o estado real do ciclo ao servidor; a resposta chega via
             // DayNightCycleStatePayload e atualiza o botão (onCycleStateReceived).
             ClientPlayNetworking.send(new RpgNetworking.DayNightCycleQueryPayload());
+
+            // Pede o estado real da permissão de quebra ao servidor; a resposta chega via
+            // BlockBreakSettingStatePayload e atualiza o botão (onBlockBreakSettingReceived).
+            ClientPlayNetworking.send(new RpgNetworking.BlockBreakSettingQueryPayload());
         }
 
         // Botão Voltar para o menu anterior
-        int backY = this.isMaster ? startY + 68 : startY + 20;
+        int backY = this.isMaster ? startY + 112 : startY + 20;
         Button backButton = Button.builder(
                         Component.literal("Voltar"),
                         btn -> {
@@ -112,6 +158,28 @@ public class RpgSettingsScreen extends Screen {
         this.cycleEnabled = enabled;
         if (this.cycleButton != null) {
             this.cycleButton.setMessage(Component.literal(cycleLabel()));
+        }
+    }
+
+    /** Rótulo do botão de permissão de quebra conforme o estado atual. */
+    private String breakBlocksLabel() {
+        return this.breakBlocksEnabled ? "Players quebram blocos: Sim" : "Players quebram blocos: Não";
+    }
+
+    /** Rótulo do botão de clima conforme o estado atual (0=sol, 1=chuva, 2=tempestade). */
+    private String weatherLabel() {
+        return switch (this.weatherState) {
+            case 0 -> "Clima: Sol";
+            case 1 -> "Clima: Chuva";
+            default -> "Clima: Tempestade";
+        };
+    }
+
+    /** Atualiza a permissão de quebra quando a resposta do servidor chega (S2C). */
+    public void onBlockBreakSettingReceived(boolean enabled) {
+        this.breakBlocksEnabled = enabled;
+        if (this.breakBlocksButton != null) {
+            this.breakBlocksButton.setMessage(Component.literal(breakBlocksLabel()));
         }
     }
 

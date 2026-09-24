@@ -7,8 +7,10 @@ import net.fabricmc.fabric.api.event.player.UseBlockCallback;
 import net.fabricmc.fabric.api.event.player.UseEntityCallback;
 import net.fabricmc.fabric.api.event.player.UseItemCallback;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.item.BlockItem;
 
 public class PlayerControlHandler {
 
@@ -35,6 +37,13 @@ public class PlayerControlHandler {
             if (!canInteract(player)) {
                 return InteractionResult.FAIL;
             }
+            // Players (não-mestre) NUNCA podem colocar blocos, em qualquer
+            // modo. Só o Mestre coloca (útil para montar cenas). A checagem
+            // é por BlockItem na mão: bloqueia a colocação sem impedir
+            // interações com blocos (baús, portas, alavancas).
+            if (!canPlaceBlocks(player) && isBlockItemInHand(player, hand)) {
+                return InteractionResult.FAIL;
+            }
             return InteractionResult.PASS;
         });
 
@@ -59,8 +68,10 @@ public class PlayerControlHandler {
     }
 
     /**
-     * Jogadores (não-mestre) NUNCA podem quebrar blocos, em qualquer modo.
-     * Apenas o Mestre pode quebrar/colocar blocos (útil para montar cenas).
+     * Quem pode quebrar blocos:
+     *  - O Mestre sempre pode (útil para montar cenas).
+     *  - Jogadores (não-mestre) só se o mestre liberou no menu de configurações
+     *    (playersCanBreakBlocks) E estiver no turno dele (canPlayerAct).
      *
      * <p>No lado do cliente o player não é um {@link ServerPlayer}, então
      * retornamos true (deixa passar): o servidor é quem decide. Se retornássemos
@@ -71,7 +82,27 @@ public class PlayerControlHandler {
         if (!(player instanceof ServerPlayer serverPlayer)) {
             return true; // cliente: deixa passar, o servidor decide
         }
+        return SessionManager.isMaster(serverPlayer)
+                || (SessionManager.canPlayersBreakBlocks() && SessionManager.canPlayerAct(serverPlayer));
+    }
+
+    /**
+     * Jogadores (não-mestre) NUNCA podem colocar blocos, em qualquer modo.
+     * Apenas o Mestre pode quebrar/colocar blocos (útil para montar cenas).
+     *
+     * <p>No lado do cliente o player não é um {@link ServerPlayer}, então
+     * retornamos true (deixa passar): o servidor é quem decide.
+     */
+    private static boolean canPlaceBlocks(Player player) {
+        if (!(player instanceof ServerPlayer serverPlayer)) {
+            return true; // cliente: deixa passar, o servidor decide
+        }
         return SessionManager.isMaster(serverPlayer);
+    }
+
+    /** True se o item na mão é um bloco (BlockItem) — clique direito tentaria colocar um bloco. */
+    private static boolean isBlockItemInHand(Player player, InteractionHand hand) {
+        return player.getItemInHand(hand).getItem() instanceof BlockItem;
     }
 
     /**
