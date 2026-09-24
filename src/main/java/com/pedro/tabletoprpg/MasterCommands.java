@@ -32,6 +32,7 @@ import net.minecraft.world.entity.MobCategory;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -103,6 +104,11 @@ public class MasterCommands {
                     .then(Commands.argument("value", IntegerArgumentType.integer(0, 24000))
                         .executes(MasterCommands::setWorldTime)))
 
+                // /rpg hoverdistance <1-256>  (só o mestre) -> distância do highlight dos jogadores
+                .then(Commands.literal("hoverdistance")
+                    .then(Commands.argument("value", IntegerArgumentType.integer(1, 256))
+                        .executes(MasterCommands::setHoverDistance)))
+
                 // /rpg session set <nome>  (só o mestre) -> define o nome da sessão
                 .then(Commands.literal("session")
                     .then(Commands.literal("set")
@@ -155,8 +161,10 @@ public class MasterCommands {
             ServerPlayer player = ctx.getSource().getPlayerOrException();
             if (SessionManager.isMaster(player)) {
                 SessionManager.releaseMaster();
+                CombatController.reset(ctx.getSource().getServer());
                 broadcast(ctx, "§6§e" + player.getName().getString() + " §fhas stepped down as Game Master.");
                 RpgNetworking.sendToAll(ctx.getSource().getServer());
+                RpgNetworking.sendAuraStateToAll(ctx.getSource().getServer());
                 refreshChatMenu(ctx);
                 return 1;
             } else {
@@ -174,8 +182,13 @@ public class MasterCommands {
         if (!verifyMasterPermission(ctx)) return 0;
 
         SessionManager.setMode(mode);
+        if (mode == SessionManager.GameMode.FREE) {
+            // Fim do encontro: limpa seleção, âncoras e monstros controlados.
+            CombatController.reset(ctx.getSource().getServer());
+        }
         broadcast(ctx, "§6Game Mode changed to: §e" + mode.getDisplayName());
         RpgNetworking.sendToAll(ctx.getSource().getServer());
+        RpgNetworking.sendAuraStateToAll(ctx.getSource().getServer());
         refreshChatMenu(ctx);
         return 1;
     }
@@ -186,9 +199,12 @@ public class MasterCommands {
         try {
             ServerPlayer target = EntityArgument.getPlayer(ctx, "player");
             SessionManager.setActivePlayer(target);
+            // Âncora do jogador ativo: onde ele começou o turno (limite da aura).
+            CombatController.setPlayerAnchor(target);
             broadcast(ctx, "§6§aTurn granted to §e" + target.getName().getString() + "§a!");
             target.sendSystemMessage(Component.literal("§aIt is now YOUR TURN! Move and act freely."));
             RpgNetworking.sendToAll(ctx.getSource().getServer());
+            RpgNetworking.sendAuraStateToAll(ctx.getSource().getServer());
             refreshChatMenu(ctx);
             return 1;
         } catch (Exception e) {
@@ -201,9 +217,14 @@ public class MasterCommands {
         if (!verifyMasterPermission(ctx)) return 0;
 
         String prevPlayer = SessionManager.getActivePlayerName();
+        UUID prevUuid = SessionManager.getActivePlayerUuid();
         SessionManager.clearActivePlayer();
+        if (prevUuid != null) {
+            CombatController.clearPlayerAnchor(prevUuid);
+        }
         broadcast(ctx, "§6§cTurn for §e" + prevPlayer + " §chas been revoked by the Master.");
         RpgNetworking.sendToAll(ctx.getSource().getServer());
+        RpgNetworking.sendAuraStateToAll(ctx.getSource().getServer());
         refreshChatMenu(ctx);
         return 1;
     }
@@ -217,9 +238,14 @@ public class MasterCommands {
                 return 0;
             }
 
+            UUID prevUuid = SessionManager.getActivePlayerUuid();
             SessionManager.clearActivePlayer();
+            if (prevUuid != null) {
+                CombatController.clearPlayerAnchor(prevUuid);
+            }
             broadcast(ctx, "§6§e" + player.getName().getString() + " §fhas finished their turn.");
             RpgNetworking.sendToAll(ctx.getSource().getServer());
+            RpgNetworking.sendAuraStateToAll(ctx.getSource().getServer());
             refreshChatMenu(ctx);
             return 1;
         } catch (Exception e) {
@@ -311,10 +337,13 @@ public class MasterCommands {
             entity.setPos(spawnX, masterY, spawnZ);
             serverLevel.addFreshEntity(entity);
 
-            // Se for um Mob: desativa a IA (não age sozinho) e impede despawn natural
+            // Se for um Mob: desativa a IA (não age sozinho), impede despawn
+            // natural e o torna invulnerável (é uma "peça" da mesa, não um
+            // mob de combate real — os jogadores não o atacam diretamente).
             if (entity instanceof Mob mob) {
                 mob.setNoAi(true);
                 mob.setPersistenceRequired();
+                mob.setInvulnerable(true);
             }
 
             if (camPerm) {
@@ -382,7 +411,7 @@ public class MasterCommands {
         return 1;
     }
 
-    /** Define o horário do mundo (0-24000 ticks). Só o mestre. */
+/** Define o horário do mundo (0-24000 ticks). Só o mestre. */
     private static int setWorldTime(CommandContext<CommandSourceStack> ctx) {
         if (!verifyMasterPermission(ctx)) return 0;
 
@@ -398,6 +427,20 @@ public class MasterCommands {
             ctx.getSource().sendFailure(Component.literal("§c[RPG] Failed to set world time."));
             return 0;
         }
+    }
+
+    /**
+     * Define a distância máxima do highlight (Glowing) para os jogadores
+     * (não-mestre). O mestre sempre vê de qualquer distância. Só o mestre.
+     */
+    private static int setHoverDistance(CommandContext<CommandSourceStack> ctx) {
+        if (!verifyMasterPermission(ctx)) return 0;
+
+        int distance = IntegerArgumentType.getInteger(ctx, "value");
+        SessionManager.setHoverDistance(distance);
+        broadcast(ctx, "§6Player hover distance set to: §e" + SessionManager.getHoverDistance() + " blocks");
+        RpgNetworking.sendHoverConfigToAll(ctx.getSource().getServer());
+        return 1;
     }
 
     /**

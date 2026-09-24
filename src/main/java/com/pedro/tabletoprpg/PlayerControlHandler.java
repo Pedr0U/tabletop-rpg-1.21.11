@@ -61,10 +61,15 @@ public class PlayerControlHandler {
     /**
      * Jogadores (não-mestre) NUNCA podem quebrar blocos, em qualquer modo.
      * Apenas o Mestre pode quebrar/colocar blocos (útil para montar cenas).
+     *
+     * <p>No lado do cliente o player não é um {@link ServerPlayer}, então
+     * retornamos true (deixa passar): o servidor é quem decide. Se retornássemos
+     * false no cliente, o FAIL cancelaria o clique ANTES de enviar o pacote ao
+     * servidor, impedindo até o mestre de interagir com entidades/blocos.
      */
     private static boolean canBreakBlocks(Player player) {
         if (!(player instanceof ServerPlayer serverPlayer)) {
-            return false;
+            return true; // cliente: deixa passar, o servidor decide
         }
         return SessionManager.isMaster(serverPlayer);
     }
@@ -74,10 +79,15 @@ public class PlayerControlHandler {
      * Segue a regra de turno do SessionManager:
      *  - Livre: todos podem.
      *  - Investigação/Combate: só o Mestre ou o jogador com turno ativo.
+     *
+     * <p>No lado do cliente retornamos true (deixa passar): o servidor é quem
+     * decide. Se retornássemos false no cliente, o FAIL cancelaria o clique
+     * ANTES de enviar o pacote ao servidor, impedindo até o mestre de
+     * interagir (ex: selecionar monstro com o botão direito).
      */
     private static boolean canInteract(Player player) {
         if (!(player instanceof ServerPlayer serverPlayer)) {
-            return false;
+            return true; // cliente: deixa passar, o servidor decide
         }
         return SessionManager.canPlayerAct(serverPlayer);
     }
