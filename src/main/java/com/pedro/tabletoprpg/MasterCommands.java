@@ -121,7 +121,13 @@ public class MasterCommands {
                         .then(Commands.argument("type", StringArgumentType.string())
                             .suggests(MasterCommands::suggestEntityTypes)
                             .then(Commands.argument("cam_perm", BoolArgumentType.bool())
-                                .executes(MasterCommands::insertEnemy))))));
+                                .executes(MasterCommands::insertEnemy)))))
+
+                // /rpg remove enemy  (só o mestre) -> remove o mob selecionado
+                // (clique direito nele primeiro). 1 mob por execução.
+                .then(Commands.literal("remove")
+                    .then(Commands.literal("enemy")
+                        .executes(MasterCommands::removeEnemy))));
     }
 
     // --- COMANDOS E LÓGICA ---
@@ -165,6 +171,8 @@ public class MasterCommands {
                 broadcast(ctx, "§6§e" + player.getName().getString() + " §fhas stepped down as Game Master.");
                 RpgNetworking.sendToAll(ctx.getSource().getServer());
                 RpgNetworking.sendAuraStateToAll(ctx.getSource().getServer());
+                // O reset limpou os mobs com câmera: atualiza o carrossel.
+                RpgNetworking.sendSpectatorTargetsToAll(ctx.getSource().getServer());
                 refreshChatMenu(ctx);
                 return 1;
             } else {
@@ -189,6 +197,8 @@ public class MasterCommands {
         broadcast(ctx, "§6Game Mode changed to: §e" + mode.getDisplayName());
         RpgNetworking.sendToAll(ctx.getSource().getServer());
         RpgNetworking.sendAuraStateToAll(ctx.getSource().getServer());
+        // Se o reset limpou os mobs com câmera, atualiza o carrossel.
+        RpgNetworking.sendSpectatorTargetsToAll(ctx.getSource().getServer());
         refreshChatMenu(ctx);
         return 1;
     }
@@ -344,10 +354,21 @@ public class MasterCommands {
                 mob.setNoAi(true);
                 mob.setPersistenceRequired();
                 mob.setInvulnerable(true);
-            }
-
-            if (camPerm) {
-                TabletopRpg.LOGGER.info("[TabletopRPG] Enemy {} summoned with cam_perm=true by {}", type, master.getName().getString());
+                // Marca NBT persistente: sobrevive ao reinício do servidor e
+                // permite re-registrar o mob no carrossel/lookAt (o Set em
+                // memória é perdido no restart). Tags vanilla são salvas no
+                // NBT da entidade ("Tags") — não há getPersistentData() em
+                // 1.21.11.
+                mob.addTag("tabletoprpg_inserted");
+                CombatController.addInsertedMob(mob.getUUID());
+                // Com câmera (cam_perm=true): o mob entra no carrossel de
+                // espectador dos jogadores travados (FASE 2).
+                if (camPerm) {
+                    TabletopRpg.LOGGER.info("[TabletopRPG] Enemy {} summoned with cam_perm=true by {}", type, master.getName().getString());
+                    mob.addTag("tabletoprpg_camera");
+                    CombatController.addCameraMob(mob.getUUID());
+                    RpgNetworking.sendSpectatorTargetsToAll(serverLevel.getServer());
+                }
             }
 
             // Mensagem de confirmação
@@ -358,6 +379,38 @@ public class MasterCommands {
         } catch (Exception e) {
             TabletopRpg.LOGGER.error("[TabletopRPG] Error summoning enemy: {}", e.getMessage());
             ctx.getSource().sendFailure(Component.literal("§c[RPG] Failed to summon enemy."));
+            return 0;
+        }
+    }
+
+    /**
+     * /rpg remove enemy: remove o mob atualmente selecionado pelo mestre
+     * (clique direito nele primeiro). 1 mob por execução — para remover
+     * outro, o mestre precisa executar o comando de novo.
+     */
+    private static int removeEnemy(CommandContext<CommandSourceStack> ctx) {
+        if (!verifyMasterPermission(ctx)) return 0;
+
+        try {
+            ServerPlayer master = ctx.getSource().getPlayerOrException();
+            ServerLevel serverLevel = (ServerLevel) master.level();
+
+            Mob selected = CombatController.getSelectedMonster(serverLevel);
+            if (selected == null) {
+                ctx.getSource().sendFailure(Component.literal(
+                        "§c[RPG] No enemy selected. Right-click an enemy first, then run /rpg remove enemy."));
+                return 0;
+            }
+
+            String name = selected.getName().getString();
+            CombatController.removeSelectedMonster(serverLevel);
+            broadcast(ctx, "§6§e" + name + " §fremoved by the Master.");
+            RpgNetworking.sendAuraStateToAll(ctx.getSource().getServer());
+            RpgNetworking.sendSpectatorTargetsToAll(ctx.getSource().getServer());
+            return 1;
+        } catch (Exception e) {
+            TabletopRpg.LOGGER.error("[TabletopRPG] Error removing enemy: {}", e.getMessage());
+            ctx.getSource().sendFailure(Component.literal("§c[RPG] Failed to remove enemy."));
             return 0;
         }
     }
@@ -590,7 +643,6 @@ public class MasterCommands {
             menu.append(Component.literal("§f Actions: "));
             menu.append(createSuggestBtn("[Roll]", ChatFormatting.AQUA, "/rpg roll ", "Type a dice formula, ex: d20, 2d6+3"));
             menu.append(Component.literal(" "));
-            menu.append(Component.literal(" §8(open roll - everyone sees)"));
             menu.append(createBtn("[Step Down]", ChatFormatting.GRAY, "/rpg master release", "Release Master role"));
             menu.append(Component.literal("\n"));
 

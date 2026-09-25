@@ -11,10 +11,9 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
-import net.minecraft.world.effect.MobEffectInstance;
-import net.minecraft.world.effect.MobEffects;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.Mob;
 import net.minecraft.world.level.gamerules.GameRules;
 
 import java.util.ArrayList;
@@ -44,7 +43,12 @@ import java.util.UUID;
  *   <li>{@link BlockBreakSettingPayload} (C2S): mestre libera/bloqueia a quebra de blocos pelos players.</li>
  *   <li>{@link BlockBreakSettingQueryPayload} (C2S): cliente pede o estado da permissão de quebra (ao abrir as Settings).</li>
  *   <li>{@link BlockBreakSettingStatePayload} (S2C): estado atual da permissão de quebra (resposta/broadcast).</li>
+ *   <li>{@link PlaceBlockSettingPayload} (C2S): mestre libera/bloqueia a colocação de blocos pelos players.</li>
+ *   <li>{@link PlaceBlockSettingQueryPayload} (C2S): cliente pede o estado da permissão de colocação (ao abrir as Settings).</li>
+ *   <li>{@link PlaceBlockSettingStatePayload} (S2C): estado atual da permissão de colocação (resposta/broadcast).</li>
  *   <li>{@link WeatherSetPayload} (C2S): mestre define o clima (0=sol, 1=chuva, 2=tempestade).</li>
+ *   <li>{@link WeatherQueryPayload} (C2S): cliente pede o clima atual (ao abrir as Settings).</li>
+ *   <li>{@link WeatherStatePayload} (S2C): clima atual do mundo (resposta/broadcast).</li>
  * </ul>
  */
 public final class RpgNetworking {
@@ -273,6 +277,119 @@ public final class RpgNetworking {
         }
     }
 
+    /** Cliente -> Servidor: pede o clima atual do mundo (ao abrir as Settings). */
+    public record WeatherQueryPayload() implements CustomPacketPayload {
+        public static final Type<WeatherQueryPayload> TYPE = new Type<>(TabletopRpg.id("weather_query"));
+        public static final StreamCodec<FriendlyByteBuf, WeatherQueryPayload> STREAM_CODEC =
+                StreamCodec.unit(new WeatherQueryPayload());
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
+    /** Servidor -> Cliente: clima atual do mundo (0=sol, 1=chuva, 2=tempestade). Resposta à query / broadcast. */
+    public record WeatherStatePayload(int weather) implements CustomPacketPayload {
+        public static final Type<WeatherStatePayload> TYPE = new Type<>(TabletopRpg.id("weather_state"));
+        public static final StreamCodec<FriendlyByteBuf, WeatherStatePayload> STREAM_CODEC = StreamCodec.composite(
+                ByteBufCodecs.VAR_INT, WeatherStatePayload::weather,
+                WeatherStatePayload::new
+        );
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
+    /** Cliente -> Servidor: o mestre libera (true) ou bloqueia (false) a colocação de blocos pelos players. */
+    public record PlaceBlockSettingPayload(boolean enabled) implements CustomPacketPayload {
+        public static final Type<PlaceBlockSettingPayload> TYPE = new Type<>(TabletopRpg.id("place_block_setting"));
+        public static final StreamCodec<FriendlyByteBuf, PlaceBlockSettingPayload> STREAM_CODEC = StreamCodec.composite(
+                ByteBufCodecs.BOOL, PlaceBlockSettingPayload::enabled,
+                PlaceBlockSettingPayload::new
+        );
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
+    /** Cliente -> Servidor: pede o estado atual da permissão de colocação (ao abrir as Settings). */
+    public record PlaceBlockSettingQueryPayload() implements CustomPacketPayload {
+        public static final Type<PlaceBlockSettingQueryPayload> TYPE = new Type<>(TabletopRpg.id("place_block_setting_query"));
+        public static final StreamCodec<FriendlyByteBuf, PlaceBlockSettingQueryPayload> STREAM_CODEC =
+                StreamCodec.unit(new PlaceBlockSettingQueryPayload());
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
+    /** Servidor -> Cliente: estado atual da permissão de colocação de blocos (resposta à query / broadcast). */
+    public record PlaceBlockSettingStatePayload(boolean enabled) implements CustomPacketPayload {
+        public static final Type<PlaceBlockSettingStatePayload> TYPE = new Type<>(TabletopRpg.id("place_block_setting_state"));
+        public static final StreamCodec<FriendlyByteBuf, PlaceBlockSettingStatePayload> STREAM_CODEC = StreamCodec.composite(
+                ByteBufCodecs.BOOL, PlaceBlockSettingStatePayload::enabled,
+                PlaceBlockSettingStatePayload::new
+        );
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
+    /**
+     * Servidor -> Cliente: lista de alvos do carrossel de espectador (FASE 2).
+     * Todos os jogadores conectados + mobs invocados com câmera (cam_perm=true).
+     * O cliente adiciona a si mesmo como alvo inicial (índice 0).
+     */
+    public record SpectatorTargetsPayload(List<TargetData> targets) implements CustomPacketPayload {
+        public static final Type<SpectatorTargetsPayload> TYPE = new Type<>(TabletopRpg.id("spectator_targets"));
+        public static final StreamCodec<FriendlyByteBuf, SpectatorTargetsPayload> STREAM_CODEC = StreamCodec.composite(
+                TargetData.STREAM_CODEC.apply(ByteBufCodecs.list()), SpectatorTargetsPayload::targets,
+                SpectatorTargetsPayload::new
+        );
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+
+        /** Um alvo do carrossel: entidade (id), nome e se é jogador. */
+        public record TargetData(int entityId, String name, boolean isPlayer) {
+            public static final StreamCodec<FriendlyByteBuf, TargetData> STREAM_CODEC = StreamCodec.composite(
+                    ByteBufCodecs.VAR_INT, TargetData::entityId,
+                    ByteBufCodecs.stringUtf8(64), TargetData::name,
+                    ByteBufCodecs.BOOL, TargetData::isPlayer,
+                    TargetData::new
+            );
+        }
+    }
+
+    /**
+     * Servidor -> Cliente: UUID do jogador ativo (turno atual) como string;
+     * vazio ("") quando não há turno ativo. Usado pelo espectador para saber
+     * se o alvo espectado está no turno dele (câmera 3ª pessoa = mouse do
+     * espectador em vez da órbita automática).
+     */
+    public record ActivePlayerPayload(String activePlayerUuid) implements CustomPacketPayload {
+        public static final Type<ActivePlayerPayload> TYPE = new Type<>(TabletopRpg.id("active_player"));
+        public static final StreamCodec<FriendlyByteBuf, ActivePlayerPayload> STREAM_CODEC = StreamCodec.composite(
+                ByteBufCodecs.stringUtf8(36), ActivePlayerPayload::activePlayerUuid,
+                ActivePlayerPayload::new
+        );
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
     // ------------------------------------------------------------------
     // REGISTRO (comum a servidor e cliente)
     // ------------------------------------------------------------------
@@ -291,7 +408,14 @@ public final class RpgNetworking {
         PayloadTypeRegistry.playC2S().register(BlockBreakSettingPayload.TYPE, BlockBreakSettingPayload.STREAM_CODEC);
         PayloadTypeRegistry.playC2S().register(BlockBreakSettingQueryPayload.TYPE, BlockBreakSettingQueryPayload.STREAM_CODEC);
         PayloadTypeRegistry.playS2C().register(BlockBreakSettingStatePayload.TYPE, BlockBreakSettingStatePayload.STREAM_CODEC);
+        PayloadTypeRegistry.playC2S().register(PlaceBlockSettingPayload.TYPE, PlaceBlockSettingPayload.STREAM_CODEC);
+        PayloadTypeRegistry.playC2S().register(PlaceBlockSettingQueryPayload.TYPE, PlaceBlockSettingQueryPayload.STREAM_CODEC);
+        PayloadTypeRegistry.playS2C().register(PlaceBlockSettingStatePayload.TYPE, PlaceBlockSettingStatePayload.STREAM_CODEC);
         PayloadTypeRegistry.playC2S().register(WeatherSetPayload.TYPE, WeatherSetPayload.STREAM_CODEC);
+        PayloadTypeRegistry.playC2S().register(WeatherQueryPayload.TYPE, WeatherQueryPayload.STREAM_CODEC);
+        PayloadTypeRegistry.playS2C().register(WeatherStatePayload.TYPE, WeatherStatePayload.STREAM_CODEC);
+        PayloadTypeRegistry.playS2C().register(SpectatorTargetsPayload.TYPE, SpectatorTargetsPayload.STREAM_CODEC);
+        PayloadTypeRegistry.playS2C().register(ActivePlayerPayload.TYPE, ActivePlayerPayload.STREAM_CODEC);
     }
 
     /** Registra os receptores no lado do servidor. */
@@ -309,6 +433,12 @@ public final class RpgNetworking {
         ServerPlayConnectionEvents.JOIN.register((handler, sender, server) -> {
             sendLockToPlayer(handler.getPlayer());
             sendHoverConfigToPlayer(handler.getPlayer());
+            sendSpectatorTargetsToPlayer(handler.getPlayer());
+            sendActivePlayerToPlayer(handler.getPlayer());
+            // A lista de alvos do carrossel mudou (um jogador entrou): atualiza
+            // também os jogadores já conectados, senão o novo jogador só
+            // apareceria no carrossel deles no próximo broadcast.
+            sendSpectatorTargetsToAll(server);
         });
 
         // Ao desconectar: se era o mestre, libera o cargo e pausa a sessão
@@ -336,21 +466,15 @@ public final class RpgNetworking {
                 CombatController.clearPlayerAnchor(player.getUUID());
                 changed = true;
             }
-            // Limpa o hover (Glowing) deste jogador, se houver: sem isso, a
-            // entidade hoverada continuava brilhando por até 60 ticks e a
-            // entrada ficava para sempre no mapa (leak).
-            UUID hovered = CombatController.getHoveredEntity(player.getUUID());
-            if (hovered != null) {
-                Entity hoveredEntity = player.level().getEntity(hovered);
-                if (hoveredEntity instanceof LivingEntity living) {
-                    living.removeEffect(MobEffects.GLOWING);
-                }
-                CombatController.clearHoveredEntity(player.getUUID());
-            }
+            // Limpa o hover deste jogador (entrada do mapa por jogador).
+            CombatController.clearHoveredEntity(player.getUUID());
             if (changed) {
                 sendToAll(server);
                 sendAuraStateToAll(server);
             }
+            // A lista de alvos do carrossel mudou (um jogador saiu): atualiza
+            // todos os clientes conectados.
+            sendSpectatorTargetsToAll(server);
         });
 
         // Mestre define o horário do mundo (vindo do slider do menu ou do comando).
@@ -406,28 +530,51 @@ public final class RpgNetworking {
                 case 2 -> level.setWeatherParameters(0, 6000, true, true);     // tempestade
                 default -> { /* valor inválido: ignora */ }
             }
+            // Guarda o estado ALVO e faz broadcast dele. Em 1.21.11 o clima muda
+            // gradualmente (isRaining/isThundering derivam de rainLevel/thunderLevel
+            // suavizados), então o estado real NÃO corresponde ao escolhido durante
+            // a transição — se enviássemos o real, o botão de clima "voltaria" para
+            // o estado antigo até a transição terminar (bug relatado pelo usuário).
+            SessionManager.setWeatherTarget(payload.weather());
+            sendWeatherStateToAll(level.getServer());
         });
 
-        // Cliente informa qual entidade está sob o crosshair (hover) -> aplica/remove Glowing.
+        // Cliente pede o clima atual (ao abrir as Settings). Responde com o estado
+        // ALVO escolhido pelo mestre (não o real, que muda gradualmente).
+        ServerPlayNetworking.registerGlobalReceiver(WeatherQueryPayload.TYPE, (payload, context) -> {
+            ServerPlayer player = context.player();
+            ServerPlayNetworking.send(player, new WeatherStatePayload(SessionManager.getWeatherTarget()));
+        });
+
+        // Mestre libera/bloqueia a colocação de blocos pelos players (menu de configurações).
+        ServerPlayNetworking.registerGlobalReceiver(PlaceBlockSettingPayload.TYPE, (payload, context) -> {
+            ServerPlayer player = context.player();
+            if (!SessionManager.isMaster(player)) {
+                return; // só o mestre pode mudar
+            }
+            SessionManager.setPlayersCanPlaceBlocks(payload.enabled());
+            sendPlaceBlockSettingStateToAll(player.level().getServer());
+        });
+
+        // Cliente pede o estado atual da permissão de colocação (ao abrir as Settings).
+        ServerPlayNetworking.registerGlobalReceiver(PlaceBlockSettingQueryPayload.TYPE, (payload, context) -> {
+            ServerPlayer player = context.player();
+            ServerPlayNetworking.send(player, new PlaceBlockSettingStatePayload(SessionManager.canPlayersPlaceBlocks()));
+        });
+
+        // Cliente informa qual entidade está sob o crosshair (hover). O
+        // highlight NÃO usa mais o efeito Glowing vanilla (que é GLOBAL —
+        // todos os jogadores viam o contorno do mob hoverado por qualquer um):
+        // o contorno agora é renderizado apenas no cliente de quem está
+        // mirando (EntityRendererMixin). Aqui só registramos o hover atual
+        // por jogador.
         ServerPlayNetworking.registerGlobalReceiver(HoverPayload.TYPE, (payload, context) -> {
             ServerPlayer player = context.player();
             ServerLevel level = (ServerLevel) player.level();
 
-            // Remove o Glowing do hover anterior deste jogador.
-            UUID prev = CombatController.getHoveredEntity(player.getUUID());
-            if (prev != null) {
-                Entity prevEntity = level.getEntity(prev);
-                if (prevEntity instanceof LivingEntity living) {
-                    living.removeEffect(MobEffects.GLOWING);
-                }
-            }
-
             if (payload.entityId() >= 0) {
                 Entity target = level.getEntity(payload.entityId());
                 if (target instanceof LivingEntity living) {
-                    // Duração curta: o cliente reenvia o hover a cada 10 ticks,
-                    // então o efeito é renovado enquanto o jogador mantiver o mouse em cima.
-                    living.addEffect(new MobEffectInstance(MobEffects.GLOWING, 60, 0, false, false));
                     CombatController.setHoveredEntity(player.getUUID(), living.getUUID());
                 } else {
                     CombatController.clearHoveredEntity(player.getUUID());
@@ -505,6 +652,7 @@ public final class RpgNetworking {
     /**
      * Atualiza o estado de trava de todos os jogadores (mudanças de modo/turno).
      * NÃO envia o MenuDataPayload, para não abrir o menu automaticamente.
+     * Também sincroniza o jogador ativo (turno) para o carrossel de espectador.
      */
     public static void sendToAll(MinecraftServer server) {
         if (server == null) {
@@ -512,6 +660,7 @@ public final class RpgNetworking {
         }
         for (ServerPlayer player : server.getPlayerList().getPlayers()) {
             sendLockToPlayer(player);
+            sendActivePlayerToPlayer(player);
         }
     }
 
@@ -555,5 +704,101 @@ public final class RpgNetworking {
         for (ServerPlayer player : server.getPlayerList().getPlayers()) {
             ServerPlayNetworking.send(player, payload);
         }
+    }
+
+    /** Envia o estado atual da permissão de colocação de blocos para todos os jogadores. */
+    public static void sendPlaceBlockSettingStateToAll(MinecraftServer server) {
+        if (server == null) {
+            return;
+        }
+        PlaceBlockSettingStatePayload payload = new PlaceBlockSettingStatePayload(SessionManager.canPlayersPlaceBlocks());
+        for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+            ServerPlayNetworking.send(player, payload);
+        }
+    }
+
+    /** Envia o clima atual (estado alvo escolhido pelo mestre) para todos os jogadores. */
+    public static void sendWeatherStateToAll(MinecraftServer server) {
+        if (server == null) {
+            return;
+        }
+        for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+            sendWeatherStateToPlayer(player);
+        }
+    }
+
+    /** Envia o clima atual (estado alvo escolhido pelo mestre) para um jogador. */
+    public static void sendWeatherStateToPlayer(ServerPlayer player) {
+        if (player == null || player.connection == null) {
+            return;
+        }
+        ServerPlayNetworking.send(player, new WeatherStatePayload(SessionManager.getWeatherTarget()));
+    }
+
+    /**
+     * Monta a lista de alvos do carrossel de espectador: todos os jogadores
+     * conectados (EXCETO o mestre — ele não pode ser espectado) + mobs
+     * invocados com câmera (cam_perm=true) que ainda existem no mundo.
+     */
+    public static List<SpectatorTargetsPayload.TargetData> getSpectatorTargets(MinecraftServer server) {
+        List<SpectatorTargetsPayload.TargetData> list = new ArrayList<>();
+        if (server == null) {
+            return list;
+        }
+        // Auto-recuperação: após reiniciar o servidor, os mobs com câmera
+        // (marcados no NBT em insertEnemy) são re-registrados no carrossel.
+        CombatController.selfHealCameraMobs(server);
+        for (ServerPlayer p : server.getPlayerList().getPlayers()) {
+            if (SessionManager.isMaster(p)) {
+                continue; // o mestre não pode ser espectado
+            }
+            list.add(new SpectatorTargetsPayload.TargetData(p.getId(), p.getName().getString(), true));
+        }
+        for (UUID uuid : CombatController.getCameraMobs()) {
+            for (ServerLevel level : server.getAllLevels()) {
+                Entity entity = level.getEntity(uuid);
+                if (entity instanceof Mob mob) {
+                    // Trunca o nome em 64 chars: o codec stringUtf8(64) lança
+                    // exceção se o nome for maior (nomes customizados via NBT
+                    // podem passar de 64).
+                    String name = mob.getName().getString();
+                    if (name.length() > 64) {
+                        name = name.substring(0, 64);
+                    }
+                    list.add(new SpectatorTargetsPayload.TargetData(mob.getId(), name, false));
+                    break;
+                }
+            }
+        }
+        return list;
+    }
+
+    /** Envia a lista de alvos do carrossel para um jogador. */
+    public static void sendSpectatorTargetsToPlayer(ServerPlayer player) {
+        if (player == null || player.connection == null) {
+            return;
+        }
+        MinecraftServer server = player.level().getServer();
+        ServerPlayNetworking.send(player, new SpectatorTargetsPayload(getSpectatorTargets(server)));
+    }
+
+    /** Envia a lista de alvos do carrossel para todos os jogadores. */
+    public static void sendSpectatorTargetsToAll(MinecraftServer server) {
+        if (server == null) {
+            return;
+        }
+        SpectatorTargetsPayload payload = new SpectatorTargetsPayload(getSpectatorTargets(server));
+        for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+            ServerPlayNetworking.send(player, payload);
+        }
+    }
+
+    /** Envia o UUID do jogador ativo (turno) para um jogador. */
+    public static void sendActivePlayerToPlayer(ServerPlayer player) {
+        if (player == null || player.connection == null) {
+            return;
+        }
+        UUID activeUuid = SessionManager.getActivePlayerUuid();
+        ServerPlayNetworking.send(player, new ActivePlayerPayload(activeUuid == null ? "" : activeUuid.toString()));
     }
 }

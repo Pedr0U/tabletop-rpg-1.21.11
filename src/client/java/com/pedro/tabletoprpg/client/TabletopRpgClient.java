@@ -28,6 +28,21 @@ public class TabletopRpgClient implements ClientModInitializer {
     public static KeyMapping rpgMenuKey;
 
     /**
+     * Tecla V: cicla o modo de câmera de espectador (3ª Pessoa -> 1ª Pessoa ->
+     * TopDown -> Livre). Funciona travado ou não (o modo persiste como
+     * preferência). Usado pelo {@link SpectatorCameraController}.
+     */
+    public static KeyMapping rpgCameraModeKey;
+
+    /**
+     * UUID do jogador ativo (turno atual) como string; vazio ("") quando não
+     * há turno ativo. Atualizado via {@link RpgNetworking.ActivePlayerPayload}.
+     * Usado pelo espectador para saber se o alvo espectado está no turno dele
+     * (câmera 3ª pessoa = mouse do espectador em vez da órbita automática).
+     */
+    public static volatile String activePlayerUuid = "";
+
+    /**
      * True quando o jogador está "travado" (modo investigação/combate e não é o
      * turno dele). Usado pelo mixin LocalPlayerMixin para impedir o movimento
      * local, evitando o efeito de "rubber-banding". Atualizado via payload
@@ -52,6 +67,22 @@ public class TabletopRpgClient implements ClientModInitializer {
     public static volatile boolean playersCanBreakBlocks = false;
 
     /**
+     * Se os jogadores (não-mestre) podem colocar blocos. Atualizado via
+     * {@link RpgNetworking.PlaceBlockSettingStatePayload} quando o mestre abre
+     * as Settings ou muda a permissão. Usado para o botão da tela de
+     * configurações refletir o estado real do servidor.
+     */
+    public static volatile boolean playersCanPlaceBlocks = false;
+
+    /**
+     * Clima atual do mundo conhecido pelo cliente (0=sol, 1=chuva,
+     * 2=tempestade). Atualizado via {@link RpgNetworking.WeatherStatePayload}
+     * quando o mestre abre as Settings ou muda o clima. Usado para o botão da
+     * tela de configurações refletir o clima real do servidor.
+     */
+    public static volatile int weatherState = 0;
+
+    /**
      * Auras de limite de movimentação ativas (círculos azuis no chão).
      * Atualizado via {@link RpgNetworking.AuraStatePayload} quando o mestre
      * seleciona um monstro ou o modo/turno muda. Renderizado pelo
@@ -64,6 +95,17 @@ public class TabletopRpgClient implements ClientModInitializer {
 
     /** Última entidade sob o crosshair enviada (para enviar só na mudança). */
     private static int lastHoveredId = -1;
+
+    /**
+     * ID da entidade que o JOGADOR LOCAL está mirando (ou -1). Usado pelo
+     * {@code EntityRendererMixin} para renderizar o contorno do highlight
+     * apenas na tela de quem está com o mouse em cima do mob — o efeito
+     * Glowing vanilla foi removido porque era global (todos viam o contorno
+     * do mob hoverado por qualquer jogador).
+     */
+    public static int getHoveredEntityId() {
+        return lastHoveredId;
+    }
 
     /**
      * Distância máxima (em blocos) do highlight para este jogador. O mestre
@@ -85,6 +127,14 @@ public class TabletopRpgClient implements ClientModInitializer {
                 KeyMapping.Category.MISC
             ));
             LOGGER.info("[TabletopRPG-Client] Keybinding registered successfully: {}", rpgMenuKey.getName());
+
+            rpgCameraModeKey = KeyBindingHelper.registerKeyBinding(new KeyMapping(
+                "key.tabletoprpg.camera_mode",
+                InputConstants.Type.KEYSYM,
+                GLFW.GLFW_KEY_V,
+                KeyMapping.Category.MISC
+            ));
+            LOGGER.info("[TabletopRPG-Client] Camera mode keybinding registered successfully: {}", rpgCameraModeKey.getName());
         } catch (Throwable t) {
             LOGGER.error("[TabletopRPG-Client] FAILED to register keybinding!", t);
         }
@@ -93,8 +143,8 @@ public class TabletopRpgClient implements ClientModInitializer {
         AuraRenderer.register();
 
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
-            // Atualiza a câmera cinematográfica (órbita do jogador congelado).
-            CinematicCameraController.tick(client);
+            // Atualiza a câmera de espectador (carrossel + modos de câmera).
+            SpectatorCameraController.tick(client);
 
             // Envia o hover (entidade sob o crosshair) para o highlight Glowing.
             tickHover(client);
@@ -110,6 +160,14 @@ public class TabletopRpgClient implements ClientModInitializer {
                     ClientPlayNetworking.send(new RpgNetworking.MenuRequestPayload());
                 } else {
                     LOGGER.warn("[TabletopRPG] Tecla R pressionada, mas sem jogador/conexão válida.");
+                }
+            }
+
+            // Tecla V: cicla o modo de câmera de espectador (funciona travado
+            // ou não — o modo persiste como preferência).
+            if (rpgCameraModeKey != null) {
+                while (rpgCameraModeKey.consumeClick()) {
+                    SpectatorCameraController.cycleMode();
                 }
             }
         });
@@ -165,6 +223,26 @@ public class TabletopRpgClient implements ClientModInitializer {
             });
         });
 
+        // Estado da permissão de colocação de blocos -> atualiza o campo e a tela de Settings aberta.
+        ClientPlayNetworking.registerGlobalReceiver(RpgNetworking.PlaceBlockSettingStatePayload.TYPE, (payload, context) -> {
+            context.client().execute(() -> {
+                playersCanPlaceBlocks = payload.enabled();
+                if (context.client().screen instanceof RpgSettingsScreen settings) {
+                    settings.onPlaceBlockSettingReceived(payload.enabled());
+                }
+            });
+        });
+
+        // Clima atual do mundo -> atualiza o campo e a tela de Settings aberta.
+        ClientPlayNetworking.registerGlobalReceiver(RpgNetworking.WeatherStatePayload.TYPE, (payload, context) -> {
+            context.client().execute(() -> {
+                weatherState = payload.weather();
+                if (context.client().screen instanceof RpgSettingsScreen settings) {
+                    settings.onWeatherStateReceived(payload.weather());
+                }
+            });
+        });
+
         // Estado das auras de limite -> atualiza os círculos renderizados.
         ClientPlayNetworking.registerGlobalReceiver(RpgNetworking.AuraStatePayload.TYPE, (payload, context) -> {
             context.client().execute(() -> {
@@ -177,6 +255,23 @@ public class TabletopRpgClient implements ClientModInitializer {
         ClientPlayNetworking.registerGlobalReceiver(RpgNetworking.HoverConfigPayload.TYPE, (payload, context) -> {
             context.client().execute(() -> {
                 hoverMaxDistance = payload.maxDistance();
+            });
+        });
+
+        // Lista de alvos do carrossel de espectador -> atualiza o carrossel.
+        ClientPlayNetworking.registerGlobalReceiver(RpgNetworking.SpectatorTargetsPayload.TYPE, (payload, context) -> {
+            context.client().execute(() -> {
+                if (context.client().player != null) {
+                    SpectatorCameraController.setServerTargets(payload.targets(), context.client().player.getId());
+                }
+            });
+        });
+
+        // Jogador ativo (turno) -> usado pela regra "espectado no turno =
+        // mouse do espectador" na câmera 3ª pessoa.
+        ClientPlayNetworking.registerGlobalReceiver(RpgNetworking.ActivePlayerPayload.TYPE, (payload, context) -> {
+            context.client().execute(() -> {
+                activePlayerUuid = payload.activePlayerUuid();
             });
         });
     }
@@ -192,6 +287,15 @@ public class TabletopRpgClient implements ClientModInitializer {
         if (client.getConnection() == null || client.level == null || client.player == null) {
             return; // não está em um mundo (menu/loading) -> não pode enviar pacotes
         }
+        // No modo espectador o highlight (Glowing) é desnecessário: limpa o
+        // hover anterior (envia -1) e não envia novos (feedback do usuário).
+        if (SpectatorCameraController.isActive()) {
+            if (lastHoveredId != -1) {
+                lastHoveredId = -1;
+                ClientPlayNetworking.send(new RpgNetworking.HoverPayload(-1));
+            }
+            return;
+        }
         hoverTickCounter++;
 
         Camera camera = client.gameRenderer.getMainCamera();
@@ -199,7 +303,10 @@ public class TabletopRpgClient implements ClientModInitializer {
         Vec3 look = new Vec3(camera.forwardVector());
         double maxDist = hoverMaxDistance;
         Vec3 end = start.add(look.scale(maxDist));
-        AABB box = client.player.getBoundingBox().expandTowards(look.scale(maxDist)).inflate(1.0);
+        // Caixa do raycast a partir da CÂMERA (não do corpo do jogador): sem
+        // isso, ao espectar outro alvo à distância (FASE 2) o highlight não
+        // funcionaria, pois a caixa ficava ancorada no jogador congelado.
+        AABB box = new AABB(start, end).inflate(1.0);
         EntityHitResult hit = ProjectileUtil.getEntityHitResult(client.player, start, end, box,
                 e -> e instanceof Mob, maxDist * maxDist);
 

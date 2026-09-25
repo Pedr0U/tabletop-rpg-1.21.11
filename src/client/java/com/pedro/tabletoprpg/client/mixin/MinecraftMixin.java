@@ -1,5 +1,6 @@
 package com.pedro.tabletoprpg.client.mixin;
 
+import com.pedro.tabletoprpg.client.SpectatorCameraController;
 import com.pedro.tabletoprpg.client.TabletopRpgClient;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.Options;
@@ -10,15 +11,16 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 /**
- * Bloqueia a troca de perspectiva (tecla F5) enquanto o jogador está
- * "travado" com a câmera cinematográfica ativa.
- *
- * <p>Sem este bloqueio, o jogador congelado poderia apertar F5 e ver o HUD
- * em primeira pessoa (mira central + mão do personagem) enquanto a câmera
- * continua orbitando ao redor dele — quebrando a imersão da cinematic.
- *
- * <p>O clique da tecla é "engolido" no início de {@code handleKeybinds()},
- * antes do processamento padrão do jogo, então nenhuma outra tecla é afetada.
+ * Controles de espectador enquanto o jogador está "travado" (FASE 2):
+ * <ul>
+ *   <li><b>Carrossel de alvos</b>: clique esquerdo = próximo alvo, clique
+ *       direito = alvo anterior. Os cliques são "engolidos" no início de
+ *       {@code handleKeybinds()}, antes do processamento padrão do jogo, então
+ *       o jogador travado não ataca nem usa itens (o servidor já bloqueia, mas
+ *       isso evita a animação de braço no cliente).</li>
+ *   <li><b>F5 bloqueado</b>: a perspectiva é controlada pelos modos de câmera
+ *       (tecla V), não pela troca vanilla de perspectiva.</li>
+ * </ul>
  */
 @Mixin(Minecraft.class)
 public abstract class MinecraftMixin {
@@ -27,8 +29,15 @@ public abstract class MinecraftMixin {
     public Options options;
 
     @Inject(method = "handleKeybinds", at = @At("HEAD"))
-    private void tabletopRpg$blockPerspectiveToggle(CallbackInfo ci) {
+    private void tabletopRpg$spectatorControls(CallbackInfo ci) {
         if (TabletopRpgClient.locked) {
+            // Carrossel de espectador: clique esquerdo = próximo, direito = anterior.
+            while (this.options.keyAttack.consumeClick()) {
+                SpectatorCameraController.cycleNext();
+            }
+            while (this.options.keyUse.consumeClick()) {
+                SpectatorCameraController.cyclePrev();
+            }
             // Consome o clique da tecla de perspectiva (F5) para que o
             // processamento padrão do jogo nunca veja o clique.
             while (this.options.keyTogglePerspective.consumeClick()) {
