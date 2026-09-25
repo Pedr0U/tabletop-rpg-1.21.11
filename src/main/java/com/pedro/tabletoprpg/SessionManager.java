@@ -42,6 +42,23 @@ public class SessionManager {
      */
     private static boolean playersCanBreakBlocks = false;
 
+    /**
+     * Se os jogadores (não-mestre) podem colocar blocos. O mestre sempre pode.
+     * Configurável pelo mestre no menu de configurações (Settings).
+     */
+    private static boolean playersCanPlaceBlocks = false;
+
+    /**
+     * Clima ALVO escolhido pelo mestre (0=sol, 1=chuva, 2=tempestade).
+     *
+     * <p>Não é o clima real do mundo: em 1.21.11 o clima muda gradualmente
+     * (isRaining/isThundering derivam de rainLevel/thunderLevel suavizados),
+     * então durante a transição o estado real não corresponde ao escolhido.
+     * O botão de clima reflete este alvo, não o estado real — assim o botão
+     * mostra o que o mestre escolheu e não "volta" durante a transição.
+     */
+    private static int weatherTarget = 0;
+
     public static String getSessionName() {
         return sessionName;
     }
@@ -125,6 +142,22 @@ public class SessionManager {
 
     public static void setPlayersCanBreakBlocks(boolean value) {
         playersCanBreakBlocks = value;
+    }
+
+    public static boolean canPlayersPlaceBlocks() {
+        return playersCanPlaceBlocks;
+    }
+
+    public static void setPlayersCanPlaceBlocks(boolean value) {
+        playersCanPlaceBlocks = value;
+    }
+
+    public static int getWeatherTarget() {
+        return weatherTarget;
+    }
+
+    public static void setWeatherTarget(int weather) {
+        weatherTarget = Math.max(0, Math.min(weather, 2));
     }
 
     public static boolean canPlayerAct(ServerPlayer player) {

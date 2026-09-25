@@ -5,7 +5,12 @@
 	"client": [
 		"LocalPlayerMixin",
 		"CameraMixin",
-		"MinecraftMixin"
+		"MinecraftMixin",
+		"GameRendererMixin",
+		"LevelRendererMixin",
+		"GuiMixin",
+		"EntityTurnMixin",
+		"EntityRendererMixin"
 	],
 	"injectors": {
 		"defaultRequire": 1

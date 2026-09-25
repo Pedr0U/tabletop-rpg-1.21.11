@@ -17,14 +17,34 @@ import net.minecraft.network.chat.Component;
  *       dia/noite, enviando um {@code DayNightCycleSetPayload} ao servidor.</li>
  *   <li>Botão para liberar/bloquear a quebra de blocos pelos players,
  *       enviando um {@code BlockBreakSettingPayload} ao servidor.</li>
+ *   <li>Botão para liberar/bloquear a colocação de blocos pelos players,
+ *       enviando um {@code PlaceBlockSettingPayload} ao servidor.</li>
  *   <li>Botão de clima que cicla Sol -> Chuva -> Tempestade, enviando um
- *       {@code WeatherSetPayload} ao servidor. O clima persiste até o mestre
- *       mudar de novo.</li>
+ *       {@code WeatherSetPayload} ao servidor. O estado do botão é
+ *       sincronizado com o clima real do mundo (query + broadcast).</li>
  *   <li>Botão "Voltar" para retornar ao menu principal.</li>
  * </ul>
  *
- * <p>Jogadores não-mestres não veem os controles de horário/ciclo/quebra/clima,
- * apenas o botão "Voltar".
+ * <p>Para jogadores NÃO-mestres, a tela também mostra as opções da câmera de
+ * espectador (FASE 2):
+ * <ul>
+ *   <li>"Câmera Orbital: Sim/Não" — liga/desliga a órbita automática da
+ *       câmera 3ª pessoa quando o alvo espectado está fora do turno.</li>
+ *   <li>"Modo de Câmera: ..." — cicla 3ª Pessoa -> 1ª Pessoa -> TopDown ->
+ *       Livre (mesma ação da tecla V).</li>
+ *   <li>"Zoom TopDown" (slider -100..100, padrão 0) — aproxima/afasta a
+ *       câmera TopDown (altura 15 blocos + zoom × 0.1).</li>
+ *   <li>"Velocidade de Transição" (slider 0..100, padrão 50) — velocidade da
+ *       transição ao trocar de personagem espectado (50 = 50 ticks atual,
+ *       100 = instantâneo).</li>
+ * </ul>
+ *
+ * <p>O mestre NÃO vê as opções de câmera: ele nunca fica travado (o carrossel
+ * de espectador só ativa para jogadores fora do turno), então os botões seriam
+ * inúteis para ele.
+ *
+ * <p>Jogadores não-mestres não veem os controles de horário/ciclo/quebra/
+ * colocação/clima, apenas as opções de câmera e o botão "Voltar".
  */
 public class RpgSettingsScreen extends Screen {
 
@@ -35,11 +55,17 @@ public class RpgSettingsScreen extends Screen {
     private final boolean isMaster;
     private boolean cycleEnabled = true;
     private boolean breakBlocksEnabled = false;
+    private boolean placeBlocksEnabled = false;
     private int weatherState = 0; // 0=sol, 1=chuva, 2=tempestade
 
     private Button cycleButton;
     private Button breakBlocksButton;
+    private Button placeBlocksButton;
     private Button weatherButton;
+    private Button orbitalButton;
+    private Button cameraModeButton;
+    private RpgSlider topDownZoomSlider;
+    private RpgSlider transitionSpeedSlider;
     private TimeSlider timeSlider;
 
     public RpgSettingsScreen(Screen parent, boolean isMaster) {
@@ -108,8 +134,32 @@ public class RpgSettingsScreen extends Screen {
 
             this.addRenderableWidget(this.breakBlocksButton);
 
+            // Estado inicial da permissão de colocação: último valor conhecido pelo cliente.
+            // A query abaixo atualiza com o valor real do servidor.
+            this.placeBlocksEnabled = TabletopRpgClient.playersCanPlaceBlocks;
+
+            // Botão para liberar/bloquear a colocação de blocos pelos players
+            this.placeBlocksButton = Button.builder(
+                            Component.literal(placeBlocksLabel()),
+                            btn -> {
+                                this.placeBlocksEnabled = !this.placeBlocksEnabled;
+                                ClientPlayNetworking.send(new RpgNetworking.PlaceBlockSettingPayload(this.placeBlocksEnabled));
+                                btn.setMessage(Component.literal(placeBlocksLabel()));
+                            }
+                    )
+                    .bounds(centerX - (BUTTON_WIDTH / 2), startY + 84, BUTTON_WIDTH, BUTTON_HEIGHT)
+                    .build();
+
+            this.addRenderableWidget(this.placeBlocksButton);
+
+            // Estado inicial do clima: último valor conhecido pelo cliente.
+            // A query abaixo atualiza com o clima real do servidor.
+            this.weatherState = TabletopRpgClient.weatherState;
+
             // Botão de clima: um único botão que cicla sol -> chuva -> tempestade.
-            // O clima aplicado persiste no servidor até o mestre mudar de novo.
+            // O estado do botão é sincronizado com o clima real do mundo: ao
+            // abrir as Settings o cliente pergunta o clima atual (query) e o
+            // servidor responde com o estado real (isRaining/isThundering).
             this.weatherButton = Button.builder(
                             Component.literal(weatherLabel()),
                             btn -> {
@@ -118,7 +168,7 @@ public class RpgSettingsScreen extends Screen {
                                 btn.setMessage(Component.literal(weatherLabel()));
                             }
                     )
-                    .bounds(centerX - (BUTTON_WIDTH / 2), startY + 84, BUTTON_WIDTH, BUTTON_HEIGHT)
+                    .bounds(centerX - (BUTTON_WIDTH / 2), startY + 112, BUTTON_WIDTH, BUTTON_HEIGHT)
                     .build();
 
             this.addRenderableWidget(this.weatherButton);
@@ -130,10 +180,81 @@ public class RpgSettingsScreen extends Screen {
             // Pede o estado real da permissão de quebra ao servidor; a resposta chega via
             // BlockBreakSettingStatePayload e atualiza o botão (onBlockBreakSettingReceived).
             ClientPlayNetworking.send(new RpgNetworking.BlockBreakSettingQueryPayload());
+
+            // Pede o estado real da permissão de colocação ao servidor; a resposta chega via
+            // PlaceBlockSettingStatePayload e atualiza o botão (onPlaceBlockSettingReceived).
+            ClientPlayNetworking.send(new RpgNetworking.PlaceBlockSettingQueryPayload());
+
+            // Pede o clima real do mundo ao servidor; a resposta chega via
+            // WeatherStatePayload e atualiza o botão (onWeatherStateReceived).
+            ClientPlayNetworking.send(new RpgNetworking.WeatherQueryPayload());
+        }
+
+        // Opções da câmera de espectador (FASE 2) — apenas para NÃO-mestres.
+        // O mestre nunca fica travado (o carrossel só ativa para jogadores
+        // fora do turno), então os botões seriam inúteis para ele.
+        if (!this.isMaster) {
+            // Botão "Câmera Orbital: Sim/Não" (órbita automática da 3ª pessoa).
+            this.orbitalButton = Button.builder(
+                            Component.literal(orbitalLabel()),
+                            btn -> {
+                                SpectatorCameraController.setOrbitalEnabled(!SpectatorCameraController.isOrbitalEnabled());
+                                btn.setMessage(Component.literal(orbitalLabel()));
+                            }
+                    )
+                    .bounds(centerX - (BUTTON_WIDTH / 2), startY, BUTTON_WIDTH, BUTTON_HEIGHT)
+                    .build();
+
+            this.addRenderableWidget(this.orbitalButton);
+
+            // Botão "Modo de Câmera: ..." (cicla 3ª -> 1ª -> TopDown -> Livre).
+            this.cameraModeButton = Button.builder(
+                            Component.literal(cameraModeLabel()),
+                            btn -> {
+                                SpectatorCameraController.cycleMode();
+                                btn.setMessage(Component.literal(cameraModeLabel()));
+                            }
+                    )
+                    .bounds(centerX - (BUTTON_WIDTH / 2), startY + 28, BUTTON_WIDTH, BUTTON_HEIGHT)
+                    .build();
+
+            this.addRenderableWidget(this.cameraModeButton);
+
+            // Slider de zoom da câmera TopDown (-100..100, padrão 0).
+            // Cada unidade = 0.1 bloco de altura: -100 → 5 blocos,
+            // +100 → 25 blocos (base 15).
+            this.topDownZoomSlider = new RpgSlider(
+                    centerX - (BUTTON_WIDTH / 2),
+                    startY + 56,
+                    BUTTON_WIDTH,
+                    BUTTON_HEIGHT,
+                    -100,
+                    100,
+                    SpectatorCameraController.getTopDownZoom(),
+                    SpectatorCameraController::setTopDownZoom,
+                    v -> "Zoom TopDown: " + (v > 0 ? "+" : "") + v
+            );
+            this.addRenderableWidget(this.topDownZoomSlider);
+
+            // Slider de velocidade de transição (0..100, padrão 50).
+            // Duração em ticks = 100 - valor: 50 → 50 ticks (atual),
+            // 100 → 1 tick (instantâneo), 0 → 100 ticks (lento).
+            this.transitionSpeedSlider = new RpgSlider(
+                    centerX - (BUTTON_WIDTH / 2),
+                    startY + 84,
+                    BUTTON_WIDTH,
+                    BUTTON_HEIGHT,
+                    0,
+                    100,
+                    SpectatorCameraController.getTransitionSpeed(),
+                    SpectatorCameraController::setTransitionSpeed,
+                    v -> "Velocidade de Transição: " + v
+            );
+            this.addRenderableWidget(this.transitionSpeedSlider);
         }
 
         // Botão Voltar para o menu anterior
-        int backY = this.isMaster ? startY + 112 : startY + 20;
+        int backY = this.isMaster ? startY + 140 : startY + 112;
         Button backButton = Button.builder(
                         Component.literal("Voltar"),
                         btn -> {
@@ -166,6 +287,11 @@ public class RpgSettingsScreen extends Screen {
         return this.breakBlocksEnabled ? "Players quebram blocos: Sim" : "Players quebram blocos: Não";
     }
 
+    /** Rótulo do botão de permissão de colocação conforme o estado atual. */
+    private String placeBlocksLabel() {
+        return this.placeBlocksEnabled ? "Players colocam blocos: Sim" : "Players colocam blocos: Não";
+    }
+
     /** Rótulo do botão de clima conforme o estado atual (0=sol, 1=chuva, 2=tempestade). */
     private String weatherLabel() {
         return switch (this.weatherState) {
@@ -175,11 +301,37 @@ public class RpgSettingsScreen extends Screen {
         };
     }
 
+    /** Rótulo do botão de órbita automática da câmera 3ª pessoa. */
+    private String orbitalLabel() {
+        return SpectatorCameraController.isOrbitalEnabled() ? "Câmera Orbital: Sim" : "Câmera Orbital: Não";
+    }
+
+    /** Rótulo do botão de modo de câmera de espectador. */
+    private String cameraModeLabel() {
+        return "Modo de Câmera: " + SpectatorCameraController.getMode().getDisplayName();
+    }
+
     /** Atualiza a permissão de quebra quando a resposta do servidor chega (S2C). */
     public void onBlockBreakSettingReceived(boolean enabled) {
         this.breakBlocksEnabled = enabled;
         if (this.breakBlocksButton != null) {
             this.breakBlocksButton.setMessage(Component.literal(breakBlocksLabel()));
+        }
+    }
+
+    /** Atualiza a permissão de colocação quando a resposta do servidor chega (S2C). */
+    public void onPlaceBlockSettingReceived(boolean enabled) {
+        this.placeBlocksEnabled = enabled;
+        if (this.placeBlocksButton != null) {
+            this.placeBlocksButton.setMessage(Component.literal(placeBlocksLabel()));
+        }
+    }
+
+    /** Atualiza o clima quando a resposta do servidor chega (S2C). */
+    public void onWeatherStateReceived(int weather) {
+        this.weatherState = weather;
+        if (this.weatherButton != null) {
+            this.weatherButton.setMessage(Component.literal(weatherLabel()));
         }
     }
 
@@ -202,7 +354,7 @@ public class RpgSettingsScreen extends Screen {
                     this.font,
                     Component.literal("Apenas o mestre pode alterar as configurações do mundo."),
                     this.width / 2,
-                    (this.height / 4),
+                    (this.height / 4) + 140,
                     0xAAAAAA
             );
         }

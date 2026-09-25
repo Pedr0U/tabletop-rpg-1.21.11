@@ -37,10 +37,11 @@ public class PlayerControlHandler {
             if (!canInteract(player)) {
                 return InteractionResult.FAIL;
             }
-            // Players (não-mestre) NUNCA podem colocar blocos, em qualquer
-            // modo. Só o Mestre coloca (útil para montar cenas). A checagem
-            // é por BlockItem na mão: bloqueia a colocação sem impedir
-            // interações com blocos (baús, portas, alavancas).
+            // Players (não-mestre) só podem colocar blocos se o mestre liberou
+            // no menu de configurações (playersCanPlaceBlocks) E estiver no
+            // turno dele. A checagem é por BlockItem na mão: bloqueia a
+            // colocação sem impedir interações com blocos (baús, portas,
+            // alavancas).
             if (!canPlaceBlocks(player) && isBlockItemInHand(player, hand)) {
                 return InteractionResult.FAIL;
             }
@@ -87,8 +88,10 @@ public class PlayerControlHandler {
     }
 
     /**
-     * Jogadores (não-mestre) NUNCA podem colocar blocos, em qualquer modo.
-     * Apenas o Mestre pode quebrar/colocar blocos (útil para montar cenas).
+     * Quem pode colocar blocos:
+     *  - O Mestre sempre pode (útil para montar cenas).
+     *  - Jogadores (não-mestre) só se o mestre liberou no menu de configurações
+     *    (playersCanPlaceBlocks) E estiver no turno dele (canPlayerAct).
      *
      * <p>No lado do cliente o player não é um {@link ServerPlayer}, então
      * retornamos true (deixa passar): o servidor é quem decide.
@@ -97,7 +100,8 @@ public class PlayerControlHandler {
         if (!(player instanceof ServerPlayer serverPlayer)) {
             return true; // cliente: deixa passar, o servidor decide
         }
-        return SessionManager.isMaster(serverPlayer);
+        return SessionManager.isMaster(serverPlayer)
+                || (SessionManager.canPlayersPlaceBlocks() && SessionManager.canPlayerAct(serverPlayer));
     }
 
     /** True se o item na mão é um bloco (BlockItem) — clique direito tentaria colocar um bloco. */

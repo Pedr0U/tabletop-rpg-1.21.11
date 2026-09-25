@@ -1,7 +1,7 @@
 package com.pedro.tabletoprpg.client.mixin;
 
-import com.pedro.tabletoprpg.client.CinematicCameraController;
 import com.pedro.tabletoprpg.client.CinematicCameraRig;
+import com.pedro.tabletoprpg.client.SpectatorCameraController;
 import net.minecraft.client.Camera;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.level.Level;
@@ -33,7 +33,7 @@ public abstract class CameraMixin {
     private void tabletopRpg$applyCinematicCamera(Level level, Entity entity,
                                                   boolean detached, boolean thirdPersonReverse,
                                                   float partialTick, CallbackInfo ci) {
-        if (CinematicCameraController.isActive() && CinematicCameraRig.isActive()) {
+        if (SpectatorCameraController.isActive() && CinematicCameraRig.isActive()) {
             var pos = CinematicCameraRig.getInterpolatedPosition(partialTick);
             this.setPosition(pos.x, pos.y, pos.z);
             this.setRotation(CinematicCameraRig.getInterpolatedYaw(partialTick),

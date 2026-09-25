@@ -69,6 +69,19 @@ public final class CombatController {
     private static final Map<UUID, UUID> hoveredEntities = new HashMap<>();
 
     /**
+     * Mobs invocados com câmera (cam_perm=true): entram no carrossel de
+     * espectador dos jogadores travados (FASE 2). UUID do mob -> presente.
+     */
+    private static final Set<UUID> cameraMobs = new HashSet<>();
+
+    /**
+     * Todos os mobs invocados pelo mestre (/rpg insert enemy), com ou sem
+     * câmera. São "peças" da mesa: ficam congelados e olham para o jogador
+     * mais próximo a cada tick (mesmo sem estarem selecionados).
+     */
+    private static final Set<UUID> insertedMobs = new HashSet<>();
+
+    /**
      * Debounce do toggle de sele├º├úo: UUID do mestre -> (UUID do mob, tempo).
      * O cliente envia v├írios pacotes por clique (interactAt + interact + useItem)
      * e o caminho "segurar o bot├úo" do vanilla re-dispara startUseItem ap├│s
@@ -122,7 +135,8 @@ public final class CombatController {
         });
 
         // A cada tick, os monstros controlados andam at├® o destino (se houver)
-        // e olham para o jogador mais pr├│ximo.
+        // e olham para o jogador mais pr├│ximo; os mobs inseridos (pe├ºas da
+        // mesa) olham para o jogador mais pr├│ximo mesmo sem sele├º├úo.
         ServerTickEvents.END_SERVER_TICK.register(CombatController::tickControlledMonsters);
     }
 
@@ -145,7 +159,7 @@ public final class CombatController {
             // Clicou no mesmo monstro -> deseleciona (a aura some e o monstro
             // volta a ser uma "pe├ºa" congelada da mesa).
             clearSelection(level);
-            master.sendSystemMessage(Component.literal("┬º7[RPG] Monster deselected."));
+            master.sendSystemMessage(Component.literal("§7[RPG] Monster deselected."));
         } else {
             selectedMonsterUuid = mobUuid;
             // ├éncora do monstro: posi├º├úo atual do mob no momento da sele├º├úo.
@@ -164,8 +178,8 @@ public final class CombatController {
                 setPlayerAnchor(active);
             }
 
-            master.sendSystemMessage(Component.literal("┬ºb[RPG] Monster selected: ┬ºe" + mob.getName().getString()
-                    + "┬ºb. ┬º7Aura de " + AURA_RADIUS + " blocos ativa. Right-click a block to move it."));
+            master.sendSystemMessage(Component.literal("§b[RPG] Monster selected: §e" + mob.getName().getString()
+                    + "§b. §7Aura de " + AURA_RADIUS + " blocos ativa. Right-click a block to move it."));
         }
         RpgNetworking.sendAuraStateToAll(level.getServer());
     }
@@ -176,7 +190,7 @@ public final class CombatController {
         }
         Entity entity = level.getEntity(selectedMonsterUuid);
         if (!(entity instanceof Mob mob)) {
-            master.sendSystemMessage(Component.literal("┬ºc[RPG] Selected monster is no longer in the world."));
+            master.sendSystemMessage(Component.literal("§c[RPG] Selected monster is no longer in the world."));
             clearSelection(level);
             RpgNetworking.sendAuraStateToAll(level.getServer());
             return;
@@ -185,7 +199,7 @@ public final class CombatController {
         // Valida o limite da aura (15 blocos da ├óncora do monstro).
         BlockPos anchor = monsterAnchors.get(selectedMonsterUuid);
         if (anchor != null && !isWithinAura(anchor, dest.getX() + 0.5, dest.getZ() + 0.5)) {
-            master.sendSystemMessage(Component.literal("┬ºc[RPG] Destination is beyond the monster's aura ("
+            master.sendSystemMessage(Component.literal("§c[RPG] Destination is beyond the monster's aura ("
                     + AURA_RADIUS + " blocks from its start)."));
             return;
         }
@@ -197,14 +211,15 @@ public final class CombatController {
         double groundY = level.getHeight(Heightmap.Types.MOTION_BLOCKING, dest.getX(), dest.getZ());
         monsterDestinations.put(selectedMonsterUuid,
                 new Vec3(dest.getX() + 0.5, groundY, dest.getZ() + 0.5));
-        master.sendSystemMessage(Component.literal("┬ºa[RPG] Monster moving to ┬ºe" + dest.getX() + ", "
-                + dest.getZ() + "┬ºa."));
+        master.sendSystemMessage(Component.literal("§a[RPG] Monster moving to §e" + dest.getX() + ", "
+                + dest.getZ() + "§a."));
     }
 
     private static void tickControlledMonsters(MinecraftServer server) {
-        if (controlledMonsters.isEmpty()) {
-            return;
-        }
+        // Auto-recupera├º├úo: ap├│s reiniciar o servidor, os mobs inseridos
+        // (marcados no NBT em insertEnemy) s├úo re-registrados.
+        selfHealInsertedMobs(server);
+
         for (UUID uuid : new ArrayList<>(controlledMonsters)) {
             boolean found = false;
             for (ServerLevel level : server.getAllLevels()) {
@@ -246,6 +261,31 @@ public final class CombatController {
             if (!found) {
                 controlledMonsters.remove(uuid); // monstro n├úo existe mais
                 monsterDestinations.remove(uuid);
+            }
+        }
+
+        // Mobs inseridos (pe├ºas da mesa): olham para o jogador mais pr├│ximo
+        // mesmo sem estarem selecionados. Mobs em movimento (selecionados com
+        // destino) s├úo pulados — o lookAt do movimento vale.
+        for (UUID uuid : new ArrayList<>(insertedMobs)) {
+            if (controlledMonsters.contains(uuid) && monsterDestinations.containsKey(uuid)) {
+                continue; // andando: o lookAt do movimento vale
+            }
+            boolean found = false;
+            for (ServerLevel level : server.getAllLevels()) {
+                Entity entity = level.getEntity(uuid);
+                if (entity instanceof Mob mob) {
+                    found = true;
+                    ServerPlayer nearest = findNearestPlayer(level, mob);
+                    if (nearest != null) {
+                        lookAt(mob, nearest.getEyePosition());
+                    }
+                    break;
+                }
+            }
+            if (!found) {
+                insertedMobs.remove(uuid); // mob n├úo existe mais
+                cameraMobs.remove(uuid);
             }
         }
     }
@@ -364,6 +404,98 @@ public final class CombatController {
     }
 
     // ------------------------------------------------------------------
+    // MOBS COM CÂMERA (CARROSSEL DE ESPECTADOR)
+    // ------------------------------------------------------------------
+
+    /** Marca um mob como espectável (invocado com cam_perm=true). */
+    public static void addCameraMob(UUID mobUuid) {
+        cameraMobs.add(mobUuid);
+    }
+
+    /** Marca um mob como inserido pelo mestre (peça da mesa, olha o jogador). */
+    public static void addInsertedMob(UUID mobUuid) {
+        insertedMobs.add(mobUuid);
+    }
+
+    /** Remove um mob da lista de espectáveis (removido do mundo). */
+    public static void removeCameraMob(UUID mobUuid) {
+        cameraMobs.remove(mobUuid);
+    }
+
+    /** Mobs atualmente espectáveis (com câmera). */
+    public static Set<UUID> getCameraMobs() {
+        return cameraMobs;
+    }
+
+    /**
+     * Auto-recuperação dos mobs com câmera após reiniciar o servidor: os mobs
+     * persistem no mundo (com a marca NBT "tabletoprpg_camera" gravada em
+     * insertEnemy), mas o Set em memória é perdido. Re-registra os que ainda
+     * existem. Chamado ao montar a lista de alvos do carrossel.
+     */
+    public static void selfHealCameraMobs(MinecraftServer server) {
+        if (!cameraMobs.isEmpty()) {
+            return;
+        }
+        for (ServerLevel level : server.getAllLevels()) {
+            for (Entity e : level.getAllEntities()) {
+                if (e instanceof Mob mob && mob.getTags().contains("tabletoprpg_camera")) {
+                    cameraMobs.add(mob.getUUID());
+                    insertedMobs.add(mob.getUUID());
+                }
+            }
+        }
+    }
+
+    /**
+     * Auto-recuperação dos mobs inseridos após reiniciar o servidor (marca NBT
+     * "tabletoprpg_inserted"). Chamado a cada tick (barato: só varre quando o
+     * Set está vazio).
+     */
+    private static void selfHealInsertedMobs(MinecraftServer server) {
+        if (!insertedMobs.isEmpty()) {
+            return;
+        }
+        for (ServerLevel level : server.getAllLevels()) {
+            for (Entity e : level.getAllEntities()) {
+                if (e instanceof Mob mob && mob.getTags().contains("tabletoprpg_inserted")) {
+                    insertedMobs.add(mob.getUUID());
+                }
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // REMOÇÃO DE INIMIGO (/rpg remove enemy)
+    // ------------------------------------------------------------------
+
+    /** O mob atualmente selecionado pelo mestre, ou null se não houver. */
+    public static Mob getSelectedMonster(ServerLevel level) {
+        if (selectedMonsterUuid == null) {
+            return null;
+        }
+        Entity entity = level.getEntity(selectedMonsterUuid);
+        return entity instanceof Mob mob ? mob : null;
+    }
+
+    /**
+     * Remove o mob selecionado do mundo (1 mob por execução) e limpa a
+     * seleção. Também remove da lista de espectáveis (câmera) e de inseridos.
+     */
+    public static void removeSelectedMonster(ServerLevel level) {
+        if (selectedMonsterUuid == null) {
+            return;
+        }
+        Entity entity = level.getEntity(selectedMonsterUuid);
+        if (entity != null) {
+            entity.discard();
+        }
+        cameraMobs.remove(selectedMonsterUuid);
+        insertedMobs.remove(selectedMonsterUuid);
+        clearSelection(level);
+    }
+
+    // ------------------------------------------------------------------
     // AUXILIARES
     // ------------------------------------------------------------------
 
@@ -395,6 +527,10 @@ public final class CombatController {
         controlledMonsters.clear();
         monsterDestinations.clear();
         hoveredEntities.clear();
+        // cameraMobs e insertedMobs N├âO s├úo limpos: os mobs com c├ómera/inseridos
+        // persistem no carrossel e no lookAt mesmo ao mudar de modo ou liberar
+        // o mestre (feedback do usu├írio — os mobs sumiam do carrossel ao mudar
+        // de modo de jogo).
         lastToggles.clear();
     }
 
