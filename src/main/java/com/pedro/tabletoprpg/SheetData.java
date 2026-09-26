@@ -7,8 +7,10 @@ import net.minecraft.network.codec.ByteBufCodecs;
 import net.minecraft.network.codec.StreamCodec;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 
 /**
  * Ficha do personagem de um jogador (FASE 3).
@@ -358,12 +360,15 @@ public record SheetData(
      * "alternando os 6 atributos", entao<SAB> (Sabedoria) foi incluido.
      */
     public enum Attribute {
-        STRENGTH("strength", "FOR", "Forca"),
-        DEXTERITY("dexterity", "DES", "Destreza"),
-        CONSTITUTION("constitution", "CON", "Constituicao"),
-        INTELLIGENCE("intelligence", "INT", "Inteligencia"),
-        WISDOM("wisdom", "SAB", "Sabedoria"),
-        CHARISMA("charisma", "CAR", "Carisma");
+        // field e' a chave do NBT e abbr e' o valor que vai na rede -- ver
+        // STREAM_CODEC. NAO traduzir nenhum dos dois. Para exibicao existe
+        // shortName (3 letras em ingles) e fullName.
+        STRENGTH("strength", "FOR", "STR", "Strength"),
+        DEXTERITY("dexterity", "DES", "DEX", "Dexterity"),
+        CONSTITUTION("constitution", "CON", "CON", "Constitution"),
+        INTELLIGENCE("intelligence", "INT", "INT", "Intelligence"),
+        WISDOM("wisdom", "SAB", "WIS", "Wisdom"),
+        CHARISMA("charisma", "CAR", "CHA", "Charisma");
 
         /** Todos, na ordem em que a UI apresenta a lista suspensa. */
         public static final List<Attribute> VALUES = List.of(values());
@@ -388,14 +393,24 @@ public record SheetData(
 
         /** Nome do campo em {@link SheetData#getNumeric}, ex.: "strength". */
         private final String field;
-        /** Abreviacao de 3 letras mostrada nos botoes. */
+        /** Abreviacao de 3 letras que VAI NA REDE (payload de pericia). */
         private final String abbr;
+        /**
+         * Abreviacao de 3 letras mostrada ao jogador. So exibicao.
+         *
+         * <p>Sai separada de {@link #abbr} porque {@code abbr} e o valor gravado
+         * no pacote (ver {@link #STREAM_CODEC}): trocar o valor dela quebraria a
+         * conversa entre cliente e servidor. Traduzir so o que o jogador ve e
+         * decision do usuario em 26/09/2026.
+         */
+        private final String shortName;
         /** Nome por extenso, usado no texto de ajuda. */
         private final String fullName;
 
-        Attribute(String field, String abbr, String fullName) {
+        Attribute(String field, String abbr, String shortName, String fullName) {
             this.field = field;
             this.abbr = abbr;
+            this.shortName = shortName;
             this.fullName = fullName;
         }
 
@@ -405,6 +420,11 @@ public record SheetData(
 
         public String abbr() {
             return abbr;
+        }
+
+        /** Abreviacao em ingles para exibicao; {@code abbr()} e' a da rede. */
+        public String shortName() {
+            return shortName;
         }
 
         public String fullName() {
@@ -454,6 +474,15 @@ public record SheetData(
         ADD,
         /** Remove a skill pelo nome. */
         REMOVE,
+        /**
+         * Move a skill um passo na lista (decisao do usuario em 26/09/2026).
+         *
+         * <p>O passo vai no campo {@code description} do payload (que e' o que
+         * sobra livre nessa operacao): {@code "-1"} sobe, {@code "+1"} desce.
+         * Nao existe indice na ficha porque a ordem e' a ordem da {@code List},
+         * e e' ela que vai para o NBT.
+         */
+        MOVE,
         /**
          * Valor invalido vindo da rede. <b>Nao fazer nada com ele.</b>
          *
@@ -623,28 +652,84 @@ public record SheetData(
      * só, sem pensar em índice ou rotação.
      */
     public static final List<Pericia> PERICIAS_PADRAO = List.of(
-            new Pericia("Luta", 2, Attribute.STRENGTH),
-            new Pericia("Acrobacia", 3, Attribute.DEXTERITY),
-            new Pericia("Diplomacia", 1, Attribute.CHARISMA),
-            new Pericia("Iniciativa", 2, Attribute.DEXTERITY),
+            new Pericia("Melee", 2, Attribute.STRENGTH),
+            new Pericia("Acrobatics", 3, Attribute.DEXTERITY),
+            new Pericia("Diplomacy", 1, Attribute.CHARISMA),
+            new Pericia("Initiative", 2, Attribute.DEXTERITY),
 
-            new Pericia("perícia 0", 0, Attribute.STRENGTH),
-            new Pericia("perícia 1", 0, Attribute.DEXTERITY),
-            new Pericia("perícia 2", 0, Attribute.CONSTITUTION),
-            new Pericia("perícia 3", 0, Attribute.INTELLIGENCE),
-            new Pericia("perícia 4", 0, Attribute.WISDOM),
-            new Pericia("perícia 5", 0, Attribute.CHARISMA),
-            new Pericia("perícia 6", 0, Attribute.STRENGTH),
-            new Pericia("perícia 7", 0, Attribute.DEXTERITY),
-            new Pericia("perícia 8", 0, Attribute.CONSTITUTION),
-            new Pericia("perícia 9", 0, Attribute.INTELLIGENCE),
-            new Pericia("perícia 10", 0, Attribute.WISDOM),
-            new Pericia("perícia 11", 0, Attribute.CHARISMA),
-            new Pericia("perícia 12", 0, Attribute.STRENGTH),
-            new Pericia("perícia 13", 0, Attribute.DEXTERITY),
-            new Pericia("perícia 14", 0, Attribute.CONSTITUTION),
-            new Pericia("perícia 15", 0, Attribute.INTELLIGENCE)
+            new Pericia("skill 0", 0, Attribute.STRENGTH),
+            new Pericia("skill 1", 0, Attribute.DEXTERITY),
+            new Pericia("skill 2", 0, Attribute.CONSTITUTION),
+            new Pericia("skill 3", 0, Attribute.INTELLIGENCE),
+            new Pericia("skill 4", 0, Attribute.WISDOM),
+            new Pericia("skill 5", 0, Attribute.CHARISMA),
+            new Pericia("skill 6", 0, Attribute.STRENGTH),
+            new Pericia("skill 7", 0, Attribute.DEXTERITY),
+            new Pericia("skill 8", 0, Attribute.CONSTITUTION),
+            new Pericia("skill 9", 0, Attribute.INTELLIGENCE),
+            new Pericia("skill 10", 0, Attribute.WISDOM),
+            new Pericia("skill 11", 0, Attribute.CHARISMA),
+            new Pericia("skill 12", 0, Attribute.STRENGTH),
+            new Pericia("skill 13", 0, Attribute.DEXTERITY),
+            new Pericia("skill 14", 0, Attribute.CONSTITUTION),
+            new Pericia("skill 15", 0, Attribute.INTELLIGENCE)
     );
+
+    /**
+     * Nome ANTIGO (portugues) das pericias do padrao, indexado pelo nome atual.
+     *
+     * <p><b>Por que existe:</b> a identidade de uma pericia no NBT e o NOME
+     * (ver {@link #PERICIA_CODEC}) e {@link #sanitizePericias} casa o nome salvo
+     * com o nome do padrao. Os nomes foram traduzidos para ingles em
+     * 26/09/2026, entao sem este mapa toda ficha salva ANTES da traducao
+     * perderia, em silencio, o valor e o atributo das 20 pericias -- o sanitize
+     * nao devolveria um erro, so substituiria pelo padrao.
+     *
+     * <p>Com o mapa, a ficha antiga e reconhecida pelo nome velho e passa a
+     * nascer com o nome novo, preservando valor e atributo. Nao apagar nenhuma
+     * entrada: uma ficha pode ter sido salva em qualquer momento.
+     */
+    private static final Map<String, String> LEGACY_PERICIA_NAMES = buildLegacyPericiaNames();
+
+    private static Map<String, String> buildLegacyPericiaNames() {
+        Map<String, String> map = new HashMap<>();
+        for (Pericia padrao : PERICIAS_PADRAO) {
+            String legacy = legacyPericiaName(padrao.name());
+            if (legacy != null) {
+                map.put(padrao.name().toLowerCase(Locale.ROOT), legacy);
+            }
+        }
+        return Map.copyOf(map);
+    }
+
+    /** Nome que a pericia do padrao tinha antes da traducao, ou null. */
+    private static String legacyPericiaName(String standardName) {
+        // As 16 de espaco reservado: "pericia 7" -> "skill 7".
+        String prefix = "skill ";
+        if (standardName.startsWith(prefix)
+                && standardName.substring(prefix.length()).chars().allMatch(Character::isDigit)) {
+            return "perícia " + standardName.substring(prefix.length());
+        }
+        return switch (standardName) {
+            case "Melee" -> "Luta";
+            case "Acrobatics" -> "Acrobacia";
+            case "Diplomacy" -> "Diplomacia";
+            case "Initiative" -> "Iniciativa";
+            default -> null;
+        };
+    }
+
+    /**
+     * Casa o nome salvo com o nome atual do padrao, aceitando tambem o nome
+     * antigo (ver {@link #LEGACY_PERICIA_NAMES}).
+     */
+    private static boolean matchesPericiaName(String savedName, String standardName) {
+        if (savedName.equalsIgnoreCase(standardName)) {
+            return true;
+        }
+        String legacy = LEGACY_PERICIA_NAMES.get(standardName.toLowerCase(Locale.ROOT));
+        return legacy != null && savedName.equalsIgnoreCase(legacy);
+    }
 
     /** Ficha inicial de um jogador: nome = nome da conta, resto no padrão. */
     public static SheetData defaultSheet(String playerName) {
@@ -820,6 +905,39 @@ public record SheetData(
         return removed ? new SheetData(identity, vitals, progress, attributes, next, pericias) : this;
     }
 
+    /**
+     * Move uma skill UM PASSO na lista (delta -1 sobe, +1 desce).
+     *
+     * <p>Usado pelas setas de reordenar da tela de Skills (decisao do usuario em
+     * 26/09/2026). Nao existe indice guardado por skill: a ordem <b>e' a ordem
+     * da {@code List}</b> e e' ela que o codec leva para o NBT, entao mover ja
+     * persiste como qualquer outra edicao da ficha.
+     *
+     * <p>Devolve a ficha intacta quando o nome nao existir, quando delta e' zero
+     * ou quando o passo sair da lista (primeira subindo, ultima descendo). Quem
+     * recusa esses casos antes e' a UI, que deixa a seta cinza.
+     */
+    public SheetData withSkillMoved(String skill, int delta) {
+        String clean = cleanSkill(skill);
+        if (clean.isEmpty() || delta == 0) {
+            return this;
+        }
+        int from = -1;
+        for (int i = 0; i < skills.size(); i++) {
+            if (skills.get(i).name().equalsIgnoreCase(clean)) {
+                from = i;
+                break;
+            }
+        }
+        int to = from + delta;
+        if (from < 0 || to < 0 || to >= skills.size()) {
+            return this;
+        }
+        List<Skill> next = new ArrayList<>(skills);
+        next.add(to, next.remove(from));
+        return new SheetData(identity, vitals, progress, attributes, next, pericias);
+    }
+
     // ------------------------------------------------------------------
     // LEITURA POR CAMPO (usada pela UI do cliente)
     // ------------------------------------------------------------------
@@ -979,7 +1097,7 @@ public record SheetData(
             Pericia achada = null;
             if (raw != null) {
                 for (Pericia candidate : raw) {
-                    if (candidate != null && candidate.name().equalsIgnoreCase(padrao.name())) {
+                    if (candidate != null && matchesPericiaName(candidate.name(), padrao.name())) {
                         achada = candidate;
                         break;
                     }

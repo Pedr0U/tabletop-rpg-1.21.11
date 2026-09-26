@@ -56,7 +56,7 @@ public class AttributePickerScreen extends Screen {
             // trocar quando a lista tem as 6 opcoes parecidas.
             String mark = attr == current ? "> " : "  ";
             addRenderableWidget(Button.builder(
-                    Component.literal(mark + attr.abbr() + "  " + attr.fullName()),
+                    Component.literal(mark + attr.shortName() + "  " + attr.fullName()),
                     b -> {
                         if (onPick != null) {
                             onPick.accept(attr);

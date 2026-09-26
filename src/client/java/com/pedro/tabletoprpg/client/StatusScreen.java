@@ -221,7 +221,7 @@ public class StatusScreen extends CharacterSheetScreen {
         // ---------------- Pericias (coluna da direita) ----------------
         // Lista FIXA definida em SheetData.PERICIAS_PADRAO: nao ha botao de
         // adicionar nem de remover, so as setas de valor e o botao de atributo.
-        textLines.add(new TextLine("Pericias", perX, topY + perLabelOffset(), COL_SECTION));
+        textLines.add(new TextLine("Skill Checks", perX, topY + perLabelOffset(), COL_SECTION));
         for (int i = 0; i < PER_COUNT; i++) {
             addPericiaRow(perX, topY + perTitleH + i * perRowH, perW, i);
         }
@@ -343,7 +343,7 @@ public class StatusScreen extends CharacterSheetScreen {
     private void addAttributeRow(int x0, int y, int rowW, SheetData.Attribute attr) {
         int h = rowH - 2;
         boolean compact = rowW < 84;
-        String label = compact ? attr.abbr() : attr.fullName();
+        String label = compact ? attr.shortName() : attr.fullName();
         int labelW = fixedAttributeLabelWidth(rowW, compact);
 
         textLines.add(new TextLine(label, x0, y + labelOffset(), COL_LABEL));
@@ -390,7 +390,7 @@ public class StatusScreen extends CharacterSheetScreen {
     private int fixedAttributeLabelWidth(int rowW, boolean compact) {
         int widest = 0;
         for (SheetData.Attribute attr : SheetData.Attribute.VALUES) {
-            widest = Math.max(widest, this.font.width(compact ? attr.abbr() : attr.fullName()));
+            widest = Math.max(widest, this.font.width(compact ? attr.shortName() : attr.fullName()));
         }
         int arrow = Math.max(9, Math.min(13, rowH - 3));
         return Math.max(24, Math.min(rowW - 2 * arrow - PERICIA_VALUE_W - 2 * WIDGET_GAP - 8,
@@ -542,7 +542,7 @@ public class StatusScreen extends CharacterSheetScreen {
 
             // A abreviacao do atributo fica no botao, guardado direto no record
             // para nao depender de procurar o widget por coordenada.
-            row.attrButton().setMessage(Component.literal(displayPericiaAttribute(pericia).abbr()));
+            row.attrButton().setMessage(Component.literal(displayPericiaAttribute(pericia).shortName()));
         }
     }
 

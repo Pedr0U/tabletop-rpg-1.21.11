@@ -179,7 +179,7 @@ public final class CombatController {
             }
 
             master.sendSystemMessage(Component.literal("§b[RPG] Monster selected: §e" + mob.getName().getString()
-                    + "§b. §7Aura de " + AURA_RADIUS + " blocos ativa. Right-click a block to move it."));
+                    + "§b. §7Aura of " + AURA_RADIUS + " blocks active. Right-click a block to move it."));
         }
         RpgNetworking.sendAuraStateToAll(level.getServer());
     }

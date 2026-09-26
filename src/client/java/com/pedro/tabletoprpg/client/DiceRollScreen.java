@@ -29,7 +29,7 @@ public class DiceRollScreen extends Screen {
     private int modifier = 0;
 
     public DiceRollScreen(Screen parentScreen) {
-        super(Component.literal("Rolagem de Dados"));
+        super(Component.literal("Dice Roll"));
         this.parentScreen = parentScreen; // Guarda a tela anterior para podermos voltar
     }
 

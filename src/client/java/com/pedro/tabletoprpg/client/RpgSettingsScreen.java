@@ -69,7 +69,7 @@ public class RpgSettingsScreen extends Screen {
     private TimeSlider timeSlider;
 
     public RpgSettingsScreen(Screen parent, boolean isMaster) {
-        super(Component.literal("Configurações do RPG"));
+        super(Component.literal("RPG Settings"));
         this.parent = parent;
         this.isMaster = isMaster;
     }
@@ -248,7 +248,7 @@ public class RpgSettingsScreen extends Screen {
                     100,
                     SpectatorCameraController.getTransitionSpeed(),
                     SpectatorCameraController::setTransitionSpeed,
-                    v -> "Velocidade de Transição: " + v
+                    v -> "Transition Speed: " + v
             );
             this.addRenderableWidget(this.transitionSpeedSlider);
         }
@@ -256,7 +256,7 @@ public class RpgSettingsScreen extends Screen {
         // Botão Voltar para o menu anterior
         int backY = this.isMaster ? startY + 140 : startY + 112;
         Button backButton = Button.builder(
-                        Component.literal("Voltar"),
+                        Component.literal("Back"),
                         btn -> {
                             if (this.minecraft != null) {
                                 this.minecraft.setScreen(this.parent);
@@ -271,7 +271,7 @@ public class RpgSettingsScreen extends Screen {
 
     /** Rótulo do botão de ciclo conforme o estado atual. */
     private String cycleLabel() {
-        return this.cycleEnabled ? "Ciclo Dia/Noite: Ligado" : "Ciclo Dia/Noite: Pausado";
+        return this.cycleEnabled ? "Day/Night Cycle: On" : "Day/Night Cycle: Paused";
     }
 
     /** Atualiza o estado do ciclo quando a resposta do servidor chega (S2C). */
@@ -284,31 +284,31 @@ public class RpgSettingsScreen extends Screen {
 
     /** Rótulo do botão de permissão de quebra conforme o estado atual. */
     private String breakBlocksLabel() {
-        return this.breakBlocksEnabled ? "Players quebram blocos: Sim" : "Players quebram blocos: Não";
+        return this.breakBlocksEnabled ? "Players break blocks: Yes" : "Players break blocks: No";
     }
 
     /** Rótulo do botão de permissão de colocação conforme o estado atual. */
     private String placeBlocksLabel() {
-        return this.placeBlocksEnabled ? "Players colocam blocos: Sim" : "Players colocam blocos: Não";
+        return this.placeBlocksEnabled ? "Players place blocks: Yes" : "Players place blocks: No";
     }
 
     /** Rótulo do botão de clima conforme o estado atual (0=sol, 1=chuva, 2=tempestade). */
     private String weatherLabel() {
         return switch (this.weatherState) {
-            case 0 -> "Clima: Sol";
-            case 1 -> "Clima: Chuva";
-            default -> "Clima: Tempestade";
+            case 0 -> "Weather: Clear";
+            case 1 -> "Weather: Rain";
+            default -> "Weather: Thunderstorm";
         };
     }
 
     /** Rótulo do botão de órbita automática da câmera 3ª pessoa. */
     private String orbitalLabel() {
-        return SpectatorCameraController.isOrbitalEnabled() ? "Câmera Orbital: Sim" : "Câmera Orbital: Não";
+        return SpectatorCameraController.isOrbitalEnabled() ? "Orbital Camera: Yes" : "Orbital Camera: No";
     }
 
     /** Rótulo do botão de modo de câmera de espectador. */
     private String cameraModeLabel() {
-        return "Modo de Câmera: " + SpectatorCameraController.getMode().getDisplayName();
+        return "Camera Mode: " + SpectatorCameraController.getMode().getDisplayName();
     }
 
     /** Atualiza a permissão de quebra quando a resposta do servidor chega (S2C). */
@@ -352,7 +352,7 @@ public class RpgSettingsScreen extends Screen {
         if (!this.isMaster) {
             guiGraphics.drawCenteredString(
                     this.font,
-                    Component.literal("Apenas o mestre pode alterar as configurações do mundo."),
+                    Component.literal("Only the Game Master can change world settings."),
                     this.width / 2,
                     (this.height / 4) + 140,
                     0xAAAAAA
