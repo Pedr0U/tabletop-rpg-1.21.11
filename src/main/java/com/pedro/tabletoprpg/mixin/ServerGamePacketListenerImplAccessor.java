@@ -6,13 +6,13 @@ import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.gen.Accessor;
 
 /**
- * Exp├Áe o campo privado {@code awaitingPositionFromClient} do
- * {@link ServerGamePacketListenerImpl}: quando n├úo-nulo, h├í um teleporte
- * pendente aguardando confirma├º├úo do cliente.
+ * Expóe o campo privado {@code awaitingPositionFromClient} do
+ * {@link ServerGamePacketListenerImpl}: quando não-nulo, há um teleporte
+ * pendente aguardando confirmação do cliente.
  *
- * <p>Usado pela barreira da aura (FASE 0.5) para n├úo floodar
- * {@code ClientboundPlayerPositionPacket}: s├│ enviamos um novo teleporte
- * quando o anterior j├í foi aceito pelo cliente.
+ * <p>Usado pela barreira da aura (FASE 0.5) para não floodar
+ * {@code ClientboundPlayerPositionPacket}: só enviamos um novo teleporte
+ * quando o anterior já foi aceito pelo cliente.
  */
 @Mixin(ServerGamePacketListenerImpl.class)
 public interface ServerGamePacketListenerImplAccessor {

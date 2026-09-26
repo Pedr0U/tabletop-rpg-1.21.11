@@ -11,7 +11,8 @@
 		"LevelRendererMixin",
 		"GuiMixin",
 		"EntityTurnMixin",
-		"EntityRendererMixin"
+		"EntityRendererMixin",
+		"DownedBodyAlignMixin"
 	],
 	"injectors": {
 		"defaultRequire": 1

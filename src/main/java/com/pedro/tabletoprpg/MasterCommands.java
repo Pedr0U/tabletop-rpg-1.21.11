@@ -423,14 +423,14 @@ public class MasterCommands {
 
     /**
      * Decide o que {@code /rpg roll <argumento>} quer dizer: o nome de uma
-     * pericia da ficha, ou uma formula de dados.
+     * <b>perícia</b> da ficha, ou uma fórmula de dados.
      *
-     * <p><b>Por que as duas coisas no mesmo comando:</b> o jogador ja tem
-     * "/rpg roll" na mao e a nova regra de pericias ({@code 1d20 + valor +
-     * atributo}) e a rolagem que ele mais vai fazer. Se exigisse um comando
-     * novo, ele teria que aprender dois comandos. O nome da pericia so e
+     * <p><b>Por que as duas coisas no mesmo comando:</b> o jogador já tem
+     * "/rpg roll" na mão e a nova regra de perícias ({@code 1d20 + valor +
+     * atributo}) é a rolagem que ele mais vai fazer. Se exigisse um comando
+     * novo, ele teria que aprender dois comandos. O nome da perícia só é
      * reconhecido quando casa <b>exatamente</b> com o nome guardado; qualquer
-     * outra coisa cai na formula, entao {@code d20} continua funcionando.
+     * outra coisa cai na fórmula, então {@code d20} continua funcionando.
      */
     private static int rollOrSkill(CommandContext<CommandSourceStack> ctx) {
         String raw = StringArgumentType.getString(ctx, "formula");
@@ -438,9 +438,9 @@ public class MasterCommands {
         if (player == null) {
             return 0;
         }
-        SheetData.Skill skill = findSkill(player, raw);
-        if (skill != null) {
-            return rollSkill(ctx, player, skill);
+        SheetData.Pericia pericia = findPericia(player, raw);
+        if (pericia != null) {
+            return rollSkill(ctx, player, pericia);
         }
         return rollFormula(ctx, raw);
     }
@@ -463,7 +463,7 @@ public class MasterCommands {
      * acentos. Devolve {@code null} se nao casar -- o chamador entao trata o
      * texto como formula.
      */
-    private static SheetData.Skill findSkill(ServerPlayer player, String raw) {
+    private static SheetData.Pericia findPericia(ServerPlayer player, String raw) {
         if (raw == null || raw.isBlank()) {
             return null;
         }
@@ -472,9 +472,9 @@ public class MasterCommands {
         if (sheet == null) {
             return null;
         }
-        for (SheetData.Skill skill : sheet.skills()) {
-            if (normalize(skill.name()).equals(wanted)) {
-                return skill;
+        for (SheetData.Pericia pericia : sheet.pericias()) {
+            if (normalize(pericia.name()).equals(wanted)) {
+                return pericia;
             }
         }
         return null;
@@ -502,19 +502,19 @@ public class MasterCommands {
      * o jogador ve para todos.
      */
     private static int rollSkill(CommandContext<CommandSourceStack> ctx, ServerPlayer player,
-                                 SheetData.Skill skill) {
+                                 SheetData.Pericia pericia) {
         SheetData sheet = SessionManager.getSheet(player.getUUID());
         // RNG do servidor (exigido pelo .docx: o cliente nao pode prever o
         // resultado). CommandSourceStack#getRandom e MinecraftServer#getRandom
         // nao existem nesta versao; Entity#getRandom devolve o RandomSource do
         // level, que e exatamente o do servidor.
         int die = 1 + player.getRandom().nextInt(20);
-        long attrValue = sheet.getNumeric(skill.attribute().field());
-        long total = (long) die + skill.value() + attrValue;
+        long attrValue = sheet.getNumeric(pericia.attribute().field());
+        long total = (long) die + pericia.value() + attrValue;
 
-        String message = "§6§l" + player.getName().getString() + " §frolled §6" + skill.name() + "§f: "
-                + "§7d20 §f(§e" + die + "§f) + §7" + skill.value()
-                + " + §7" + skill.attribute().abbr() + " " + attrValue
+        String message = "§6§l" + player.getName().getString() + " §frolled §6" + pericia.name() + "§f: "
+                + "§7d20 §f(§e" + die + "§f) + §7" + pericia.value()
+                + " + §7" + pericia.attribute().abbr() + " " + attrValue
                 + " = §e§l" + total;
 
         if (SessionManager.isMaster(player)) {
@@ -526,12 +526,16 @@ public class MasterCommands {
     }
 
     /**
-     * {@code /rpg roll} sem argumento: lista as pericias com o quanto cada uma
-     * soma, para o jogador lembrar o nome exato e o total.
+     * {@code /rpg roll} sem argumento: lista as <b>perícias</b> com o quanto cada
+     * uma soma, para o jogador lembrar o nome exato e o total.
      *
      * <p><b>Mudança de comportamento:</b> antes este comando rolava {@code d20}
      * fixo. Virou lista porque é o que o jogador precisa descobrir; quem quiser
      * o d20 puro escreve {@code /rpg roll d20}.
+     *
+     * <p><b>Rola perícia, não skill</b> (decisão do usuário em 25/09/2026): a
+     * lista de skills é livre e não tem valor nem atributo, então não tem o que
+     * somar. A rolagem usa a lista fixa de perícias.
      */
     private static int listSkills(CommandContext<CommandSourceStack> ctx) {
         ServerPlayer player = playerOf(ctx);
@@ -539,24 +543,24 @@ public class MasterCommands {
             return 0;
         }
         SheetData sheet = SessionManager.getSheet(player.getUUID());
-        if (sheet == null || sheet.skills().isEmpty()) {
+        if (sheet == null || sheet.pericias().isEmpty()) {
             ctx.getSource().sendFailure(Component.literal("§cNo skills on this sheet."));
             return 0;
         }
 
         ctx.getSource().sendSystemMessage(Component.literal(
-                "§6Skills §7(§f/rpg roll <name>§7): " + sheet.skills().size()));
-        for (SheetData.Skill skill : sheet.skills()) {
-            long attr = sheet.getNumeric(skill.attribute().field());
+                "§6Skills §7(§f/rpg roll <name>§7): " + sheet.pericias().size()));
+        for (SheetData.Pericia pericia : sheet.pericias()) {
+            long attr = sheet.getNumeric(pericia.attribute().field());
             ctx.getSource().sendSystemMessage(Component.literal(
-                    "§7- §f" + skill.name() + " §8| §e" + skill.value()
-                            + " §7+ §e" + attr + " §8(" + skill.attribute().abbr() + ")"
-                            + " §8= §e" + (skill.value() + attr)));
+                    "§7- §f" + pericia.name() + " §8| §e" + pericia.value()
+                            + " §7+ §e" + attr + " §8(" + pericia.attribute().abbr() + ")"
+                            + " §8= §e" + (pericia.value() + attr)));
         }
-        return sheet.skills().size();
+        return sheet.pericias().size();
     }
 
-    /** Autocompletar os nomes de pericia da ficha, junto das fórmulas. */
+    /** Autocompletar os nomes de <b>perícia</b> da ficha, junto das fórmulas. */
     private static CompletableFuture<Suggestions> suggestSkills(CommandContext<CommandSourceStack> ctx,
                                                                 SuggestionsBuilder builder) {
         String remaining = builder.getRemainingLowerCase();
@@ -564,9 +568,9 @@ public class MasterCommands {
             ServerPlayer player = ctx.getSource().getPlayerOrException();
             SheetData sheet = SessionManager.getSheet(player.getUUID());
             if (sheet != null) {
-                for (SheetData.Skill skill : sheet.skills()) {
-                    if (normalize(skill.name()).startsWith(remaining)) {
-                        builder.suggest(skill.name());
+                for (SheetData.Pericia pericia : sheet.pericias()) {
+                    if (normalize(pericia.name()).startsWith(remaining)) {
+                        builder.suggest(pericia.name());
                     }
                 }
             }

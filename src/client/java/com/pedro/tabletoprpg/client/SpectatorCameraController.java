@@ -52,7 +52,14 @@ import java.util.List;
  */
 public final class SpectatorCameraController {
 
-    /** Modos de câmera de espectador (ciclo da tecla V). */
+    /**
+     * Modos de câmera de espectador (ciclo da tecla V).
+     *
+     * <p><b>Quem pode usar cada um (decisão do usuário em 25/09/2026):</b> a
+     * câmera <b>FREE</b> só existe no modo Livre da sessão — nos modos
+     * Investigação e Combate valem apenas as três de base (terceira, primeira e
+     * de cima). Ver {@link #isFreeModeAvailable()}.
+     */
     public enum Mode {
         THIRD_PERSON("3ª Pessoa"),
         FIRST_PERSON("1ª Pessoa"),
@@ -71,6 +78,64 @@ public final class SpectatorCameraController {
     }
 
     private static Mode mode = Mode.THIRD_PERSON;
+
+    /**
+     * A câmera livre só é permitida no modo Livre da sessão.
+     *
+     * <p><b>Por que não dá para usar {@code TabletopRpgClient.locked}:</b> no
+     * modo Livre ninguém fica travado, e mesmo assim a câmera livre é justamente
+     * a que o mestre quer. A trava responde "é o turno dele?", e a pergunta certa
+     * é "em que modo a sessão está?".
+     */
+    public static boolean isFreeModeAvailable() {
+        return TabletopRpgClient.isFreeMode();
+    }
+
+    /**
+     * Escolhe um modo, recusando a câmera livre fora do modo Livre.
+     *
+     * <p>Centraliza a regra para o menu de configurações e o ciclo da tecla V
+     * não divergirem entre si.
+     *
+     * @return true se o modo foi aceito
+     */
+    public static boolean requestMode(Mode newMode) {
+        if (newMode == null) {
+            return false;
+        }
+        if (newMode == Mode.FREE && !isFreeModeAvailable()) {
+            return false;
+        }
+        mode = newMode;
+        Minecraft client = Minecraft.getInstance();
+        if (client.player != null) {
+            resetTransition(client);
+        }
+        return true;
+    }
+
+    /**
+     * Corrige o modo atual quando o modo da sessão muda.
+     *
+     * <p>Sem isto, trocar o modo da sessão enquanto a câmera livre estava
+     * selecionada deixaria a câmera livre ativa em Investigação/Combate, que é
+     * justamente o que a regra acima proíbe.
+     *
+     * @return true se o modo foi trocado (ou seja, houve algo a corrigir)
+     */
+    public static boolean enforceModeForSession() {
+        if (mode == Mode.FREE && !isFreeModeAvailable()) {
+            mode = Mode.THIRD_PERSON;
+            Minecraft client = Minecraft.getInstance();
+            if (client.player != null) {
+                resetTransition(client);
+                client.player.displayClientMessage(
+                        Component.literal("§b[Câmera] §cLivre só existe no modo Livre; voltando para 3ª Pessoa"), true);
+            }
+            return true;
+        }
+        return false;
+    }
 
     /** "Câmera Orbital: Sim/Não" — se false, o mouse controla a 3ª pessoa. */
     private static boolean orbitalEnabled = true;
@@ -157,17 +222,31 @@ public final class SpectatorCameraController {
         return active;
     }
 
+    /**
+     * true quando a câmera <b>livre</b> está de fato voando agora.
+     *
+     * <p><b>Por que os mixins dependem disto (decisão do usuário em 25/09/2026):
+     * </b> no modo Livre da sessão <b>ninguém fica travado</b>, então a trava não
+     * pode ser a condição de "o corpo está parado". Com a câmera livre ligado,
+     * as teclas WASD movem a <i>câmera</i> — e sem este sinal, o jogador
+     * andaria ao mesmo tempo, e o "corpo parado" não aconteceria.
+     *
+     * <p>É {@code active && modo == FREE} e não só o modo: o usuário pode ter a
+     * câmera Livre selecionada e ainda não estar com ela ligada (fora de um
+     * modo válido, por exemplo). Sem {@code active}, o jogador ficaria preso
+     * sem poder andar logo após desligar a câmera com V.
+     */
+    public static boolean isFreeCameraActive() {
+        return active && mode == Mode.FREE;
+    }
+
     public static Mode getMode() {
         return mode;
     }
 
     /** Define o modo diretamente (menu de configurações). */
     public static void setMode(Mode newMode) {
-        mode = newMode;
-        Minecraft client = Minecraft.getInstance();
-        if (client.player != null) {
-            resetTransition(client);
-        }
+        requestMode(newMode);
     }
 
     public static boolean isOrbitalEnabled() {
@@ -237,11 +316,67 @@ public final class SpectatorCameraController {
         }
     }
 
-    /** Cicla o modo de câmera (tecla V / menu). O modo persiste como preferência. */
+    /**
+     * Cicla o modo de câmera (tecla V / menu). O modo persiste como preferência.
+     *
+     * <p><b>Ignora a câmera livre fora do modo Livre</b> (decisão do usuário em
+     * 25/09/2026): em Investigação/Combate o ciclo salta de TOP_DOWN direto
+     * para THIRD_PERSON, em vez de passar por um modo que seria recusado. Sem
+     * esse salto, o jogador precisaria apertar V duas vezes para "não mudar
+     * nada", o que parece um botão quebrado.
+     *
+     * <p><b>Fora do modo espectador, V só alterna entre a câmera livre e a
+     * câmera normal do Minecraft</b> (decisão do usuário em 25/09/2026). Antes
+     * o V percorria 1ª → 3ª → Cima → Livre mesmo fora de Investigação/Combate,
+     * o que não faz sentido: sem espectador, primeira/terceira pessoa é
+     * justamente o F5 do próprio Minecraft. Agora:
+     * <ul>
+     *   <li>V fora do modo espectador e câmera normal → <b>câmera livre</b>;</li>
+     *   <li>V fora do modo espectador e câmera livre → <b>volta ao normal</b>
+     *       (o {@code deactivate} restaura a perspectiva que o jogador escolheu
+     *       com F5, então ela é preservada).</li>
+     * </ul>
+     * Em Investigação/Combate (jogador travado) o ciclo completo continua igual.
+     */
     public static void cycleMode() {
-        Mode[] modes = Mode.values();
-        mode = modes[(mode.ordinal() + 1) % modes.length];
         Minecraft client = Minecraft.getInstance();
+        boolean espectador = TabletopRpgClient.locked;
+
+        if (!espectador) {
+            if (isFreeCameraActive()) {
+                // Sai da camera livre. O tick() ve que o modo ja nao e FREE e
+                // chama deactivate(), que restaura a perspectiva vanilla.
+                mode = Mode.THIRD_PERSON;
+                if (client.player != null) {
+                    client.player.displayClientMessage(
+                            Component.literal("§b[Câmera] §fCâmera normal"), true);
+                }
+                return;
+            }
+            if (!isFreeModeAvailable()) {
+                if (client.player != null) {
+                    client.player.displayClientMessage(
+                            Component.literal("§b[Câmera] §cLivre só existe no modo Livre"), true);
+                }
+                return;
+            }
+            mode = Mode.FREE;
+            if (client.player != null) {
+                resetTransition(client);
+                client.player.displayClientMessage(
+                        Component.literal("§b[Câmera] §f" + Mode.FREE.getDisplayName()), true);
+            }
+            return;
+        }
+
+        Mode[] modes = Mode.values();
+        int next = (mode.ordinal() + 1) % modes.length;
+        // A camera livre e a ultima do enum; se ela for barrada, emenda no
+        // primeiro modo em vez de parar nela.
+        if (modes[next] == Mode.FREE && !isFreeModeAvailable()) {
+            next = 0;
+        }
+        mode = modes[next];
         if (client.player != null) {
             resetTransition(client);
             client.player.displayClientMessage(Component.literal("§b[Câmera] §f" + mode.getDisplayName()), true);
@@ -278,9 +413,20 @@ public final class SpectatorCameraController {
             return;
         }
 
-        // Destravado (turno do jogador ou fora de modo): volta para a câmera
-        // normal imediatamente.
-        if (!locked) {
+        // A sessao pode ter mudado de modo com a camera livre selecionada; corrige
+        // antes de decidir se a camara de espectador fica ligada.
+        enforceModeForSession();
+
+        // A camara de espectador liga em dois casos:
+        //  1. o jogador esta travado (nao e o turno dele) -- cameras de
+        //     terceira/primeira/cima, nos modos Investigacao e Combate;
+        //  2. a camera LIVRE esta selecionada e a sessao esta no modo Livre.
+        //
+        // O segundo caso e' separado de proposito (decisao do usuario em
+        // 25/09/2026): no modo Livre ninguem fica travado, entao testar apenas
+        // `locked` desligaria a camera justamente onde ela foi liberada.
+        boolean freeCamSelected = mode == Mode.FREE && isFreeModeAvailable();
+        if (!locked && !freeCamSelected) {
             deactivate(client);
             return;
         }
@@ -361,6 +507,7 @@ public final class SpectatorCameraController {
                     // (yaw/pitch próprios, controlados pelo mouse) e olha na
                     // MESMA direção, com o alvo centralizado na tela. O
                     // jogador não gira.
+                    alignDownedTarget(target, thirdPersonYaw);
                     Vec3 look = lookFromYawPitch(thirdPersonYaw, thirdPersonPitch);
                     Vec3 camPos = clipToWall(center, center.subtract(look.scale(RADIUS)));
                     ensureRigActive(camPos, thirdPersonYaw, thirdPersonPitch);
@@ -369,6 +516,10 @@ public final class SpectatorCameraController {
                     // "Câmera Orbital: Sim".
                     angle += ANGULAR_SPEED;
                     Vec3 camPos = clipToWall(center, orbitPosition());
+                    // Alinha o caído pelo yaw REAL da câmera (o mesmo que vai
+                    // para o rig), e não por `angle`, que é um ângulo de órbita
+                    // com origem diferente.
+                    alignDownedTarget(target, computeYaw(camPos));
                     ensureRigActive(camPos, computeYaw(camPos), computePitch(camPos));
                 }
             }
@@ -399,13 +550,54 @@ public final class SpectatorCameraController {
     }
 
     /**
+     * Vira o corpo e a cabeça do alvo CAÍDO na direção para onde a câmera olha.
+     *
+     * <p><b>FACT (feedback do usuário em 25/09/2026):</b> cancelar o
+     * {@code Entity.turn} ({@code EntityTurnMixin}) resolveu a cabeça girar
+     * 360 graus, mas deixou o <b>braço</b> parado: o corpo deitado tem um yaw
+     * fixo no mundo, então conforme a câmera orbitava para a direita o braço
+     * ia "para trás" e sumia da tela.
+     *
+     * <p><b>Por que só o caído:</b> em pé, girar o corpo junto com a câmera é o
+     * comportamento normal do vanilla. Deitado, o modelo está deitado no eixo do
+     * corpo, então a defasagem entre o yaw do corpo e o yaw da câmera é muito
+     * mais visível. O usuário pediu o ajuste apenas nesse caso.
+     *
+     * <p><b>Só no cliente:</b> são campos de renderização. O servidor tem a
+     * própria cópia e não é afetado — o {@code EntityTurnMixin} continua
+     * cancelando a rotação de verdade, então o corpo não "gira" de fato, apenas
+     * é desenhado voltado para a câmera.
+     */
+    private static void alignDownedTarget(Entity target, float camYaw) {
+        if (target instanceof Player player && TabletopRpgClient.isDowned(player)) {
+            player.yBodyRot = camYaw;
+            player.yHeadRot = camYaw;
+        }
+    }
+
+    /**
      * Garante que o rig da câmera esteja ativo antes de atualizá-lo. O
      * {@link CinematicCameraRig#update} é um no-op quando inativo, então ao
      * ativar a câmera de espectador (ou voltar de um modo que desativa o rig,
      * como a 1ª pessoa do próprio jogador) é preciso chamar {@code activate}
      * primeiro.
      */
+    /**
+     * Ultimo yaw realmente enviado ao rig da camera. E a fonte da verdade para
+     * alinhar o visual do jogador caido: todos os caminhos de camera passam por
+     * {@link #ensureRigActive}, entao este valor e sempre o yaw que o usuario
+     * esta vendo - incluindo a orbita automatica, cujo angulo bruto tem origem
+     * diferente da camera.
+     */
+    private static float currentYaw;
+
+    /** Yaw efetivo da camera de espectador (ultimo enviado ao rig). */
+    public static float getCurrentYaw() {
+        return currentYaw;
+    }
+
     private static void ensureRigActive(Vec3 pos, float yaw, float pitch) {
+        currentYaw = yaw;
         if (CinematicCameraRig.isActive()) {
             CinematicCameraRig.update(pos, yaw, pitch);
         } else {

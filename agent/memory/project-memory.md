@@ -107,7 +107,7 @@
 - **3ª pessoa sem orbital**: o ramo do mouse usava `computeYaw/computePitch` (olhava PARA o centro → invertido/descentralizado). Corrigido para `client.player.getYRot()/getXRot()` (vanilla-like: câmera atrás do alvo na direção do look, alvo centralizado). A transição de 50 ticks também foi ajustada para ir direto ao estado final do modo (mouse ou órbita) — evita snap posicional+rotacional no fim.
 - **Câmera livre atravessa paredes**: a posição já era livre (TAIL do `CameraMixin` vence a colisão vanilla do `Camera.setup`); o bloqueio era VISUAL — `LevelRenderer.cullTerrain(Camera, Frustum, boolean isSpectator)` usa `isSpectator` para desligar `smartCull` quando a câmera está dentro de bloco sólido (bytecode offset 265-287; `Minecraft.smartCull` default true). Novo `LevelRendererMixin` com `@ModifyVariable(method="cullTerrain", at=HEAD, ordinal=0, argsOnly=true)` força `isSpectator=true` quando modo FREE ativo. Registrado no mixins.json.
 - **Menu ASCII**: removida a linha "(open roll - everyone sees)" do `MasterCommands` (entre [Roll] e [Step Down]).
-- **Mojibake `┬º`**: 7 mensagens do `CombatController` tinham `┬º` no lugar de `§` (herança pasta-Net) — substituídas. Ao encontrar `┬º` em literais de chat, trocar por `§`.
+- **Mojibake `§`**: 7 mensagens do `CombatController` tinham `§` no lugar de `§` (herança pasta-Net) — substituídas. Ao encontrar `§` em literais de chat, trocar por `§`.
 - **Botões de câmera do mestre**: `RpgSettingsScreen` mostra "Câmera Orbital"/"Modo de Câmera" apenas para NÃO-mestres (mestre nunca fica travado). Layout mestre: slider +0, ciclo +28, quebra +56, colocação +84, clima +112, voltar +140. Não-mestre: orbital +0, modo +28, voltar +56.
 
 ### FASE 2 — feedbacks do usuário corrigidos (24/09/2026, ~22:30) — 8 correções
@@ -119,7 +119,7 @@
 - **Modo livre NÃO atravessa paredes (correção de rumo)**: o usuário NÃO quer noclip. `SpectatorCameraController.collideFreeCamera` — raycast `level.clip` (`ClipContext.Block.COLLIDER`) da posição anterior à nova; se houver bloco, para 0.1 antes. O `LevelRendererMixin` foi REESCRITO: hack do `cullTerrain` REMOVIDO, substituído pelo fix do corpo do jogador.
 - **Corpo do jogador some ao espectar**: `LevelRenderer.extractVisibleEntities` (offsets 239-256) pula o `LocalPlayer` quando `camera.entity() != entity`. Há 4 chamadas a `Camera.entity()` no método; a do check do LocalPlayer é a **ordinal 3** (offset 248). Fix: `@Redirect` em `Camera.entity()` ordinal 3 retornando `Minecraft.getInstance().player` quando espectador ativo (null-guard). **LIÇÃO**: ordinal 3 = check do LocalPlayer em `extractVisibleEntities`.
 - **Mobs não olham para o player**: `tickControlledMonsters` tinha early-return `if (controlledMonsters.isEmpty()) return;` e só olhava mobs SELECIONADOS. Fix: removido early-return; novo `Set<UUID> insertedMobs` (todos os mobs inseridos); loop extra — olham para o player mais próximo mesmo sem seleção (pulados quando em movimento); UUID removido se a entidade sumiu (também de `cameraMobs`). `removeSelectedMonster` limpa `insertedMobs`.
-- **Mojibake no `CombatController.java`**: comentários corrompidos ("at├®", "N├âO", "├óncora", "posi├º├úo", "s├│", "come├ºar", "ÔÇö") — edits falham se não casarem o texto exato lido do arquivo; editar em pedaços menores.
+- **Mojibake no `CombatController.java`**: comentários corrompidos ("até", "NÃO", "âncora", "posição", "só", "começar", "ÔÇö") — edits falham se não casarem o texto exato lido do arquivo; editar em pedaços menores.
 
 ### FASE 2 — feedbacks do usuário corrigidos (24/09/2026, ~23:00) — jogador estático + 2 sliders
 - **Jogador 100% estático ao espectar**: `MouseHandler.turnPlayer(double)` chama `minecraft.player.turn(d3, d5)` INCONDICIONALMENTE (sem check de cameraEntity — verificado via javap, offset 292) — o `LocalPlayer.turn` (herdado de `Entity`) roda fora do `aiStep` cancelado, então o jogador travado girava cabeça/corpo ao mexer o mouse. Fix: novo `EntityTurnMixin` (mixin em `Entity`, a classe declarante de `turn`, com check `instanceof LocalPlayer`) cancela `Entity.turn(DD)V` quando `SpectatorCameraController.isActive()` e repassa os deltas a `onMouseLook`. **LIÇÃO**: para travar a rotação do jogador, cancelar `Entity.turn` (mixin na classe declarante + instanceof) — o bloqueio do `aiStep` não cobre o mouse.
@@ -204,3 +204,40 @@
   - `TabletopRpgClient.tickHover`: linha de visão (raycast de blocos) — não destaca mob através de paredes.
   - `CinematicCameraController`: câmera não atravessa parede ao rotacionar.
 - **LIÇÃO**: antes de implementar, SEMPRE verificar `git branch -a` e `git log --all --oneline` — pode haver outro branch com trabalho não mesclado. O resumo de sessão anterior registrou a "FASE 0.7" como aplicada no main, mas ela estava no pasta-Net (relatório feedback-fixes-2.md nunca existiu).
+
+## Rotacao visual de personagem caido (26/09/2026)
+
+- **Problema:** com a camera orbitando, o corpo do caido parecia girar para o
+  lado OPOSTO ao movimento da camera, e a mao nao acompanhava a visao.
+- **Causa:** `Entity.turn` esta cancelado no modo espectador, entao a rotacao do
+  jogador fica CONGELADA. Setar `yBodyRot`/`yHeadRot` no tick da camera nao
+  resolve, e para jogador remoto o `LivingEntity.tick()` do cliente sobrescreve
+  logo depois.
+- **Solucao:** mixin em `LivingEntityRenderer.extractRenderState` com
+  `@At("TAIL")`, aplicando `yRot` e `bodyRot` do `LivingEntityRenderState`.
+  Extrair o estado e o ultimo ponto antes de renderizar: nenhum tick roda
+  depois. Para saber o yaw da camera em qualquer modo (inclusive orbita
+  automatica, cujo `angle` tem origem diferente), usar
+  `SpectatorCameraController.getCurrentYaw()`, alimentado em `ensureRigActive`.
+- `extractRenderState` e generico e o vanilla gera ponte sintetica
+  `(Entity, EntityRenderState, float)`; o mixin aponta para a ponte.
+
+## Mixin em metodo generico: descriptor correto (26/09/2026)
+
+- **FATO (crash real):** `DownedBodyAlignMixin` com
+  `extractRenderState(Entity, EntityRenderState, float)` derrubou o jogo na
+  abertura com InvalidInjectionException: Expected (LivingEntity,
+  LivingEntityRenderState, float) but found (Entity, EntityRenderState,
+  float).
+- **FATO:** `javap` mostra uma ponte sintetica (Entity, EntityRenderState,
+  float) em LivingEntityRenderer, mas o Mixin NAO injeta nela: resolve para o
+  metodo generico e exige os tipos genericos concretos.
+- **REGRA:** em metodo generico do Minecraft escrever o descriptor com os tipos
+  concretos e de forma explicita:
+  extractRenderState(Lnet/minecraft/world/entity/LivingEntity;Lnet/minecraft/client/renderer/entity/state/LivingEntityRenderState;F)V
+- **REGRA:** nunca deixar method sem descriptor quando o nome for sobrecarregado.
+- **PROCEDIMENTO:** depois de criar ou alterar QUALQUER mixin, rodar
+  `gradlew runClient` antes de entregar jar. Em ambiente de dev o jogo chega ao
+  menu em ~20-25s e o marcador de sucesso e "Sound engine started"; um
+  InvalidInjectionException aparece em run/crash-reports em segundos. Barato ao
+  lado de um ciclo de teste do usuario.

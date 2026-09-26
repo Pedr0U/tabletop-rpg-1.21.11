@@ -18,7 +18,7 @@ agente ficava "travado pensando" por muito tempo, até ser interrompido com um
   duplicado/escapado no final da mensagem.
 - **INFERÊNCIA:** degeneração de saída + contexto grande = contexto saturado.
   A partir daí, cada turno reprocessa tudo, a geração degrada em repetição e a
-  perceived latency sobe muito. O "travamento" é o modelo tentando sair do loop
+  latência percebida sobe muito. O "travamento" é o modelo tentando sair do loop
   de repetição, não uma espera por I/O.
 
 ## Gatilho composto (o que causar de novo)
@@ -58,8 +58,66 @@ agente ficava "travado pensando" por muito tempo, até ser interrompido com um
 
 - Contexto deixado leve: subagente `explorer` para descoberta, `read` só do
   necessário, saída de `javap` filtrada por padrão (só as assinaturas usadas).
-- `todowrite`aito no início da FASE 3, com uma entrada `in_progress` por vez.
-- Build tratado como resultado terminal e o próximo passo发射 imediatamente.
+- `todowrite` ativo no início da FASE 3, com uma entrada `in_progress` por vez.
+- Build tratado como resultado terminal e o próximo passo emitido imediatamente.
+
+## MIXIN: a lista "server" NAO cobre o singleplayer (25/09/2026)
+
+- **FATO (já documentado no javadoc de `PlayerPoseMixin`, linhas 32-37):** no
+  Fabric, a seção `server` de um `*.mixins.json` só é aplicada no servidor
+  **dededicado**. O servidor **integrado** do singleplayer/LAN não conta.
+- **ERRO COMETIDO NESTA RODADA:** registrei `PlayerSheetPersistenceMixin` na
+  seção `server`. A ficha não persistiria no singleplayer — exatamente onde o
+  usuário testa. Só percebi porque o javadoc do `PlayerPoseMixin` existia.
+- **REGRA:** mixin que precisa rodar nos dois ambientes vai na lista comum
+  `"mixins"` e se protege com `instanceof ServerPlayer`. Nunca confiar na seção
+  `server` para functionality que o singleplayer deve ter.
+
+## Persistência no 1.21.11: ValueInput/ValueOutput + Codec
+
+- **FATO (`javap`):** `Player.addAdditionalSaveData(ValueOutput)` e
+  `readAdditionalSaveData(ValueInput)` — **não** recebem mais `CompoundTag`.
+- `ValueOutput` só expõe `store(String, Codec<T>, T)` / `putInt` etc.;
+  `ValueInput` só expõe `read(String, Codec<T>)` / `getIntOr` etc.
+  **Não existe acesso a NBT cru** nesses hooks.
+- **INFERÊNCIA (confirmada pelo build):** a via correta é um `Codec` do
+  DataFixer. `Codec.optionalFieldOf(nome, padrao)` em todo campo torna o save
+  tolerante a versões antigas; o construtor compacto do record roda depois de
+  decodificar, então a sanitização continua valendo.
+- `codecs` do DataFixer ficam em `datafixerupper-x.y.z.jar` no cache do Gradle
+  (`com.mojang/datafixerupper`); `RecordCodecBuilder$Instance` tem `group(...)`
+  com até 16 pares.
+- `com.mojang.datafixers.util.Pair` também fica nesse jar.
+
+## Hipótese em memória NÃO é fato (25/09/2026)
+
+- A hipótese da câmera do caído ("pose `SWIMMING` forçada + body yaw do vanilla")
+  ficou gravada no checklist da FASE 3 por vários turnos e **estava errada**.
+- **FATO (`javap` do 1.21.11):** `Entity.isVisuallySwimming()` retorna
+  exatamente `hasPose(Pose.SWIMMING)`; `swimAmount` sobe `+0.09/tick` até 1.0
+  enquanto isso for true. Forçar a pose é **suficiente e correto**.
+- **REGRA:** hipótese anotada em memória continua não-verificada até bytecode ou
+  teste confirmar. Marcar como `HIPOTESE:` e datar. Não deixar hipótese virar
+  "causa raiz" no relatório só porque está escrita há dias.
+- **FATO (1.21.11):** o renderer do jogador foi renomeado para `AvatarRenderer`,
+  e `setupRotations` **não existe** nele. O modelo humanóide é movido por um
+  `HumanoidRenderState` pré-computado (`net.minecraft.client.renderer.entity.
+  state.HumanoidRenderState`). Qualquer correção de câmera do caído precisa
+  seguir por esse caminho novo.
+
+## Varredura de idioma: rodar DEPOIS de cada escrita
+
+- Escrevi caracteres CJK dentro de comentários Java em cinco ocasiões (dois
+  identificadores, um termo matemático em ideogramas e dois ideogramas soltos
+  dentro de frases em português). Nenhum apareceu no relatório ao usuário, só no
+  código — e algumas só apareceram porque varri. **Não reproduzir os exemplos
+  literais ao documentar**: reescrever a descrição, senão a corrupção volta
+  para o repo.
+- **REGRA:** a varredura faz parte do laço build+verificação, não do fim da fase.
+  Comando usado (leitura UTF-8 explícita, nunca `Get-Content` cru):
+  `[regex]::Matches($t,'[\u4E00-\u9FFF\u3000-\u303F\uFF00-\uFFEF]')`
+- Vale para `agent/memory/*.md` e `agent/reports/*.md` também — este próprio
+  arquivo já tinha um ideograma e uma palavra em inglês de escritas anteriores.
 
 ## DIRETIVA DO USUARIO (25/09/2026) - explicar toda permissao de pasta
 
@@ -82,3 +140,118 @@ agente ficava "travado pensando" por muito tempo, até ser interrompido com um
 - Regra: qualquer escrita em pasta do sistema e erro meu, mesmo pre-aprovada.
 - Oferecer limpeza do que foi acumulado em Temp; apagar arquivo e acao
   destrutiva e exige confirmacao, mesmo em pasta temporaria.
+
+## Encoding e APIs: lições da Fase 3F (2026-09-25)
+
+### O console deste ambiente nao renderiza encoding de forma fiel
+
+- **FATO:** uma linha cujo texto exibido era `interacao` tinha, nos codepoints,
+  `U+251C U+00BA U+251C U+00FA` (mojibake real). A exibicao pareceu correta e
+  errada ao mesmo tempo.
+- **REGRA:** para auditar encoding, **sempre despejar os codepoints** do trecho
+  suspeito. Nunca confiar na saida formatada do console.
+- **REGRA:** ao copiar arquivo cujo nome tem acento (`Relatorio` com `o`
+  acentuado), o `-LiteralPath` escrito a mao falha. Buscar por
+  `Get-ChildItem -Filter` e comparar hash, em vez de digitar o nome.
+
+### Round-trip global de encoding E PROIBIDO
+
+- **FATO:** `ç` (U+00E7) codifica para `0xE7` em cp1252, que e byte invalido
+  ao ser lido como UTF-8. Um round-trip "decodifica cp1252, reencoda UTF-8" em
+  arquivo inteiro **destroi acentos legítimos**.
+- **REGRA:** reparar mojibake **palavra a palavra**, verificando codepoints antes
+  e depois. Nunca aplicar conversao global de encoding em arquivo de codigo.
+
+### PowerShell 5.1
+
+- **FATO:** `Set-Content -Encoding UTF8` grava **BOM**. O `git diff` mostrou
+  `+package` numa linha que eu nao tinha tocado.
+- **REGRA:** para escrita sem BOM usar
+  `[System.IO.File]::WriteAllLines(, , (New-Object System.Text.UTF8Encoding(False)))`.
+- Depois de qualquer escrita em massa, conferir `git diff` linha a linha.
+
+### Assinaturas de mouse do Minecraft 1.21.11
+
+- **FATO:** `ContainerEventHandler` **nao** usa mais `int button`. Sao:
+  `mouseClicked(MouseButtonEvent, boolean)`, `mouseReleased(MouseButtonEvent)`,
+  `mouseDragged(MouseButtonEvent, double, double)`.
+- **REGRA:** ao escrever handler de mouse novo neste projeto, confirmar com
+  `javap` antes. Assumir a assinatura antiga custa um ciclo de build falhado.
+
+### Regra de escopo que quase foi violada
+
+- O mojibake de `CombatController.java` (83 linhas) e de outros arquivos que a
+  rodada nao tocou foi **reportado, nao corrigido**. Corrigir seria expandir o
+  conjunto de mudancas em subsistema nao relacionado, em cima de um reparo
+  delicado e caro. Reportar pendencia e o comportamento correto.
+
+## TRAVA por orcamento de passos: 2a ocorrencia (26/09/2026)
+
+### Sintoma
+
+O usuario precisou me cortar com "continua" e depois dizer que era a segunda
+vez que eu travava nessa parte. No meio da primeira, o harness imprimiu,
+literalmente:
+
+    Maximum steps for this agent have been reached
+
+### FATOS da sessao
+
+- Esgotei o orcamento de passos do turno numa unica entrega: 4 itens de todo,
+  build, geracao de jar, e ainda uma validacao pesada de 210s com runClient.
+- O runClient foi UM comando bloqueante de 210s sem nenhuma saida intermediaria.
+  Durante 3,5 minutos o usuario viu a tela parada sem saber se eu trabalhava ou
+  estava travado.
+- A licao nao estava em disco quando o turno foi cortado, porque adiei a escrita
+  da memoria para o fim do trabalho. Perdeu-se.
+
+### Causa raiz
+
+Nao e lentidao de I/O (o build leva 3-5s). Sao tres fatores somados:
+1. Orcamento de passos do turno estourado por validacao cara dentro do mesmo
+   turno em que ainda havia entrega pendente.
+2. Comando unico longo e silencioso, que impede o usuario de distinguir
+   "trabalhando" de "travado".
+3. Gravacao de estado e de memoria feita no FIM em vez de no MEIO do turno.
+
+### REGRAS (duraveis)
+
+1. Limite de ~6-8 chamadas de ferramenta por turno. Ao chegar perto, gravar
+   estado em disco, emitir UMA linha de status e encerrar o turno.
+2. Comando com previsao maior que 60s: anunciar a duracao ANTES, escrever
+   progresso em arquivo, e escolher a validacao mais barata quando houver
+   equivalente. Aqui bastava ~25s para ver o jogo chegar ao menu; paguei 210s.
+3. Gravar a licao em agent/memory IMEDIATAMENTE apos o diagnostico, nunca no fim
+   da fase. Diagnostico nao gravado e diagnostico perdido. Tambem gravar o
+   ESTADO DA SESSAO em `agent/HANDOFF.md` sempre que houver entrega esperando
+   teste do usuario, para o trabalho sobreviver a um corte de turno.
+4. Item de todo que exija validacao cara vai em turno proprio, com estado em
+   disco antes de comecar.
+5. **Responda assim que uma ferramenta retorna resultado.** Se o build voltou
+   verde e eu fico sem emitir a linha de status seguinte, o usuario ve "travou"
+   mesmo tendo dado tudo certo. "BUILD SUCCESSFUL" e um resultado terminal: emita
+   o status no mesmo turno, sem rodear o proximo passo.
+
+## Regra de entrega: nunca anunciar "pronto para teste" com risco aberto
+
+### FATOS (26/09/2026)
+
+- Entreguei o jar e disse "pronto para testes" DEPOIS de ter escrito no meu
+  proprio relatorio que a assinatura do mixin era o item de maior risco e que um
+  crash na abertura era provavel. O usuario testou e o jogo crashou.
+- Antes disso, afirmei que o codigo de scroll nao estava no jar a partir de uma
+  busca feita com o CAMINHO DE CLASSE ERRADO. Falso negativo que quase me
+  levou a mexer em codigo que ja funcionava.
+
+### REGRAS (duraveis)
+
+1. gradlew build NAO valida injecao de mixin. So a carga real de classes valida.
+   Ate rodar o cliente, o mixin e "nao validado", por mais verde que o build
+   esteja. Tratar "build ok" como nada a respeito de mixin.
+2. Nunca responder "pronto para testar" havendo risco conhecido nao resolvido.
+   Ou validar o risco antes, ou dizer textualmente o que segue sem validar.
+3. Para afirmar se um codigo esta no jar, PRIMEIRO conferir que o caminho de
+   classe existe no jar; DEPOIS procurar o marcador. Ausencia de busca feita com
+   caminho errado nao prova nada.
+4. Risco grande e reversivel (crash na abertura) justifica validacao cara ANTES
+   da entrega, nunca depois dela.

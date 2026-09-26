@@ -314,7 +314,7 @@ public abstract class CharacterSheetScreen extends Screen {
 
         // Painel centralizado que acompanha a janela (feedback: nao cabia em
         // 1920x1080). O teto evita um painel gigante em telas enormes.
-        panelW = Math.max(MIN_PANEL_W, Math.min(this.width - 2 * PAD, MAX_PANEL_W));
+        panelW = Math.max(MIN_PANEL_W, Math.min(this.width - 2 * PAD, maxPanelWidth()));
         if (panelW > this.width) {
             panelW = this.width;
         }
@@ -350,6 +350,19 @@ public abstract class CharacterSheetScreen extends Screen {
      */
     protected Button buildFooterExtra(int x, int y, int w, int h) {
         return null;
+    }
+
+    /**
+     * Largura maxima do painel desta tela.
+     *
+     * <p>O padrao e {@link #MAX_PANEL_W}. A tela de Status <b>sobrescreve</b>
+     * para caber a coluna de pericias ao lado: uma lista unica de 20 linhas
+     * precisa de largura para o nome + as duas setas + o botao de atributo, e
+     * estreitar o painel obrigaria a reduzir a fonte a ponto de o botao ficar
+     * inutilizavel (decisao do usuario em 25/09/2026).
+     */
+    protected int maxPanelWidth() {
+        return MAX_PANEL_W;
     }
 
     /**
