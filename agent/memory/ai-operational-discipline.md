@@ -255,3 +255,111 @@ Nao e lentidao de I/O (o build leva 3-5s). Sao tres fatores somados:
    caminho errado nao prova nada.
 4. Risco grande e reversivel (crash na abertura) justifica validacao cara ANTES
    da entrega, nunca depois dela.
+
+## One-liner longo de PowerShell = loop (26/09/2026) — 3a ocorrencia da classe
+
+### Sintoma (o usuario cortou o comando)
+
+Escrevi um one-liner de PS para agregar a distribuicao de codepoints em
+`src/` e `agent/`, dentro de um `while` sobre ~50 arquivos. Usei duas APIs
+que **nao existem**:
+
+- `[System.Text.Encoding]::ConvertToUtf32` (metodo inexistente)
+- `[System.Text.RealIsChar]::IsSurrogatePair` (tipo inexistente)
+
+Cada arquivo repetia `MethodNotFound` + `FullyQualifiedErrorId`. O console
+saturou (~2000 linhas) e o usuario abortou. **Nao foi loop do modelo**: foi
+um comando infinitamente repetidor, e eu demorei a ver porque ja tinha
+disparado.
+
+### Causa raiz
+
+Varredura de texto em one-liner de PS e a classe de comando que ja me
+queimou tempo antes (a "varredura ad-hoc" que virou o item 4 do plano).
+One-liner longo nao tem como falhar em silencio: um erro de API vira N
+copias no log.
+
+### REGRAS (duraveis)
+
+1. **Varredura de arquivo NUNCA em one-liner de PowerShell.** Usar as
+   ferramentas `grep`/`read` (sao seguras, nao executam nada) ou a task
+   `scanEncoding` do Gradle, que ja existe e esta calibrada.
+2. Se precisar de PS: script em arquivo, testado uma vez, com `-ErrorAction
+   Stop` e saida pequena. Nao direto no prompt.
+3. Antes de disparar qualquer comando com laco, perguntar: "se uma API
+   usada dentro do laco estiver errada, quantas copias de erro ele imprime?"
+4. O mesmo sintoma de "cutar o comando" ja aconteceu 2x. Contar ocorrencias
+   antes de tratar como caso unico.
+
+### Detector de encoding: calibrar por EVIDENCIA, nao por palpite
+
+- **ERRO (26/09/2026):** classifiquei travessao (U+2014), ordinal "3a"
+  (U+00AA) e "A" com til (U+00C3) como "proibidos". Acusou **158
+  ocorrencias** em `src/`. Todas eram portugues legitimo em JavaDoc
+  existente. O detector estava errado, nao o codigo. A task teria quebrado
+  todo `build` do projeto.
+- **FATO:** os unicos caracteres que o repositorio realmente tinha como
+  corrupcao eram `U+00D0` ("Dncoras" em `CombatController.java`) e um
+  fragmento `(+1)` corrompido. Ambos JA foram reparados palavra a palavra.
+- **REGRA:** antes de classificar um caractere como "proibido", provar que
+  ele e IMPOSSIVEL em portugues/codigo correto -- nao que ele "parece
+  estranho". `3a pessoa`, `CONSTRUCAO`, `Nao` sao 3a, til e til.
+- **O detector ja esta no Gradle** (`scanEncoding`, `check` depende dele).
+  Calibrado: FALHA em CJK/hangul/kana/fullwidth, U+FFFD e marcadores sem
+  grafia portuguesa possivel; INFO para acentos e tipografia. Nao ha mais
+  motivo para varredura ad-hoc.
+
+### Gradle: `def` local nao resolve dentro de `doLast`
+
+- **ERRO (26/09/2026):** closure definida como `def minhaFn = { ... }` no
+  script e chamada dentro de `doLast { }` ->
+  `NullPointerException: Cannot invoke "groovy.lang.Closure.call(Object)"
+  because "closure" is null`. Acao do Gradle e diferida e nao enxerga local
+  de script.
+- **REGRA:** usar `ext.minhaFn = { ... }` e chamar `project.minhaFn(...)`.
+- **REGRA 2:** `collect`/`sort`/`countBy` com closure em acao diferida e
+  campo minado (o mesmo NPE). Relatorio cosmetico vai imperativo.
+
+## TRAVA na build: o daemon segura o pipe (26/09/2026) - 3a ocorrencia, CAUSA NOVA
+
+### Sintoma
+
+`.\gradlew.bat build --console=plain 2>&1 | Select-String ...` imprimiu
+"BUILD SUCCESSFUL in 13s" e MESMO ASSIM a chamada ficou pendurada ate o tool
+abortar por timeout de 600 s. Aconteceu 2x nesta rodada, com 10 minutos
+perdidos cada.
+
+### FATOS (experimento direto, 26/09/2026)
+
+- Sem `--no-daemon`: saida completa aparece, o comando NAO retorna.
+- Com `--no-daemon`: mesma saida, comando retorna em **7 s**.
+
+### Causa raiz
+
+O processo do **Gradle daemon** herda o handle de stdout redirecionado do
+pipeline do PowerShell e o mantem aberto. O pipeline nunca chega a EOF, entao o
+shell continua esperando muito depois do build ter terminado. Nao e build
+lento, nao e o modelo pensando, nao e o Gradle travado.
+
+### REGRAS (duraveis)
+
+1. **Sempre usar `--no-daemon` quando a saida do `gradlew` for filtrada por
+   pipe.** Custa ~5 s de startup e economiza minutos.
+2. Se a chamada ja imprimiu `BUILD SUCCESSFUL`, o resultado e TERMINAL. O
+   timeout que vier depois e lixo do pipe, nao sinal de falha. Nao reexecutar
+   e nao "confirmar" de novo.
+3. Antes de tratar uma build como travada, olhar se a linha de resultado ja
+   saiu. Reexecutar porque o comando nao retornou joga fora o trabalho.
+4. `runClient` que nao retorna e o MESMO fenomeno por outra razao: o jogo fica
+   de pe. Confirmar pelo log, nunca pelo tempo de espera.
+
+### As 3 causas de "travar" neste projeto, resumidas
+
+1. **Pipe segurado pelo daemon** (esta secao) - build ja terminou, o shell
+   espera. Fix: `--no-daemon`.
+2. **Orcamento de passos do turno** (secao "2a ocorrencia") - validacao cara
+   dentro do mesmo turno da entrega. Fix: limite de chamadas por turno.
+3. **Contexto saturado** (secao do inicio) - arquivo grande lido inteiro e
+   saida nao filtrada. Fix: `grep`, `offset`/`limit`, filtro em tudo.
+4. **Bonus, 26/09/2026:** one-liner de PS com API errada em laco (ver secao
+   "One-liner longo de PowerShell"). O usuario precisou abortar.

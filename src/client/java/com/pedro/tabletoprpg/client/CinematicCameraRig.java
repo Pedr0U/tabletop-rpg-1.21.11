@@ -43,6 +43,30 @@ public final class CinematicCameraRig {
         return Mth.rotLerp(partialTick, previousYaw, currentYaw);
     }
 
+    // ==== DIAG_TEMP (26/09/2026) =============================================
+    // Ultimo yaw/parcialTick que a camera REALMENTE aplicou, para o
+    // DownedBodyAlignMixin comparar com o que ele calcula no render da
+    // entidade. mora AQUI, e nao no CameraMixin, porque campo e metodo
+    // estatico de mixin tem que ser private: com `public` o jogo morre em
+    // "InvalidMixinException: contains non-private static method/field".
+    // REMOVER junto com o bloco DIAG_TEMP dos dois mixins.
+    private static float lastAppliedYaw = Float.NaN;
+    private static float lastAppliedPartialTick = Float.NaN;
+
+    public static void tabletopRpg$recordApplied(float yaw, float partialTick) {
+        lastAppliedYaw = yaw;
+        lastAppliedPartialTick = partialTick;
+    }
+
+    public static float tabletopRpg$lastAppliedYaw() {
+        return lastAppliedYaw;
+    }
+
+    public static float tabletopRpg$lastAppliedPartialTick() {
+        return lastAppliedPartialTick;
+    }
+    // ==== /DIAG_TEMP ==========================================================
+
     /** Pitch interpolado (leva em conta o menor caminho da rotação). */
     public static float getInterpolatedPitch(float partialTick) {
         return Mth.rotLerp(partialTick, previousPitch, currentPitch);

@@ -241,3 +241,52 @@
   menu em ~20-25s e o marcador de sucesso e "Sound engine started"; um
   InvalidInjectionException aparece em run/crash-reports em segundos. Barato ao
   lado de um ciclo de teste do usuario.
+  - **Armadilha do runClient:** com o jogo de pe, `runClient` NAO retorna (o
+    task e longo). Isso e sinal de SUCESSO, nao de travamento. Confirmar
+    lendo `run/logs/latest.log` procurando "Sound engine started" e contando
+    `run/crash-reports`, em vez de esperar o comando terminar. Nos crashes o
+    task falha em segundos e o comando retorna.
+
+## Mixin: campo e metodo estatico tem que ser PRIVATE (26/09/2026)
+
+- **FATO (crash real, 2x):** `public static final boolean DIAG_ENABLED` em um
+  mixin derruba o jogo em `InvalidMixinException: contains non-private static
+  field DIAG_ENABLED:Z`. O mesmo acontece com metodo estatico `public`:
+  `contains non-private static method tabletopRpg$diagAppliedYaw()F`.
+- **REGRA:** dentro de um mixin, todo campo estatico e todo metodo estatico
+  que NAO seja injecao tem que ser `private`.
+- **CONSEQUENCIA:** nao da para compartilhar estado estatico entre mixins por
+  la. Colocar o estado em uma classe NORMAL (ex.: `CinematicCameraRig`) e
+  chamar de la. Cross-mixin sem interface `@Accessor` nao funciona.
+
+## Varredura de encoding: task Gradle `scanEncoding` (26/09/2026)
+
+- **FATO:** existe em `build.gradle` e `check` depende dela, entao roda em toda
+  `build`. Nao converte encoding, so reporta. Uso isolado:
+  `.\gradlew.bat scanEncoding --console=plain`.
+- **FALHA:** CJK/hangul/kana/fullwidth, U+FFFD e marcadores de mojibake sem
+  grafia portuguesa possivel (0xD0 e o caso real do repo).
+- **INFO:** acentos latinos, travessao e aspas tipograficas. NUNCA classificar
+  esses como proibido: a primeira versao acusou 158 falsos positivos em JavaDoc
+  legitimo ("3a pessoa", "CONSTRUCAO", "Nao") e teria quebrado todo o build.
+- **ERRO CORRIGIDO:** `def minhaFn = { ... }` de script nao resolve dentro de
+  `doLast` (NPE "closure is null"). Usar `ext.minhaFn = { ... }` e chamar
+  `project.minhaFn(...)`. Relatorio cosmetico com `collect`/`sort`/`countBy`
+  em acao diferida tambem estoura: escrever imperativo.
+
+## Como o usuario TESTA: `runClient`, nunca jar instalado (26/09/2026)
+
+- **FATO:** o usuario abre o jogo com `.\gradlew.bat runClient`, a partir da
+  arvore de fontes. Nao instala jar em `build/libs` e nao usa o
+  `mods/` de nenhuma instancia do Minecraft.
+- **CONSEQUENCIA:** quando pedir para testar, escrever o comando `runClient` e
+  o caminho do log. **Nao** mandar instalar `tabletop-rpg-1.0.0.jar` nem o
+  `tabletop-rpg_TESTE_*.jar`. Isso ja aconteceu e foi errado: o jar e um
+  produto do build, nao o alvo do teste.
+- **LOG:** `run/logs/latest.log`. Crash reports em `run/crash-reports/`.
+- **ESPERADO:** `runClient` nao retorna porque o jogo fica de pe. Isso e
+  normal, nao e travamento. Para confirmar que subiu, ler
+  `Sound engine started` no log e `run/crash-reports/` vazio.
+- **INSTRUMENTACAO ATIVA:** `DIAG_TEMP` esta ligado e escreve linhas
+  `[DownAlign]` a cada 10 chamadas de `Player`. Isso e de proposito, para o
+  diagnostico do braco do caido. Se poluir o log, avisar antes de desligar.
