@@ -36,8 +36,13 @@ public abstract class CameraMixin {
         if (SpectatorCameraController.isActive() && CinematicCameraRig.isActive()) {
             var pos = CinematicCameraRig.getInterpolatedPosition(partialTick);
             this.setPosition(pos.x, pos.y, pos.z);
-            this.setRotation(CinematicCameraRig.getInterpolatedYaw(partialTick),
-                             CinematicCameraRig.getInterpolatedPitch(partialTick));
+            float yaw = CinematicCameraRig.getInterpolatedYaw(partialTick);
+            // ==== DIAG_TEMP (26/09/2026) — registro do valor real aplicado.
+            // O estado fica em CinematicCameraRig (classe normal) porque campo
+            // e metodo estatico de mixin precisam ser private.
+            CinematicCameraRig.tabletopRpg$recordApplied(yaw, partialTick);
+            // ==== /DIAG_TEMP ==================================================
+            this.setRotation(yaw, CinematicCameraRig.getInterpolatedPitch(partialTick));
         }
     }
 }

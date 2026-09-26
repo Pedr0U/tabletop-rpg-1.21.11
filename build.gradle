@@ -64,6 +64,153 @@ jar {
 	}
 }
 
+// =====================================================================
+// SCAN DE ENCODING (26/09/2026)
+// =====================================================================
+// A varredura de mojibake/ideogramas era um comando PowerShell ad-hoc e e
+// exatamente por isso que ela ja falhou varias vezes. Aqui ela e uma task do
+// Gradle e `check` depende dela -- ou seja, ela roda em TODA `build`.
+//
+// REGRA QUE ESTA TASK NAO QUEBRA: ela NUNCA converte encoding. Round-trip
+// global de encoding destroi acentos legitimos (ver
+// agent/memory/ai-operational-discipline.md). Aqui so ha leitura e relatorio.
+//
+// Niveis de severidade:
+//   FAIL -> ideogramas (CJK, hangul, kana), fullwidth, U+FFFD e marcadores de
+//          mojibake sem grafia portuguesa possivel, em src/**, *.json e
+//          agent/**. Motivo: mojibake dentro de um literal Java muda o que o
+//          jogo faz, e ideograma em qualquer lugar e sempre defeito.
+//   INFO -> todo o resto nao-ASCII: acentos latinos legitimos e tipografia
+//          (travessao, aspas tipograficas). Contados por arquivo, nunca falha.
+//
+// Calibracao por evidencia: ver o comentario de `encodingCharIsHardFail`.
+//
+// Uso isolado: .\gradlew.bat scanEncoding --console=plain
+// `ext.` e obrigatorio: uma variavel local `def` de script NAO e resolvida
+// dentro de `doLast` (acao diferida do Gradle) -- falha com
+// "Cannot invoke Closure.call because closure is null". Ver 26/09/2026.
+ext.encodingCharIsHardFail = { int cp ->
+	// CALIBRADO POR EVIDENCIA (26/09/2026), nao por palpite.
+	//
+	// FACT: uma versao anterior deste detector classificava o travessao, o
+	// ordinal "3a" (U+00AA) e o "A" com til (U+00C3) como proibidos e acusou
+	// 158 ocorrencias em src/. TODAS eram portugues legitimo em JavaDoc
+	// existente. O detector estava errado, nao o codigo.
+	// Abaixo so entra o que e IMPOSSIVEL em portugues correto em codigo Java:
+	// ideogramas, fullwidth, U+FFFD e marcadores de mojibake sem grafia
+	// portuguesa possivel. 0xD0 e o caso REAL encontrado no repo: "Dncoras"
+	// em CombatController.java (reparado em 26/09/2026).
+	if (cp == 0xFFFD) return true
+	if (cp >= 0x4E00 && cp <= 0x9FFF) return true   // CJK unified
+	if (cp >= 0x3400 && cp <= 0x4DBF) return true   // CJK ext. A
+	if (cp >= 0x3000 && cp <= 0x303F) return true   // CJK punctuation
+	if (cp >= 0x3040 && cp <= 0x30FF) return true   // hiragana + katakana
+	if (cp >= 0xAC00 && cp <= 0xD7AF) return true   // hangul syllables
+	if (cp >= 0xFF00 && cp <= 0xFFEF) return true   // fullwidth forms
+	return [0xD0, 0xD1, 0xDE, 0xFE,                 // D e N com traco, Thorn
+	        0xF0, 0xEF,                              // eth, i com diaerese
+	        0x152, 0x153, 0x160, 0x161, 0x178,       // ligatureas, S e Z com caron
+	        0x17D, 0x17E, 0x192,                     // Z com caron, f com hook
+	        0x2C6, 0x2DC, 0x20AC, 0x2122,            // modificadores, euro, trademark
+	        0xFB01, 0xFB02]                          // ligatureas fi e fl
+	        .contains(cp)
+}
+
+tasks.register('scanEncoding') {
+	group = 'verification'
+	description = 'Reporta e falha em mojibake, ideogramas e U+FFFD (src/, *.json, agent/).'
+	// Sempre executa: a varredura leva menos de 1s e nao deve ser cacheada
+	// depois de um arquivo alterado fora do ciclo do Gradle.
+	outputs.upToDateWhen { false }
+
+	def scanExts = ['java', 'json', 'md', 'json5', 'properties', 'mcmeta', 'txt'] as Set
+
+	doLast {
+		def failures = []
+		def accented = [] as Set
+		def scanned = 0
+
+		[file('src'), file('agent')].each { root ->
+			if (!root.exists()) {
+				return
+			}
+			root.eachFileRecurse { f ->
+				if (!f.isFile()) {
+					return
+				}
+				def lower = f.name.toLowerCase()
+				int dot = lower.lastIndexOf('.')
+				if (dot < 0 || !scanExts.contains(lower.substring(dot + 1))) {
+					return
+				}
+				def rel = root.toPath().relativize(f.toPath()).toString().replace('\\', '/')
+				def text
+				try {
+					text = f.getText('UTF-8')
+				} catch (Exception e) {
+					failures << "${rel}: nao decodificou como UTF-8 (${e.class.simpleName})"
+					return
+				}
+				scanned++
+				int line = 1
+				int i = 0
+				while (i < text.length()) {
+					int cp = text.codePointAt(i)
+					if (text.charAt(i) == '\n') {
+						line++
+					} else if (cp > 0x7F) {
+						def where = String.format('%s:%d U+%04X', rel, line, cp)
+						if (project.encodingCharIsHardFail(cp)) {
+							failures << where
+						} else {
+							accented << where
+						}
+					}
+					i += Character.charCount(cp)
+				}
+			}
+		}
+
+		if (accented) {
+			// Imperativo de proposito: collect/sort/countBy em acao diferida do
+			// Gradle estourou NPE ("closure is null") em 26/09/2026. O
+			// relatorio e cosmetico e nao vale uma classe de bug de DSL.
+			def perFile = [:].withDefault { 0 }
+			accented.each { perFile[it.tokenize(':')[0]] = perFile[it.tokenize(':')[0]] + 1 }
+			def ranked = new ArrayList(perFile.entrySet())
+			ranked.sort { a, b -> b.value <=> a.value }
+			def top = new StringBuilder()
+			int shown = 0
+			ranked.each { e ->
+				if (shown >= 5) {
+					return
+				}
+				if (shown > 0) {
+					top.append(', ')
+				}
+				top.append(e.key).append('=').append(e.value)
+				shown++
+			}
+			logger.lifecycle("[scanEncoding] INFO: ${accented.size()} caractere(s) nao-ASCII "
+					+ "em ${perFile.size()} arquivo(s) -- acentos latinos e tipografia, "
+					+ "legitimos, nao falha o build. Maiores: ${top}")
+		}
+		if (failures) {
+			logger.error("[scanEncoding] FAIL: ${failures.size()} caractere(s) proibido(s) em codigo.")
+			failures.each { logger.error("  FAIL  ${it}") }
+			throw new GradleException("scanEncoding: ${failures.size()} mojibake/ideograma/U+FFFD "
+					+ "em codigo. Repare palavra a palavra -- NUNCA converta o encoding do arquivo inteiro.")
+		}
+		logger.lifecycle("[scanEncoding] OK: ${scanned} arquivo(s) verificados em src/ e agent/, "
+				+ "0 mojibake, 0 ideograma, 0 U+FFFD.")
+	}
+}
+
+// A varredura e parte do laco de build+verificacao, nao do fim da fase.
+tasks.named('check') {
+	dependsOn 'scanEncoding'
+}
+
 // configure the maven publication
 publishing {
 	publications {

@@ -53,10 +53,10 @@ public final class CombatController {
     /** Monstro atualmente selecionado pelo mestre (UUID). */
     private static UUID selectedMonsterUuid = null;
 
-    /** Ðncoras dos monstros: UUID do monstro -> posição onde começou. */
+    /** Âncoras dos monstros: UUID do monstro -> posição onde começou. */
     private static final Map<UUID, BlockPos> monsterAnchors = new HashMap<>();
 
-    /** Ðncoras dos jogadores: UUID do jogador -> posição onde começou. */
+    /** Âncoras dos jogadores: UUID do jogador -> posição onde começou. */
     private static final Map<UUID, BlockPos> playerAnchors = new HashMap<>();
 
     /** Monstros controlados (selecionados/movidos) que olham para o jogador mais próximo. */
@@ -162,7 +162,7 @@ public final class CombatController {
             master.sendSystemMessage(Component.literal("§7[RPG] Monster deselected."));
         } else {
             selectedMonsterUuid = mobUuid;
-            // Ðncora do monstro: posição atual do mob no momento da seleção.
+            // Âncora do monstro: posição atual do mob no momento da seleção.
             // A aura fica ancorada aqui durante a movimentação (não segue o
             // mob); ao re-selecionar, a âncora é atualizada para a posição
             // atual do mob (equivale ao "início do turno" do mob).
@@ -172,7 +172,7 @@ public final class CombatController {
             // naturais (não inseridos por comando) viram "peças" da mesa.
             mob.setNoAi(true);
 
-            // Ðncora do jogador ativo (se houver): onde ele começou.
+            // Âncora do jogador ativo (se houver): onde ele começou.
             ServerPlayer active = findActivePlayer(level);
             if (active != null) {
                 setPlayerAnchor(active);
@@ -207,7 +207,7 @@ public final class CombatController {
         // Movimento direto (sem IA): o mob fica congelado (noAi=true) e o
         // servidor o move em linha reta até o destino. O Y do destino é a
         // superfície do terreno (Level.getHeight já retorna o primeiro Y
-        // vazio acima do bloco mais alto ÔÇö NÃO somar +1, senão o mob flutua).
+        // vazio acima do bloco mais alto (+1). NÃO somar +1, senão o mob flutua).
         double groundY = level.getHeight(Heightmap.Types.MOTION_BLOCKING, dest.getX(), dest.getZ());
         monsterDestinations.put(selectedMonsterUuid,
                 new Vec3(dest.getX() + 0.5, groundY, dest.getZ() + 0.5));

@@ -49,14 +49,22 @@ public class StatusScreen extends CharacterSheetScreen {
     /** Painel mais largo que o das outras telas, para caber a coluna. */
     private static final int MAX_PANEL_W_STATUS = 600;
     /**
-     * Teto da largura dos campos de texto (nome, raca, classe, nivel, xp).
+    /**
+     * Teto da largura dos campos de texto (nome, raca, classe, nivel, xp) E das
+     * barras de HP e Mana: as duas coisas consomem o mesmo {@code boxW}.
      *
-     * <p>Feedback do usuario: com a caixa esticando ate a borda, os campos
-     * ficavam grandes demais e o menu parecia largo demais. O campo tem teto e
-     * o espaco que sobra da linha e dividido em duas metades, para as duas
-     * colunas ficarem simetricas.
+     * <p>Historico do valor: sem teto, a caixa encostava na borda e os campos
+     * ficavam grandes demais (190). Depois 190 ficou estreito demais para o
+     * nome dos valores e para as barras, e o usuario pediu "um pouco" mais em
+     * 26/09/2026, sem voltar ao encostar na borda.
+     *
+     * <p>AJUSTE FINO: este e o unico numero que controla essa largura.
+     * O teto real e {@code fieldArea} (cerca de 306 com o painel de 600),
+     * porque {@code boxW} faz {@code Math.min} deste valor com a area
+     * disponivel na linha. Acima de ~306 este numero deixa de ter efeito e as
+     * caixas voltam a encostar na borda, que era o que se queria evitar.
      */
-    private static final int FIELD_W_MAX = 190;
+    private static final int FIELD_W_MAX = 240;
     /** Folga entre as pecas de um atributo, a mesma usada nas pericias. */
     private static final int WIDGET_GAP = 2;
     /** Largura da caixa do valor, a mesma usada nas pericias. */

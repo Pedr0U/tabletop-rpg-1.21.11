@@ -6,6 +6,7 @@ import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.EditBox;
+import net.minecraft.client.gui.components.MultiLineEditBox;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.input.MouseButtonEvent;
 import net.minecraft.network.chat.Component;
@@ -49,16 +50,44 @@ public class SkillsScreen extends CharacterSheetScreen {
     /** Numero maximo de skills exibidas por vez (o layout reduz em telas baixas). */
     private static final int MAX_SKILL_ROWS = 8;
 
-    /** Largura do botao "X" de remocao no fim de cada linha. */
-    private static final int REMOVE_W = 16;
+    /**
+     * Lado do botao de excluir no fim de cada linha. Quadrado de proposito: o
+     * "X" e desenhado a mao (ver {@link #renderRemoveIcon}) e precisa de
+     * respiro em cima e embaixo para nao sair da caixa.
+     */
+    private static final int REMOVE_SIZE = 20;
+
+    /**
+     * Faixa reservada a barra de rolagem da lista, a direita do botao excluir.
+     *
+     * <p>AJUISTE FINO, e a unica coisa que controla o respiro entre os dois:
+     * o respiro em pixels e {@code BAR_SLOT - (BAR_W + 2 * BAR_PAD)}, ou seja
+     * {@code BAR_SLOT - 12}. Com 20 eram 8px; o usuario ainda achou a barra
+     * em cima do botao em 26/09/2026, entao subiu para 32, que da 20px de
+     * respiro -- inequivoco a olho. Com 40 seriam 28px, e o nome da skill
+     * encurta mais.
+     *
+     * <p>So vale quando a lista transborda, porque a barra so e desenhada nesse
+     * caso. O nome da skill perde a mesma medida, e por isso {@code nameW}
+     * continua derivado daqui e nao de um numero solto.
+     */
+    private static final int BAR_SLOT = 32;
 
     /**
      * Altura da faixa reservada ao popup de descricao, entre a lista e o rodape.
      *
      * <p>Fica reservada sempre (nao so quando ha popup) para o layout nao pular
      * quando o usuario abre e fecha a descricao.
+     *
+     * <p>AJUISTE FINO: as linhas visiveis sao {@code (POPUP_H - 10) / 10}, ou
+     * seja, cada 10px a mais aqui rende 1 linha a mais de descricao. Com 68
+     * cabem 5 linhas (eram 4 com 56); 72 daria 6, 82 daria 7.
+     *
+     * <p>Pedido do usuario em 26/09/2026 ("um pouco mais"), logo 68 e nao 72:
+     * cada 10px aqui sai da lista, porque {@code listBottom} desconta o
+     * {@code POPUP_H} inteiro.
      */
-    private static final int POPUP_H = 56;
+    private static final int POPUP_H = 120;
 
     /** Quantos caracteres o hover mostra antes de cortar. */
     private static final int HOVER_PREVIEW_CHARS = 100;
@@ -75,6 +104,11 @@ public class SkillsScreen extends CharacterSheetScreen {
     private static final int COL_SCROLL_THUMB = 0xFFE8E8EE;
     /** Cor da barra que marca a skill selecionada. */
     private static final int COL_SELECTED = 0xFFFFC24D;
+    /**
+     * Cor do "X" de excluir. Vermelho claro: e a unica acao destrutiva da
+     * tela, entao precisa se destacar do nome da skill e do botao em si.
+     */
+    private static final int COL_REMOVE_ICON = 0xFFFF7070;
 
     /** Botao do nome de cada linha: clicar abre a descricao completa. */
     private final Button[] nameButtons = new Button[MAX_SKILL_ROWS];
@@ -131,8 +165,17 @@ public class SkillsScreen extends CharacterSheetScreen {
 
     /** Caixa para digitar o nome de uma nova skill. */
     private EditBox skillInput;
-    /** Caixa para digitar a descricao da nova skill (opcional). */
-    private EditBox descInput;
+    /**
+     * Caixa da descricao da nova skill (opcional), <b>multilinha</b>.
+     *
+     * <p>Usa o {@link MultiLineEditBox} vanilla em vez do {@link EditBox}: o
+     * descricao aceita ate {@link SheetData#SKILL_DESC_MAX} (10.000) caracteres
+     * e o {@code EditBox} e de uma linha so. O vanilla resolve a quebra de
+     * linha, o cursor, a selecao, a rolagem e a barra interna, e o Enter ja
+     * insere {@code "\n"} (confirmado no bytecode: cases 257 e 335 do
+     * {@code MultilineTextField.keyPressed} chamam {@code insertText("\n")}).
+     */
+    private MultiLineEditBox descInput;
 
     private boolean suppressNotify;
 
@@ -149,10 +192,20 @@ public class SkillsScreen extends CharacterSheetScreen {
 
         // Rodape de cima para baixo: nome -> descricao -> Add. O nome ACIMA da
         // descricao e o pedido do usuario; Add continua no fim, colado no Back.
+        //
+        // DECISAO DO USUARIO (26/09/2026): a descricao tem o TRIPLO da altura do
+        // campo de nome, para caber varias linhas de texto. O painel nao
+        // precisa crescer: skillRows e clamp(8, ...) e a lista encolhe sozinha
+        // quando falta espaco, que e o comportamento que o layout ja tinha.
+        // A 2*nameH (36px com rowH no teto de 20) e um custo pequeno frente a
+        // janela, mas o numero exato depende de this.height e muda com o GUI
+        // scale: quem mexer aqui deve olhar skillRows, nao estimar pixel.
         int backY = this.height - 24;
-        int addY = backY - rowH - 2;
-        int descY = addY - rowH - 2;
-        int nameY = descY - rowH - 2;
+        int nameH = rowH - 2;
+        int descH = 3 * nameH;
+        int addY = backY - nameH - 2;
+        int descY = addY - descH - 2;
+        int nameY = descY - nameH - 2;
 
         // A lista para antes da faixa do popup, e o popup fica entre a lista e
         // o campo de nome -- ou seja, abaixo da lista, como pedido.
@@ -161,21 +214,23 @@ public class SkillsScreen extends CharacterSheetScreen {
         skillScroll = 0;
 
         popupX = x0;
-        popupY = y + skillRows * rowH + 4;
+        popupY = y + skillRows * rowH + 16;
         popupW = panelW - 4;
         popupScroll = 0;
 
-        // Geometria das colunas: [ nome ..................... ][ X ]
-        int removeX = x0 + panelW - REMOVE_W;
-        // A barra da lista fica entre o nome e o botao X. So reserva espaco
-        // quando a lista realmente transborda, para nao estreitar o nome sem
-        // necessidade.
+        // Geometria das colunas: [ nome ..................... ][ X ][ respiro ][ barra ]
+        // O botao de excluir recua BAR_SLOT porque a barra e testada antes dos
+        // widgets em mouseClicked, e a area de clique da barra e
+        // BAR_W + 2 * BAR_PAD = 12px. Ver BAR_SLOT para a formula do respiro.
+        // O recuo so vale quando a lista transborda, porque a barra so e
+        // desenhada nesse caso. O nome perde a mesma medida so nesse caso.
         boolean listaTransborda = sheet != null && skillRows > 0
                 && sheet.skills().size() > skillRows;
-        int barReserved = listaTransborda ? BAR_W + BAR_PAD : 0;
-        int nameW = Math.max(24, removeX - 4 - barReserved - x0);
+        int barSlot = listaTransborda ? BAR_SLOT : 0;
+        int removeX = x0 + panelW - barSlot - REMOVE_SIZE - 16;
+        int nameW = Math.max(24, removeX - x0);
 
-        listBarX = removeX - BAR_PAD - BAR_W;
+        listBarX = x0 + panelW - BAR_W - BAR_PAD;
         listBarY = y;
         listBarH = Math.max(1, skillRows * rowH);
         draggingListBar = false;
@@ -187,8 +242,14 @@ public class SkillsScreen extends CharacterSheetScreen {
 
             nameButtons[i] = Button.builder(Component.literal(""),
                     b -> selectSkill(index)).bounds(x0, rowY, nameW, h).build();
-            removeButtons[i] = Button.builder(Component.literal("x"),
-                    b -> removeSkillAt(index)).bounds(removeX, rowY, REMOVE_W, h).build();
+            // Mensagem vazia de proposito: o "X" e desenhado a mao em
+            // renderRemoveIcon, que roda depois de super.render() e portanto por
+            // cima da caixa do botao. Delegar o glifo ao Button nao funcionou:
+            // a caixa aparecia e o "x" nao.
+            // Altura igual a da linha (10 a 18px): um quadrado de 20px
+            // transbordaria para a linha vizinha em janelas baixas.
+            removeButtons[i] = Button.builder(Component.literal(""),
+                    b -> removeSkillAt(index)).bounds(removeX, rowY, REMOVE_SIZE, h).build();
 
             boolean visible = i < skillRows;
             for (Button button : rowWidgets(i)) {
@@ -200,7 +261,7 @@ public class SkillsScreen extends CharacterSheetScreen {
         }
 
         // Adicionar skill: nome -> descricao -> Add (nesta ordem).
-        skillInput = new EditBox(this.font, x0, nameY, panelW - 4, rowH - 2,
+        skillInput = new EditBox(this.font, x0, nameY, panelW - 4, nameH,
                 Component.literal("new skill"));
         skillInput.setMaxLength(SheetData.SKILL_MAX);
         skillInput.setTextColor(COL_BOX_TEXT);
@@ -209,15 +270,26 @@ public class SkillsScreen extends CharacterSheetScreen {
         skillInput.setEditable(canEdit);
         addRenderableWidget(skillInput);
 
-        descInput = new EditBox(this.font, x0, descY, panelW - 4, rowH - 2,
-                Component.literal("description"));
+        // Descricao multilinha, com 3x a altura do campo de nome.
+        // Os 2 ultimos argumentos do build sao LARGURA e ALTURA (confirmado no
+        // bytecode do construtor: super(x, y, width, height, ...)).
+        descInput = MultiLineEditBox.builder()
+                .setX(x0)
+                .setY(descY)
+                .setPlaceholder(Component.literal("description (optional)"))
+                .setTextColor(COL_BOX_TEXT)
+                .setTextShadow(false)
+                .setCursorColor(COL_BOX_TEXT)
+                .build(this.font, panelW - 4, descH, Component.literal("description"));
         // Teto igual ao do modelo: acima disso o codec do servidor lancaria
-        // excecao ao decodificar.
-        descInput.setMaxLength(SheetData.SKILL_DESC_MAX);
-        descInput.setTextColor(COL_BOX_TEXT);
-        descInput.setTextColorUneditable(COL_BOX_TEXT_OFF);
-        descInput.setHint(Component.literal("description (optional)"));
-        descInput.setEditable(canEdit);
+        // excecao ao decodificar. No MultiLineEditBox o equivalente e
+        // setCharacterLimit (total de caracteres), e nao setLineLimit, que
+        // contaria as linhas visuais depois da quebra.
+        descInput.setCharacterLimit(SheetData.SKILL_DESC_MAX);
+        // O MultiLineEditBox nao tem setEditable. No lugar dele, active=false
+        // faz isMouseOver() responder false, o que impede clicar, focar e
+        // portanto digitar. Mesmo padrao ja usado nos botoes desta tela.
+        descInput.active = canEdit;
         addRenderableWidget(descInput);
 
         addRenderableWidget(Button.builder(Component.literal("Add"), b -> addSkill())
@@ -230,6 +302,27 @@ public class SkillsScreen extends CharacterSheetScreen {
         return List.of(nameButtons[row], removeButtons[row]);
     }
 
+    /**
+     * Desenha o "X" do botao de excluir, centrado na caixa do botao.
+     *
+     * <p>Desenhar aqui, e nao por {@code setMessage}, e o que garante o glifo:
+     * {@code super.render()} ja pintou a caixa do {@link Button} e este metodo
+     * roda depois, dentro do mesmo {@code render}, entao o "X" fica por cima.
+     *
+     * <p>Usa "X" maiusculo em vez de "x": em 6px de largura a minuscula
+     * ficava indistinguivel de um borrão dentro de uma caixa de 20px.
+     */
+    private void renderRemoveIcon(GuiGraphics graphics, Button button) {
+        if (button == null || !button.visible) {
+            return;
+        }
+        String icon = "X";
+        int textW = this.font.width(icon);
+        int tx = button.getX() + (button.getWidth() - textW) / 2;
+        int ty = button.getY() + (button.getHeight() - 8) / 2;
+        graphics.drawString(this.font, icon, tx, ty, COL_REMOVE_ICON, false);
+    }
+
     // ------------------------------------------------------------------
     // SINCRONIA
     // ------------------------------------------------------------------
@@ -240,7 +333,7 @@ public class SkillsScreen extends CharacterSheetScreen {
             skillInput.setEditable(canEdit);
         }
         if (descInput != null) {
-            descInput.setEditable(canEdit);
+            descInput.active = canEdit;
         }
         for (int i = 0; i < MAX_SKILL_ROWS; i++) {
             for (Button button : rowWidgets(i)) {
@@ -443,6 +536,14 @@ public class SkillsScreen extends CharacterSheetScreen {
      */
     @Override
     public boolean mouseScrolled(double mouseX, double mouseY, double deltaX, double deltaY) {
+        // O campo de descricao e um widget, entao precisa receber a roda para
+        // rolar as linhas que nao cabem na altura dele. Esta tela consome a
+        // roda e nunca repassava, entao um texto maior que o campo ficava
+        // travado sem rolagem. Os botoes devolvem false, e o popup nao e
+        // widget, entao lista e popup continuam exatamente como antes.
+        if (super.mouseScrolled(mouseX, mouseY, deltaX, deltaY)) {
+            return true;
+        }
         // Convencao do vanilla: deltaY NEGATIVO e rolar para BAIXO, e rolar
         // para baixo tem que AVANCAR o conteudo. Antes o passo era
         // `deltaY > 0 ? -1 : 1` combinado com `scroll - step`, o que dava
@@ -506,6 +607,8 @@ public class SkillsScreen extends CharacterSheetScreen {
                 graphics.fill(bx, by, bx + 2, by + nameButtons[i].getHeight(), COL_SELECTED);
             }
 
+            renderRemoveIcon(graphics, removeButtons[i]);
+
             if (buttonOver(nameButtons[i], mouseX, mouseY) && !skill.description().isEmpty()) {
                 hoveredPreview = skill.description();
             }
@@ -560,7 +663,17 @@ public class SkillsScreen extends CharacterSheetScreen {
         if (skill == null || skill.description().isEmpty()) {
             return null;
         }
-        return this.font.split(Component.literal(skill.description()), Math.max(40, popupW - 10));
+        // A largura da quebra DEVE incluir a coluna da barra de rolagem.
+        // Feedback do usuario (26/09/2026): a barra ficava por cima do texto.
+        // Geometria: o texto comeca em popupX + 5 e a barra em popupX + popupW
+        // - BAR_W - BAR_PAD, entao o texto pode chegar a popupX + popupW - 5 e
+        // invadir os 4px do trilho. Cortando em popupW - 17 o texto para em
+        // popupX + popupW - 12, tres px antes da barra.
+        // A reserva e SEMPRE, e nao so quando o texto transborda: se a largura
+        // dependesse da barra, o texto reflutuaria no instante em que ela
+        // aparecesse, e o popup daria um salto visivel.
+        return this.font.split(Component.literal(skill.description()),
+                Math.max(40, popupW - 17));
     }
 
     /**
@@ -633,13 +746,6 @@ public class SkillsScreen extends CharacterSheetScreen {
         for (int i = 0; i < visible && popupScroll + i < lines.size(); i++) {
             graphics.drawString(this.font, lines.get(popupScroll + i),
                     popupX + 5, popupY + 5 + i * POPUP_LINE_H, COL_BOX_TEXT, false);
-        }
-        if (maxScroll > 0) {
-            int restantes = lines.size() - popupScroll - visible;
-            String more = restantes + " linhas abaixo (arraste a barra)";
-            graphics.drawString(this.font, more,
-                    popupX + popupW - this.font.width(more) - BAR_W - 2 * BAR_PAD - 2,
-                    popupY + boxH - 11, COL_MUTED, false);
         }
     }
 
