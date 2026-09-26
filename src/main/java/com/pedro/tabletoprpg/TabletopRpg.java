@@ -17,13 +17,13 @@ public class TabletopRpg implements ModInitializer {
 	public void onInitialize() {
 		LOGGER.info("[TabletopRPG] Inicializando o mod...");
 
-		// Registra os handlers de intera├º├úo (ataque, uso de bloco/item/entidade)
+		// Registra os handlers de interação (ataque, uso de bloco/item/entidade)
 		PlayerControlHandler.register();
 
-		// Registra as regras de dano da sess├úo (jogadores e mobs imunes a dano f├¡sico)
+		// Registra as regras de dano da sessão (jogadores e mobs imunes a dano físico)
 		DamageControlHandler.register();
 
-		// Registra o controle de combate (sele├º├úo/movimento de monstros, auras, highlight)
+		// Registra o controle de combate (seleção/movimento de monstros, auras, highlight)
 		CombatController.register();
 
 		// Registra os comandos do Mestre (/rpg ...)
@@ -32,6 +32,10 @@ public class TabletopRpg implements ModInitializer {
 		// Registra os payloads de rede (comum) e os receptores do lado servidor
 		RpgNetworking.registerPayloads();
 		RpgNetworking.registerServerReceivers();
+
+		// Grava a ficha de cada jogador no encerramento do servidor (Ctrl+C).
+		// Sem isso a ficha vive so no mapa estatico e se perde ao fechar.
+		SheetPersistenceEvents.register();
 
 		LOGGER.info("[TabletopRPG] Mod inicializado com sucesso.");
 	}

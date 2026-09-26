@@ -4,7 +4,8 @@
   "package": "com.pedro.tabletoprpg.mixin",
   "compatibilityLevel": "JAVA_21",
   "mixins": [
-    "PlayerPoseMixin"
+    "PlayerPoseMixin",
+    "PlayerSheetPersistenceMixin"
   ],
   "server": [
     "ServerGamePacketListenerImplMixin",

@@ -103,13 +103,34 @@ public final class RpgNetworking {
         }
     }
 
-    /** Servidor -> Cliente: informa se o jogador está travado (não pode se mover). */
-    public record PlayerLockPayload(boolean locked) implements CustomPacketPayload {
+    /**
+     * Servidor -&gt; Cliente: informa se o jogador está travado (não pode se
+     * mover) e em que modo de jogo a sessão está.
+     *
+     * <p><b>Por que o modo veio junto (25/09/2026):</b> o cliente só conhecia o
+     * booleano {@code locked}, e a câmera precisa de uma informação diferente:
+     * a câmera <b>livre</b> só pode ser usada no modo Livre — nos modos
+     * Investigação e Combate valem apenas as câmeras de terceira, primeira e
+     * de cima. " travado" e "modo Livre" sao coisas diferentes: no modo Livre
+     * ninguem fica travado, e mesmo assim a câmera livre precisa existir.
+     * Sem o modo no cliente, a distinção seria impossível.
+     *
+     * <p>O modo viaja como <b>ordinal</b> (VAR_INT) e nao como enum roteado,
+     * para nao acoplar este payload ao {@code SessionManager.GameMode}: assim o
+     * cliente valida o indice e cai em um valor seguro, em vez de lancar.
+     */
+    public record PlayerLockPayload(boolean locked, int modeOrdinal) implements CustomPacketPayload {
         public static final Type<PlayerLockPayload> TYPE = new Type<>(TabletopRpg.id("player_lock"));
         public static final StreamCodec<FriendlyByteBuf, PlayerLockPayload> STREAM_CODEC = StreamCodec.composite(
                 ByteBufCodecs.BOOL, PlayerLockPayload::locked,
+                ByteBufCodecs.VAR_INT, PlayerLockPayload::modeOrdinal,
                 PlayerLockPayload::new
         );
+
+        /** Atalho: monta o payload com o modo de sessão atual. */
+        public static PlayerLockPayload of(boolean locked, SessionManager.GameMode mode) {
+            return new PlayerLockPayload(locked, mode == null ? 0 : mode.ordinal());
+        }
 
         @Override
         public Type<? extends CustomPacketPayload> type() {
@@ -475,49 +496,70 @@ public final class RpgNetworking {
     }
 
     /**
-     * Cliente -&gt; Servidor: adiciona (add=true) ou remove (add=false) uma
-     * habilidade.
+     * Cliente -&gt; Servidor: adiciona ou remove uma <b>skill</b> (nome + descrição).
      *
-     * <p>Os campos {@code description}, {@code value} e {@code attribute} só
-     * são usados quando o {@code op} é {@code ADD}; as demais operações mexem
-     * só no campo indicado, para que um clique de seta não sobrescreva a
-     * descrição digitada. Campo novo em payload existente: cliente e servidor
-     * precisam da mesma versão do mod, senão a conexão cai no handshake.
+     * <p>A skill é a lista <b>live</b> da ficha: o jogador monta do zero o que
+     * ele sabe fazer. Por isso este payload não viaja valor nem atributo — o que
+     * uma perícia soma na rolagem é assunto da {@link SheetPericiaPayload}.
+     * Os dois são pacotes diferentes justamente para que mexer na lista de
+     * perícias não possa alterar a lista de skills (e vice-versa).
      */
-    public record SheetSkillPayload(String targetName, String skill, SheetData.SkillOp op, String description,
-                                    int value, SheetData.Attribute attribute) implements CustomPacketPayload {
+    public record SheetSkillPayload(String targetName, String skill, SheetData.SkillOp op,
+                                    String description) implements CustomPacketPayload {
         public static final Type<SheetSkillPayload> TYPE = new Type<>(TabletopRpg.id("sheet_skill"));
         public static final StreamCodec<FriendlyByteBuf, SheetSkillPayload> STREAM_CODEC = StreamCodec.composite(
                 ByteBufCodecs.stringUtf8(64), SheetSkillPayload::targetName,
                 ByteBufCodecs.stringUtf8(SheetData.SKILL_MAX), SheetSkillPayload::skill,
                 SheetData.SkillOp.STREAM_CODEC, SheetSkillPayload::op,
                 ByteBufCodecs.stringUtf8(SheetData.SKILL_DESC_MAX), SheetSkillPayload::description,
-                ByteBufCodecs.VAR_INT, SheetSkillPayload::value,
-                SheetData.Attribute.STREAM_CODEC, SheetSkillPayload::attribute,
                 SheetSkillPayload::new
         );
 
-        /** Atalho: criar/atualizar uma pericia com todos os campos. */
-        public static SheetSkillPayload add(String targetName, String skill, String description, int value,
-                                            SheetData.Attribute attribute) {
-            return new SheetSkillPayload(targetName, skill, SheetData.SkillOp.ADD, description, value, attribute);
+        /** Atalho: criar a skill, ou atualizar a descrição se o nome já existir. */
+        public static SheetSkillPayload add(String targetName, String skill, String description) {
+            return new SheetSkillPayload(targetName, skill, SheetData.SkillOp.ADD, description);
         }
 
-        /** Atalho: remover a pericia pelo nome (so o nome importa). */
+        /** Atalho: remover a skill pelo nome (só o nome importa). */
         public static SheetSkillPayload remove(String targetName, String skill) {
-            return new SheetSkillPayload(targetName, skill, SheetData.SkillOp.REMOVE, "", 0,
+            return new SheetSkillPayload(targetName, skill, SheetData.SkillOp.REMOVE, "");
+        }
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
+    /**
+     * Cliente -&gt; Servidor: muda o <b>valor</b> ou o <b>atributo</b> de uma perícia.
+     *
+     * <p>Não existe "add" nem "remove" aqui, de propósito: a lista de perícias
+     * é fixa (definida em {@link SheetData#PERICIAS_PADRAO}) e o jogador só
+     * ajusta estes dois campos. Se o nome não estiver na lista, o servidor
+     * ignora — a lista não cresce nem encolhe pela rede.
+     */
+    public record SheetPericiaPayload(String targetName, String pericia, SheetData.PericiaOp op, int value,
+                                      SheetData.Attribute attribute) implements CustomPacketPayload {
+        public static final Type<SheetPericiaPayload> TYPE = new Type<>(TabletopRpg.id("sheet_pericia"));
+        public static final StreamCodec<FriendlyByteBuf, SheetPericiaPayload> STREAM_CODEC = StreamCodec.composite(
+                ByteBufCodecs.stringUtf8(64), SheetPericiaPayload::targetName,
+                ByteBufCodecs.stringUtf8(SheetData.SKILL_MAX), SheetPericiaPayload::pericia,
+                SheetData.PericiaOp.STREAM_CODEC, SheetPericiaPayload::op,
+                ByteBufCodecs.VAR_INT, SheetPericiaPayload::value,
+                SheetData.Attribute.STREAM_CODEC, SheetPericiaPayload::attribute,
+                SheetPericiaPayload::new
+        );
+
+        /** Atalho: mexer só no valor (setas da lista de perícias no Status). */
+        public static SheetPericiaPayload setValue(String targetName, String pericia, int value) {
+            return new SheetPericiaPayload(targetName, pericia, SheetData.PericiaOp.SET_VALUE, value,
                     SheetData.Attribute.DEXTERITY);
         }
 
-        /** Atalho: mexer so no valor (setas da tela de Skills). */
-        public static SheetSkillPayload setValue(String targetName, String skill, int value) {
-            return new SheetSkillPayload(targetName, skill, SheetData.SkillOp.SET_VALUE, "", value,
-                    SheetData.Attribute.DEXTERITY);
-        }
-
-        /** Atalho: mexer so no atributo (botao de lista suspensa). */
-        public static SheetSkillPayload setAttribute(String targetName, String skill, SheetData.Attribute attribute) {
-            return new SheetSkillPayload(targetName, skill, SheetData.SkillOp.SET_ATTRIBUTE, "", 0, attribute);
+        /** Atalho: mexer só no atributo (botão de lista suspensa). */
+        public static SheetPericiaPayload setAttribute(String targetName, String pericia, SheetData.Attribute attribute) {
+            return new SheetPericiaPayload(targetName, pericia, SheetData.PericiaOp.SET_ATTRIBUTE, 0, attribute);
         }
 
         @Override
@@ -587,6 +629,7 @@ public final class RpgNetworking {
         PayloadTypeRegistry.playS2C().register(SheetStatePayload.TYPE, SheetStatePayload.STREAM_CODEC);
         PayloadTypeRegistry.playC2S().register(SheetFieldPayload.TYPE, SheetFieldPayload.STREAM_CODEC);
         PayloadTypeRegistry.playC2S().register(SheetSkillPayload.TYPE, SheetSkillPayload.STREAM_CODEC);
+        PayloadTypeRegistry.playC2S().register(SheetPericiaPayload.TYPE, SheetPericiaPayload.STREAM_CODEC);
         PayloadTypeRegistry.playS2C().register(DownedStatePayload.TYPE, DownedStatePayload.STREAM_CODEC);
     }
 
@@ -813,20 +856,38 @@ public final class RpgNetworking {
                 return;
             }
             SheetData current = SessionManager.getOrCreateSheet(target.getUUID(), target.getName().getString());
-            // SkillOp.ADD cria OU atualiza os 4 campos; as demais operações
-            // tocam só o campo pedido, preservando a descrição digitada.
+            // SkillOp.ADD cria OU atualiza a descrição, se o nome já existir.
             SheetData updated = switch (payload.op() == null ? SheetData.SkillOp.INVALID : payload.op()) {
-                case ADD -> current.withSkill(payload.skill(), payload.description(), payload.value(),
-                        payload.attribute());
+                case ADD -> current.withSkill(payload.skill(), payload.description());
                 case REMOVE -> current.withoutSkill(payload.skill());
-                case SET_VALUE -> current.withSkillValue(payload.skill(), payload.value());
-                case SET_ATTRIBUTE -> current.withSkillAttribute(payload.skill(), payload.attribute());
-                // Pacote corrompido: melhor nao fazer nada do que sobrescrever
-                // os 4 campos da pericia com os zeros que vem no payload.
+                // Pacote corrompido: melhor não fazer nada do que transformar
+                // um índice inválido em "criar skill".
                 case INVALID -> current;
             };
             if (updated == current) {
-                return; // pericia duplicada/inexistente, lista cheia, ou nada mudou
+                return; // skill inexistente no REMOVE, lista cheia, ou nada mudou
+            }
+            SessionManager.setSheet(target.getUUID(), updated);
+            broadcastSheet(target);
+        });
+
+        // Muda o VALOR ou o ATRIBUTO de uma PERÍCIA. A lista de perícias é
+        // fixa, então este pacote não cria nem remove nada — e vale a mesma
+        // regra de permissão dos outros campos da ficha.
+        ServerPlayNetworking.registerGlobalReceiver(SheetPericiaPayload.TYPE, (payload, context) -> {
+            ServerPlayer sender = context.player();
+            ServerPlayer target = resolveSheetTarget(sender, payload.targetName());
+            if (target == null || !canEditSheet(sender, target)) {
+                return;
+            }
+            SheetData current = SessionManager.getOrCreateSheet(target.getUUID(), target.getName().getString());
+            SheetData updated = switch (payload.op() == null ? SheetData.PericiaOp.INVALID : payload.op()) {
+                case SET_VALUE -> current.withPericiaValue(payload.pericia(), payload.value());
+                case SET_ATTRIBUTE -> current.withPericiaAttribute(payload.pericia(), payload.attribute());
+                case INVALID -> current;
+            };
+            if (updated == current) {
+                return; // perícia fora da lista fixa, ou o valor não mudou
             }
             SessionManager.setSheet(target.getUUID(), updated);
             broadcastSheet(target);
@@ -957,12 +1018,19 @@ public final class RpgNetworking {
     // ENVIO
     // ------------------------------------------------------------------
 
-    /** Envia o estado de "trava" (congelamento) para um jogador. Usado no JOIN e em mudanças de modo/turno. */
+    /**
+     * Envia o estado de "trava" (congelamento) e o modo de sessão para um
+     * jogador. Usado no JOIN e em mudanças de modo/turno.
+     *
+     * <p>O modo viaja junto porque a câmera do cliente decide se a câmera livre
+     * pode ser usada — e isso depende do modo, não da trava.
+     */
     public static void sendLockToPlayer(ServerPlayer player) {
         if (player == null || player.connection == null) {
             return;
         }
-        ServerPlayNetworking.send(player, new PlayerLockPayload(!SessionManager.canPlayerAct(player)));
+        ServerPlayNetworking.send(player,
+                PlayerLockPayload.of(!SessionManager.canPlayerAct(player), SessionManager.getMode()));
     }
 
     /**

@@ -30,6 +30,13 @@ public abstract class MinecraftMixin {
 
     @Inject(method = "handleKeybinds", at = @At("HEAD"))
     private void tabletopRpg$spectatorControls(CallbackInfo ci) {
+        // Somente no modo espectador (jogador travado em Investigacao/Combate).
+        //
+        // Fora dele o F5 precisa funcionar normalmente: a perspectiva e uma
+        // escolha do jogador no proprio Minecraft e ele espera que ela volte
+        // quando a camera livre for desligada com V (decisao do usuario em
+        // 25/09/2026). Antes, a camera livre ligada engolia o F5 e o jogador
+        // ficava preso na perspectiva em que o V tinha encontrado.
         if (TabletopRpgClient.locked) {
             // Carrossel de espectador: clique esquerdo = próximo, direito = anterior.
             while (this.options.keyAttack.consumeClick()) {

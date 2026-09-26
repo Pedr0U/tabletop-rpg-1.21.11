@@ -56,6 +56,26 @@ public class TabletopRpgClient implements ClientModInitializer {
     public static volatile boolean locked = false;
 
     /**
+     * Modo de jogo da sessao, como <b>ordinal</b> de
+     * {@link com.pedro.tabletoprpg.SessionManager.GameMode}.
+     *
+     * <p><b>Por que o cliente precisa saber (25/09/2026):</b> a camera livre
+     * so pode ser usada no modo Livre. Nos modos Investigacao e Combate valem
+     * apenas as cameras de terceira, primeira e de cima. Isso nao pode ser
+     * deduzido de {@link #locked}: no modo Livre ninguem fica travado, e mesmo
+     * assim a camera livre precisa existir.
+     *
+     * <p>Guarda o ordinal, e nao o enum, para nao acoplar o cliente a uma
+     * classe do servidor. {@link #isFreeMode()} valida o indice.
+     */
+    public static volatile int gameModeOrdinal = 0;
+
+    /** true quando a sessao esta no modo Livre (onde a camera livre e permitida). */
+    public static boolean isFreeMode() {
+        return gameModeOrdinal == 0; // SessionManager.GameMode.FREE
+    }
+
+    /**
      * True quando o personagem está <b>deitado</b> (HP da ficha &lt;= 0).
      *
      * <p><b>FACT (regra do usuário):</b> HP &lt;= 0 deixa o personagem deitado
@@ -262,10 +282,17 @@ public class TabletopRpgClient implements ClientModInitializer {
             });
         });
 
-        // Estado de "trava" do jogador -> atualiza o campo locked.
+        // Estado de "trava" do jogador e modo da sessao -> atualiza os campos.
+        // O modo vem no mesmo payload porque a camera precisa dos dois: a trava
+        // decide se a camara de espectador liga, e o modo decide se a camera
+        // livre pode ser escolhida.
         ClientPlayNetworking.registerGlobalReceiver(RpgNetworking.PlayerLockPayload.TYPE, (payload, context) -> {
             context.client().execute(() -> {
                 locked = payload.locked();
+                // Indice invalido cai em Livre: e' o unico modo em que nada
+                // fica travado, entao e' o fallback que menos prende o jogador.
+                int ordinal = payload.modeOrdinal();
+                gameModeOrdinal = (ordinal >= 0 && ordinal <= 2) ? ordinal : 0;
             });
         });
 
