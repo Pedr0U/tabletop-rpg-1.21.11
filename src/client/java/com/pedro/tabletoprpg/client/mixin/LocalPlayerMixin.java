@@ -22,7 +22,16 @@ public abstract class LocalPlayerMixin {
 
     @Inject(method = "aiStep", at = @At("HEAD"), cancellable = true)
     private void tabletopRpg$freezeWhenLocked(CallbackInfo ci) {
-        if (TabletopRpgClient.locked) {
+        // "locked" = nao e o turno dele. "downed" = HP da ficha <= 0 (deitado,
+        // nao morto). Nos dois casos o personagem fica parado.
+        //
+        // <p><b>Nao e este mixin que segura a pose deitado.</b> A pose e
+        // recalculada em Player.tick() -> updatePlayerPose(), que NAO passa por
+        // aiStep(); por isso o comentario antigo deste metodo (afirmando o
+        // contrario) estava errado e o personagem levantava assim que ficava
+        // deitado. A pose agora e mantida em ClientPlayerPoseMixin. Aqui so
+        // importa bloquear o movimento.
+        if (TabletopRpgClient.locked || TabletopRpgClient.downed) {
             ci.cancel();
         }
     }

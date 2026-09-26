@@ -2,6 +2,8 @@ package com.pedro.tabletoprpg;
 
 import net.minecraft.server.level.ServerPlayer;
 
+import java.util.HashMap;
+import java.util.Map;
 import java.util.UUID;
 
 public class SessionManager {
@@ -58,6 +60,20 @@ public class SessionManager {
      * mostra o que o mestre escolheu e não "volta" durante a transição.
      */
     private static int weatherTarget = 0;
+
+    /**
+     * Fichas de personagem (FASE 3), uma por jogador, em memória do servidor.
+     *
+     * <p>A chave é o UUID do dono da ficha, e não o nome: o nome pode mudar
+     * (ou colidir em LAN) enquanto a sessão acontece, e as permissões de
+     * edição dependem da identidade, não do rótulo.
+     *
+     * <p><b>PERSISTÊNCIA (pendente, fase futura):</b> este mapa é volátil —
+     * as fichas se perdem quando o servidor fecha. O próximo passo é salvar
+     * por-jogador em disco (JSON na pasta do mundo) e carregar em
+     * {@link #getOrCreateSheet(UUID, String)}.
+     */
+    private static final Map<UUID, SheetData> characterSheets = new HashMap<>();
 
     public static String getSessionName() {
         return sessionName;
@@ -158,6 +174,52 @@ public class SessionManager {
 
     public static void setWeatherTarget(int weather) {
         weatherTarget = Math.max(0, Math.min(weather, 2));
+    }
+
+    // ------------------------------------------------------------------
+    // FICHAS DE PERSONAGEM (FASE 3)
+    // ------------------------------------------------------------------
+
+    /**
+     * Ficha de um jogador, ou null se ele ainda não tiver uma.
+     *
+     * <p>Use {@link #getOrCreateSheet(UUID, String)} quando a intenção for
+     * "me dá a ficha, criando se preciso" (abrir a tela). Use este quando a
+     * ausência é relevante (ex.: não criar ficha por mera checagem).
+     */
+    public static SheetData getSheet(UUID playerUuid) {
+        return playerUuid == null ? null : characterSheets.get(playerUuid);
+    }
+
+    /**
+     * Ficha de um jogador, criando a ficha padrão na primeira vez.
+     * O nome da conta é usado como nome inicial do personagem.
+     */
+    public static SheetData getOrCreateSheet(UUID playerUuid, String playerName) {
+        if (playerUuid == null) {
+            return SheetData.defaultSheet("");
+        }
+        return characterSheets.computeIfAbsent(playerUuid, uuid -> SheetData.defaultSheet(playerName));
+    }
+
+    /** Substitui a ficha de um jogador. */
+    public static void setSheet(UUID playerUuid, SheetData sheet) {
+        if (playerUuid == null || sheet == null) {
+            return;
+        }
+        characterSheets.put(playerUuid, sheet);
+    }
+
+    /** Remove a ficha de um jogador (ex.: desconexão definitiva). */
+    public static void removeSheet(UUID playerUuid) {
+        if (playerUuid != null) {
+            characterSheets.remove(playerUuid);
+        }
+    }
+
+    /** Quantas fichas existem na sessão (usado no log de diagnóstico). */
+    public static int sheetCount() {
+        return characterSheets.size();
     }
 
     public static boolean canPlayerAct(ServerPlayer player) {

@@ -102,7 +102,17 @@ public class RpgMenuScreen extends Screen {
 
         int y = startY + 60;
 
-        y = addButton("Players", x, y, () -> openPlayers());
+        // Botoes por papel (feedback do usuario):
+        //  - Jogador: Status, Skills, Rolls, Settings (+ End Turn no turno dele).
+        //  - Mestre: Players, Rolls, Settings. O mestre NAO tem ficha propria
+        //    (sem "My Sheet") e o jogador NAO tem "Players".
+        if (isMaster) {
+            y = addButton("Players", x, y, () -> openPlayers());
+        } else {
+            y = addButton("Status", x, y, () -> openStatus());
+            y = addButton("Skills", x, y, () -> openSkills());
+        }
+
         y = addButton("Rolls", x, y, () -> {
             if (this.minecraft != null) {
                 this.minecraft.setScreen(new DiceRollScreen(this));
@@ -123,10 +133,32 @@ public class RpgMenuScreen extends Screen {
         }
     }
 
+    /**
+     * Abre o Status da propria ficha (FASE 3b).
+     *
+     * <p>Abre a tela <b>antes</b> de pedir a ficha: se a resposta do servidor
+     * chegasse antes de a tela existir, o receptor nao teria onde entrega-la e
+     * ela ficaria presa em "Loading".
+     */
+    private void openStatus() {
+        if (this.minecraft != null) {
+            this.minecraft.setScreen(new StatusScreen("", this));
+            TabletopRpgClient.requestSheet("");
+        }
+    }
+
+    /** Abre a tela de Skills da propria ficha. */
+    private void openSkills() {
+        if (this.minecraft != null) {
+            this.minecraft.setScreen(new SkillsScreen("", this));
+            TabletopRpgClient.requestSheet("");
+        }
+    }
+
     /** Abre a tela de lista de jogadores. */
     private void openPlayers() {
         if (this.minecraft != null) {
-            this.minecraft.setScreen(new PlayerListScreen(playerNames, activePlayerName, sessionName, this));
+            this.minecraft.setScreen(new PlayerListScreen(playerNames, activePlayerName, sessionName, isMaster, this));
         }
     }
 

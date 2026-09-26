@@ -84,12 +84,15 @@ public class MasterCommands {
                     .then(Commands.literal("finish")
                         .executes(MasterCommands::finishTurn)))
 
-                // /rpg roll <formula>  ex: d20, 2d6, d20+10, 2d6+d4+3
+                // /rpg roll                  -> lista as pericias da ficha
+                // /rpg roll <pericia>         -> 1d20 + valor da pericia + atributo
+                // /rpg roll <formula>         -> d20, 2d6, d20+10, 2d6+d4+3
                 // Mestre: resultado privado. Jogador: resultado público.
                 .then(Commands.literal("roll")
-                    .executes(ctx -> rollFormula(ctx, "d20"))
+                    .executes(MasterCommands::listSkills)
                     .then(Commands.argument("formula", StringArgumentType.greedyString())
-                        .executes(ctx -> rollFormula(ctx, StringArgumentType.getString(ctx, "formula")))))
+                        .suggests(MasterCommands::suggestSkills)
+                        .executes(MasterCommands::rollOrSkill)))
 
                 // /rpg openroll <formula>  (só o mestre) -> rolagem pública para todos
                 .then(Commands.literal("openroll")
@@ -417,6 +420,161 @@ public class MasterCommands {
 
     private static final Pattern DICE_TERM = Pattern.compile("^(\\d*)[dD](\\d+)$");
     private static final Pattern MODIFIER_TERM = Pattern.compile("^\\d+$");
+
+    /**
+     * Decide o que {@code /rpg roll <argumento>} quer dizer: o nome de uma
+     * pericia da ficha, ou uma formula de dados.
+     *
+     * <p><b>Por que as duas coisas no mesmo comando:</b> o jogador ja tem
+     * "/rpg roll" na mao e a nova regra de pericias ({@code 1d20 + valor +
+     * atributo}) e a rolagem que ele mais vai fazer. Se exigisse um comando
+     * novo, ele teria que aprender dois comandos. O nome da pericia so e
+     * reconhecido quando casa <b>exatamente</b> com o nome guardado; qualquer
+     * outra coisa cai na formula, entao {@code d20} continua funcionando.
+     */
+    private static int rollOrSkill(CommandContext<CommandSourceStack> ctx) {
+        String raw = StringArgumentType.getString(ctx, "formula");
+        ServerPlayer player = playerOf(ctx);
+        if (player == null) {
+            return 0;
+        }
+        SheetData.Skill skill = findSkill(player, raw);
+        if (skill != null) {
+            return rollSkill(ctx, player, skill);
+        }
+        return rollFormula(ctx, raw);
+    }
+
+    /** Sender como jogador, ou {@code null} (com a mensagem de erro ja enviada). */
+    private static ServerPlayer playerOf(CommandContext<CommandSourceStack> ctx) {
+        try {
+            return ctx.getSource().getPlayerOrException();
+        } catch (Exception e) {
+            ctx.getSource().sendFailure(Component.literal("§cOnly players can roll dice."));
+            return null;
+        }
+    }
+
+    /**
+     * Procura uma pericia pelo nome, sem diferenciar maiusculas e espacos.
+     *
+     * <p>Os nomes padrao includem acento ("perícia 0"), e o jogador digita
+     * "pericia 0" no teclado sem acento: por isso a comparacao tambem ignora
+     * acentos. Devolve {@code null} se nao casar -- o chamador entao trata o
+     * texto como formula.
+     */
+    private static SheetData.Skill findSkill(ServerPlayer player, String raw) {
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        String wanted = normalize(raw);
+        SheetData sheet = SessionManager.getSheet(player.getUUID());
+        if (sheet == null) {
+            return null;
+        }
+        for (SheetData.Skill skill : sheet.skills()) {
+            if (normalize(skill.name()).equals(wanted)) {
+                return skill;
+            }
+        }
+        return null;
+    }
+
+    /** Minusculas, sem acento e sem espacos extras, so para comparar nomes. */
+    private static String normalize(String text) {
+        String plain = java.text.Normalizer.normalize(text, java.text.Normalizer.Form.NFD)
+                .replaceAll("\\p{M}", ""); // tira o acento, deixa a letra
+        return plain.trim().replaceAll("\\s+", " ").toLowerCase(java.util.Locale.ROOT);
+    }
+
+    /**
+     * Rola a pericia: {@code 1d20 + valor + atributo}.
+     *
+     * <p><b>Fórmula (pedido do usuario):</b> um d20, o valor da pericia (0-3) e
+     * o atributo que ela soma. Ex.: "Luta 2 + FOR 3" = 1d20 + 5. O resultado
+     * e separado em "1d20 (12) + 2 + 3 = 17" para o jogador ver de onde saiu.
+     *
+     * <p>A aritmética e feita em {@code long} e convertida no fim: o atributo
+     * nao tem teto (decisao do usuario), e {@code int} estouraria com um
+     * atributo absurdo e mostraria um numero negativo na rolagem.
+     *
+     * <p>Visibilidade igual a {@code /rpg roll} normal: o mestre ve so para si,
+     * o jogador ve para todos.
+     */
+    private static int rollSkill(CommandContext<CommandSourceStack> ctx, ServerPlayer player,
+                                 SheetData.Skill skill) {
+        SheetData sheet = SessionManager.getSheet(player.getUUID());
+        // RNG do servidor (exigido pelo .docx: o cliente nao pode prever o
+        // resultado). CommandSourceStack#getRandom e MinecraftServer#getRandom
+        // nao existem nesta versao; Entity#getRandom devolve o RandomSource do
+        // level, que e exatamente o do servidor.
+        int die = 1 + player.getRandom().nextInt(20);
+        long attrValue = sheet.getNumeric(skill.attribute().field());
+        long total = (long) die + skill.value() + attrValue;
+
+        String message = "§6§l" + player.getName().getString() + " §frolled §6" + skill.name() + "§f: "
+                + "§7d20 §f(§e" + die + "§f) + §7" + skill.value()
+                + " + §7" + skill.attribute().abbr() + " " + attrValue
+                + " = §e§l" + total;
+
+        if (SessionManager.isMaster(player)) {
+            player.sendSystemMessage(Component.literal(message));
+        } else {
+            broadcast(ctx, message);
+        }
+        return 1;
+    }
+
+    /**
+     * {@code /rpg roll} sem argumento: lista as pericias com o quanto cada uma
+     * soma, para o jogador lembrar o nome exato e o total.
+     *
+     * <p><b>Mudança de comportamento:</b> antes este comando rolava {@code d20}
+     * fixo. Virou lista porque é o que o jogador precisa descobrir; quem quiser
+     * o d20 puro escreve {@code /rpg roll d20}.
+     */
+    private static int listSkills(CommandContext<CommandSourceStack> ctx) {
+        ServerPlayer player = playerOf(ctx);
+        if (player == null) {
+            return 0;
+        }
+        SheetData sheet = SessionManager.getSheet(player.getUUID());
+        if (sheet == null || sheet.skills().isEmpty()) {
+            ctx.getSource().sendFailure(Component.literal("§cNo skills on this sheet."));
+            return 0;
+        }
+
+        ctx.getSource().sendSystemMessage(Component.literal(
+                "§6Skills §7(§f/rpg roll <name>§7): " + sheet.skills().size()));
+        for (SheetData.Skill skill : sheet.skills()) {
+            long attr = sheet.getNumeric(skill.attribute().field());
+            ctx.getSource().sendSystemMessage(Component.literal(
+                    "§7- §f" + skill.name() + " §8| §e" + skill.value()
+                            + " §7+ §e" + attr + " §8(" + skill.attribute().abbr() + ")"
+                            + " §8= §e" + (skill.value() + attr)));
+        }
+        return sheet.skills().size();
+    }
+
+    /** Autocompletar os nomes de pericia da ficha, junto das fórmulas. */
+    private static CompletableFuture<Suggestions> suggestSkills(CommandContext<CommandSourceStack> ctx,
+                                                                SuggestionsBuilder builder) {
+        String remaining = builder.getRemainingLowerCase();
+        try {
+            ServerPlayer player = ctx.getSource().getPlayerOrException();
+            SheetData sheet = SessionManager.getSheet(player.getUUID());
+            if (sheet != null) {
+                for (SheetData.Skill skill : sheet.skills()) {
+                    if (normalize(skill.name()).startsWith(remaining)) {
+                        builder.suggest(skill.name());
+                    }
+                }
+            }
+        } catch (Exception e) {
+            // Sem jogador (console / block command): só sugere fórmulas.
+        }
+        return builder.buildFuture();
+    }
 
     /**
      * Rola uma fórmula de dados no formato "d20", "2d6", "d20+10",

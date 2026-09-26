@@ -5,11 +5,13 @@ import com.pedro.tabletoprpg.RpgNetworking;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
+import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.minecraft.client.Camera;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
 import net.minecraft.world.entity.Mob;
+import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.entity.projectile.ProjectileUtil;
 import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.phys.AABB;
@@ -22,6 +24,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.List;
+import java.util.Set;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class TabletopRpgClient implements ClientModInitializer {
     public static final Logger LOGGER = LoggerFactory.getLogger("tabletop-rpg-client");
@@ -49,6 +54,49 @@ public class TabletopRpgClient implements ClientModInitializer {
      * {@link RpgNetworking.PlayerLockPayload}.
      */
     public static volatile boolean locked = false;
+
+    /**
+     * True quando o personagem está <b>deitado</b> (HP da ficha &lt;= 0).
+     *
+     * <p><b>FACT (regra do usuário):</b> HP &lt;= 0 deixa o personagem deitado
+     * e ele NÃO morre. Como o HP da ficha é a fonte da verdade do personagem e
+     * a vida real do Minecraft é uma camada separada (o jogador já é imune a
+     * dano físico — ver {@code DamageControlHandler}), este estado é
+     * exatamente o inverso de "morto": é "incapaz de andar".
+     *
+     * <p>Atualizado via {@link RpgNetworking.DownedStatePayload}. O mixin
+     * {@code LocalPlayerMixin} usa esta flag para congelar o movimento local
+     * (e, de brinde, a pose local, que de outro modo o cliente recomputaria
+     * para STANDING).
+     */
+    public static volatile boolean downed = false;
+
+    /**
+     * UUIDs de TODOS os personagens que o servidorвітou como deitados.
+     *
+     * <p><b>FACT (por que um conjunto e nao so a flag acima):</b> o cliente
+     * recalcula a pose de todos os jogadores a cada tick
+     * ({@code Player.tick()} -&gt; {@code updatePlayerPose()}), inclusive dos
+     * outros jogadores que estou vendo. Se so o proprio jogador soubesse que
+     * esta deitado, o cliente levantaria os caidos que aparecem na tela — e o
+     * mestre, que e justamente quem precisa ver quem esta no chao, teria uma
+     * visao errada. Por isso o servidor transmite o estado a todos
+     * (ver {@link RpgNetworking.DownedStatePayload}).     *
+     * <p>Concorrente: o receptor roda numa tarefa do cliente e o mixin de pose
+     * roda no tick do render, em outra thread.
+     */
+    public static final Set<UUID> downedPlayers = ConcurrentHashMap.newKeySet();
+
+    /**
+     * Este personagem (o jogador local) esta deitado?
+     *
+     * <p>Truque importante: a verificacao e feita pelo UUID do jogador local e
+     * nao pela flag {@link #downed}, porque quando a tela e aberta pela
+     * primeira vez o payload pode ainda nao ter chegado.
+     */
+    public static boolean isDowned(Player player) {
+        return player != null && downedPlayers.contains(player.getUUID());
+    }
 
     /**
      * Estado atual do ciclo dia/noite (gamerule advance_time) conhecido pelo
@@ -115,6 +163,23 @@ public class TabletopRpgClient implements ClientModInitializer {
      */
     public static volatile int hoverMaxDistance = 32;
 
+    /**
+     * Limpa o estado que sobrevive entre conexoes.
+     *
+     * <p>{@link #downedPlayers} e estatico e guarda UUIDs, entao sem isto ele
+     * cresceria a cada entrada/saida e, pior, poderia conter o UUID de um
+     * jogador que ja saiu: numa reconexao em outro mundo, o
+     * {@code ClientPlayerPoseMixin} prenderia a pose de alguem que nao esta
+     * mais deitado. O JOIN reenvia o retrato do servidor, entao limpar aqui
+     * apenas garante que o estado comeca zerado.
+     */
+    private static void registerConnectionCleanup() {
+        ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
+            downedPlayers.clear();
+            downed = false;
+        });
+    }
+
     @Override
     public void onInitializeClient() {
         LOGGER.info("[TabletopRPG-Client] onInitializeClient() started.");
@@ -140,6 +205,7 @@ public class TabletopRpgClient implements ClientModInitializer {
         }
 
         registerNetworking();
+        registerConnectionCleanup();
         AuraRenderer.register();
 
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
@@ -274,6 +340,59 @@ public class TabletopRpgClient implements ClientModInitializer {
                 activePlayerUuid = payload.activePlayerUuid();
             });
         });
+
+        // Estado "deitado" (HP da ficha <= 0).
+        // Chega para TODOS os clientes (ver DownedStatePayload), entao o
+        // receptor mantem um conjunto com quem esta deitado -- e nao so uma
+        // flag local, que so serviria para o proprio jogador.
+        ClientPlayNetworking.registerGlobalReceiver(RpgNetworking.DownedStatePayload.TYPE, (payload, context) -> {
+            context.client().execute(() -> {
+                UUID id = payload.playerId();
+                if (id == null) {
+                    return;
+                }
+                if (payload.downed()) {
+                    downedPlayers.add(id);
+                } else {
+                    downedPlayers.remove(id);
+                }
+                // A flag local continua existindo porque o bloqueio de
+                // movimento (LocalPlayerMixin) so interessa ao proprio jogador.
+                Minecraft client = context.client();
+                if (client.player != null && id.equals(client.player.getUUID())) {
+                    downed = payload.downed();
+                }
+            });        });
+
+        // Ficha do personagem -> preenche/atualiza a tela de ficha, se estiver
+        // aberta. É por aqui que a edição fica "ao vivo": quando o mestre altera
+        // a ficha de um jogador, o cliente daquele jogador recebe este payload e
+        // a tela dele se atualiza sozinha (e vice-versa).
+        ClientPlayNetworking.registerGlobalReceiver(RpgNetworking.SheetStatePayload.TYPE, (payload, context) -> {
+            context.client().execute(() -> {
+                if (context.client().screen instanceof CharacterSheetScreen sheet) {
+                    sheet.onSheetState(payload);
+                }
+            });
+        });
+    }
+
+    /**
+     * Pede ao servidor a ficha de um jogador. {@code targetName} vazio pede a
+     * própria ficha; o nome de outro jogador só funciona para o mestre (a
+     * permissão é conferida no servidor).
+     */
+    public static void requestSheet(String targetName) {
+        if (Minecraft.getInstance().getConnection() == null) {
+            return; // fora de um mundo (menu principal/loading)
+        }
+        String name = targetName == null ? "" : targetName.trim();
+        // O codec aceita no máximo 64 caracteres (stringUtf8(64)); um nome
+        // maior derrubaria a codificação do pacote, então corta aqui.
+        if (name.length() > 64) {
+            name = name.substring(0, 64);
+        }
+        ClientPlayNetworking.send(new RpgNetworking.SheetQueryPayload(name));
     }
 
     /**
