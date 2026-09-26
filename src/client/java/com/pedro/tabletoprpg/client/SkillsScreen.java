@@ -109,11 +109,32 @@ public class SkillsScreen extends CharacterSheetScreen {
      * tela, entao precisa se destacar do nome da skill e do botao em si.
      */
     private static final int COL_REMOVE_ICON = 0xFFFF7070;
+    /** Cor da seta de reordenar ativa. */
+    private static final int COL_ARROW = 0xFFE0E0E6;
+    /**
+     * Cor da seta de reordenar desabilitada (cinza).
+     *
+     * <p>Usada na primeira skill (nada acima) e na ultima (nada abaixo).
+     */
+    private static final int COL_ARROW_OFF = 0xFF707070;
+
+    /**
+     * Largura de cada seta de reordenar, em pixels.
+     *
+     * <p>As duas setas sao empilhadas e somam exatamente a altura do botao da
+     * skill ({@code ARROW_SIZE * 2} de largura ocupa a faixa reservada a
+     * esquerda da lista). Decisao do usuario em 26/09/2026.
+     */
+    private static final int ARROW_SIZE = 12;
 
     /** Botao do nome de cada linha: clicar abre a descricao completa. */
     private final Button[] nameButtons = new Button[MAX_SKILL_ROWS];
     /** Botao "X" de remocao de cada linha. */
     private final Button[] removeButtons = new Button[MAX_SKILL_ROWS];
+    /** Seta para cima de cada linha (mover a skill um passo para cima). */
+    private final Button[] upButtons = new Button[MAX_SKILL_ROWS];
+    /** Seta para baixo de cada linha (mover a skill um passo para baixo). */
+    private final Button[] downButtons = new Button[MAX_SKILL_ROWS];
 
     /** Quantas linhas cabem na janela atual. */
     private int skillRows;
@@ -218,17 +239,22 @@ public class SkillsScreen extends CharacterSheetScreen {
         popupW = panelW - 4;
         popupScroll = 0;
 
-        // Geometria das colunas: [ nome ..................... ][ X ][ respiro ][ barra ]
+        // Geometria das colunas: [ setas ][ nome ..................... ][ X ][ respiro ][ barra ]
         // O botao de excluir recua BAR_SLOT porque a barra e testada antes dos
         // widgets em mouseClicked, e a area de clique da barra e
         // BAR_W + 2 * BAR_PAD = 12px. Ver BAR_SLOT para a formula do respiro.
         // O recuo so vale quando a lista transborda, porque a barra so e
         // desenhada nesse caso. O nome perde a mesma medida so nesse caso.
+        // DECISAO DO USUARIO (26/09/2026): as duas setas de reordenar ficam
+        // SEMPRE reservadas a esquerda (2 * ARROW_SIZE = 24px), mesmo invisiveis,
+        // para o nome nao pular de lado quando elas aparecem. O nome encolhe
+        // 24px em vez do painel crescer.
         boolean listaTransborda = sheet != null && skillRows > 0
                 && sheet.skills().size() > skillRows;
         int barSlot = listaTransborda ? BAR_SLOT : 0;
         int removeX = x0 + panelW - barSlot - REMOVE_SIZE - 16;
-        int nameW = Math.max(24, removeX - x0);
+        int nameX = x0 + ARROW_SIZE * 2;
+        int nameW = Math.max(24, removeX - nameX);
 
         listBarX = x0 + panelW - BAR_W - BAR_PAD;
         listBarY = y;
@@ -239,9 +265,12 @@ public class SkillsScreen extends CharacterSheetScreen {
             final int index = i;
             int rowY = y + i * rowH;
             int h = rowH - 2;
+            // As duas setas dividem a altura da linha em duas metades: somadas
+            // dao exatamente h, como pedido.
+            int upH = h / 2;
 
             nameButtons[i] = Button.builder(Component.literal(""),
-                    b -> selectSkill(index)).bounds(x0, rowY, nameW, h).build();
+                    b -> selectSkill(index)).bounds(nameX, rowY, nameW, h).build();
             // Mensagem vazia de proposito: o "X" e desenhado a mao em
             // renderRemoveIcon, que roda depois de super.render() e portanto por
             // cima da caixa do botao. Delegar o glifo ao Button nao funcionou:
@@ -251,11 +280,29 @@ public class SkillsScreen extends CharacterSheetScreen {
             removeButtons[i] = Button.builder(Component.literal(""),
                     b -> removeSkillAt(index)).bounds(removeX, rowY, REMOVE_SIZE, h).build();
 
+            // Setas: mensagens vazias e glifos desenhados a mao, por causa do
+            // mesmo motivo do "X" (e o sprite vanilla de 200x20 fica esquisito
+            // esticado num botao de 12px).
+            upButtons[i] = Button.builder(Component.literal(""),
+                    b -> moveSkillAt(index, -1)).bounds(x0, rowY, ARROW_SIZE, upH).build();
+            downButtons[i] = Button.builder(Component.literal(""),
+                    b -> moveSkillAt(index, 1)).bounds(x0, rowY + upH, ARROW_SIZE, h - upH).build();
+
             boolean visible = i < skillRows;
             for (Button button : rowWidgets(i)) {
                 button.visible = visible;
                 if (visible) {
                     addRenderableWidget(button);
+                }
+            }
+            // As setas entram invisiveis: so viram visiveis quando o mouse esta
+            // na linha (ver renderContent). visible=false tambem as torna
+            // inclicaveis, que e o que queremos enquanto nao ha hover.
+            for (Button arrow : arrowWidgets(i)) {
+                arrow.visible = false;
+                arrow.active = false;
+                if (visible) {
+                    addRenderableWidget(arrow);
                 }
             }
         }
@@ -302,6 +349,11 @@ public class SkillsScreen extends CharacterSheetScreen {
         return List.of(nameButtons[row], removeButtons[row]);
     }
 
+    /** As 2 setas de reordenar de uma linha, na ordem: cima, baixo. */
+    private List<Button> arrowWidgets(int row) {
+        return List.of(upButtons[row], downButtons[row]);
+    }
+
     /**
      * Desenha o "X" do botao de excluir, centrado na caixa do botao.
      *
@@ -321,6 +373,44 @@ public class SkillsScreen extends CharacterSheetScreen {
         int tx = button.getX() + (button.getWidth() - textW) / 2;
         int ty = button.getY() + (button.getHeight() - 8) / 2;
         graphics.drawString(this.font, icon, tx, ty, COL_REMOVE_ICON, false);
+    }
+
+    /**
+     * Desenha a seta de reordenar, centrada na caixa do botao.
+     *
+     * <p>Triangulo de 3 linhas desenhado com {@code fill} em vez de glifo: a
+     * metade da linha tem 5 a 9px de altura e o "^" do vanilla tem 7px, o que
+     * transbordaria do botao.
+     *
+     * @param enabled false desenha cinza (primeira skill na seta de cima, ultima
+     *                na seta de baixo)
+     */
+    private void renderArrow(GuiGraphics graphics, Button button, boolean up, boolean enabled) {
+        if (button == null || !button.visible) {
+            return;
+        }
+        int cx = button.getX() + button.getWidth() / 2;
+        int cy = button.getY() + button.getHeight() / 2;
+        int color = enabled ? COL_ARROW : COL_ARROW_OFF;
+        // 3 fileiras de 1, 3 e 5 px de largura: a ponta fica na linha 0 para
+        // cima e na linha 2 para baixo.
+        for (int row = 0; row < 3; row++) {
+            int half = up ? row : 2 - row;
+            graphics.fill(cx - half, cy - 1 + row, cx + half + 1, cy + row, color);
+        }
+    }
+
+    /**
+     * Teste de retangulo cru, sem olhar {@code visible} nem {@code active}.
+     *
+     * <p>Nao serve {@code isMouseOver} aqui: ele exige {@code isActive()}, que e
+     * {@code visible && active} — e as setas so ficam visiveis no hover, entao
+     * elas nunca chegariam a ser clicaveis.
+     */
+    private static boolean rectOver(Button button, int mouseX, int mouseY) {
+        return button != null
+                && mouseX >= button.getX() && mouseX < button.getX() + button.getWidth()
+                && mouseY >= button.getY() && mouseY < button.getY() + button.getHeight();
     }
 
     // ------------------------------------------------------------------
@@ -510,6 +600,25 @@ public class SkillsScreen extends CharacterSheetScreen {
     }
 
     /**
+     * Manda o servidor mover a skill um passo na lista (delta -1 sobe, +1 desce).
+     *
+     * <p>Igual ao ADD e ao REMOVE, o cliente nao mexe na lista: a ordem so vale
+     * depois que o servidor responde com a ficha nova
+     * ({@code SheetStatePayload}), entao mover setas em seguida funciona sem
+     * fila local - o ultimo clique chega em um servidor que ja tem a ordem nova.
+     */
+    private void moveSkillAt(int row, int delta) {
+        if (!canEdit) {
+            return;
+        }
+        SheetData.Skill skill = skillAt(row);
+        if (skill == null) {
+            return;
+        }
+        ClientPlayNetworking.send(RpgNetworking.SheetSkillPayload.move(targetName, skill.name(), delta));
+    }
+
+    /**
      * Back vai para o Status da mesma ficha (nao para o menu).
      *
      * <p>Precisa pedir a ficha de novo: a tela nova nasce sem estado, e sem o
@@ -577,12 +686,38 @@ public class SkillsScreen extends CharacterSheetScreen {
         // tudo que ja foi pintado.
         String hoveredPreview = null;
 
+        // Linha cujas setas aparecem neste frame.
+        //
+        // DECISAO DO USUARIO (26/09/2026): as setas so aparecem quando o mouse
+        // esta em cima do botao da skill, e CONTINUAM aparecendo quando o mouse
+        // esta em cima da propria seta. O segundo teste nao e' detalhe: para
+        // clicar na seta o mouse sai de cima do nome, e sem ele a seta sumiria
+        // no exato instante do clique.
+        int arrowRow = -1;
+        if (canEdit) {
+            for (int i = 0; i < skillRows; i++) {
+                if (skillAt(i) == null) {
+                    continue;
+                }
+                if (buttonOver(nameButtons[i], mouseX, mouseY)
+                        || rectOver(upButtons[i], mouseX, mouseY)
+                        || rectOver(downButtons[i], mouseX, mouseY)) {
+                    arrowRow = i;
+                    break;
+                }
+            }
+        }
+
         for (int i = 0; i < skillRows; i++) {
             SheetData.Skill skill = skillAt(i);
             if (skill == null) {
                 for (Button button : rowWidgets(i)) {
                     button.visible = false;
                     button.setMessage(Component.literal(""));
+                }
+                for (Button arrow : arrowWidgets(i)) {
+                    arrow.visible = false;
+                    arrow.active = false;
                 }
                 continue;
             }
@@ -591,6 +726,17 @@ public class SkillsScreen extends CharacterSheetScreen {
                 button.visible = true;
                 button.active = canEdit;
             }
+
+            // Setas: visiveis so na linha em hover. A primeira skill nao sobe e a
+            // ultima nao desce - nesses casos o botao fica active=false, o que o
+            // pinta cinza e tambem impede o clique. E' a mesma regra que o
+            // usuario pediu, em vez de esconder a seta.
+            int absIndex = visibleSkillIndex(i);
+            boolean showArrows = i == arrowRow;
+            upButtons[i].visible = showArrows;
+            downButtons[i].visible = showArrows;
+            upButtons[i].active = showArrows && absIndex > 0;
+            downButtons[i].active = showArrows && absIndex < sheet.skills().size() - 1;
 
             String name = skill.name();
             int maxChars = Math.max(6, (nameWidth() - 12) / 6);
@@ -608,6 +754,8 @@ public class SkillsScreen extends CharacterSheetScreen {
             }
 
             renderRemoveIcon(graphics, removeButtons[i]);
+            renderArrow(graphics, upButtons[i], true, upButtons[i].active);
+            renderArrow(graphics, downButtons[i], false, downButtons[i].active);
 
             if (buttonOver(nameButtons[i], mouseX, mouseY) && !skill.description().isEmpty()) {
                 hoveredPreview = skill.description();

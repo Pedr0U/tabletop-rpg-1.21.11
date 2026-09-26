@@ -59,18 +59,25 @@ public class TabletopRpgClient implements ClientModInitializer {
      * Modo de jogo da sessao, como <b>ordinal</b> de
      * {@link com.pedro.tabletoprpg.SessionManager.GameMode}.
      *
-     * <p><b>Por que o cliente precisa saber (25/09/2026):</b> a camera livre
-     * so pode ser usada no modo Livre. Nos modos Investigacao e Combate valem
-     * apenas as cameras de terceira, primeira e de cima. Isso nao pode ser
-     * deduzido de {@link #locked}: no modo Livre ninguem fica travado, e mesmo
-     * assim a camera livre precisa existir.
+     * <p><b>Para que o cliente precisa saber (26/09/2026):</b> o servidor
+     * reenvia {@code locked} para todo mundo a cada mudanca de modo e a cada
+     * troca de turno. O cliente nao consegue distinguir "meu turno comecou" de
+     * "o mestre trocou o modo da sessao" so olhando {@link #locked}: nos dois
+     * casos o valor vira {@code false}. {@link SpectatorCameraController} usa a
+     * mudanca deste ordinal para nao trocar a camera do jogador a toa.
      *
      * <p>Guarda o ordinal, e nao o enum, para nao acoplar o cliente a uma
      * classe do servidor. {@link #isFreeMode()} valida o indice.
      */
     public static volatile int gameModeOrdinal = 0;
 
-    /** true quando a sessao esta no modo Livre (onde a camera livre e permitida). */
+    /**
+     * true quando a sessao esta no modo Livre.
+     *
+     * <p>Desde 26/09/2026 a camera livre vale em TODOS os modos, entao isto ja
+     * nao decide nada de camera. O que ainda depende do modo e o
+     * {@link SessionManager.GameMode} do servidor.
+     */
     public static boolean isFreeMode() {
         return gameModeOrdinal == 0; // SessionManager.GameMode.FREE
     }
@@ -197,6 +204,11 @@ public class TabletopRpgClient implements ClientModInitializer {
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
             downedPlayers.clear();
             downed = false;
+            // Zera tambem o estado de trava: sem isto, quem desconectou travado
+            // e reconecta ve `locked` ainda true no primeiro tick, e o
+            // SpectatorCameraController le isso como "chegou o meu turno" e
+            // derruba a camera livre sem o jogador ter ganho turno.
+            locked = false;
         });
     }
 

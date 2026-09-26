@@ -514,7 +514,7 @@ public class MasterCommands {
 
         String message = "§6§l" + player.getName().getString() + " §frolled §6" + pericia.name() + "§f: "
                 + "§7d20 §f(§e" + die + "§f) + §7" + pericia.value()
-                + " + §7" + pericia.attribute().abbr() + " " + attrValue
+                + " + §7" + pericia.attribute().shortName() + " " + attrValue
                 + " = §e§l" + total;
 
         if (SessionManager.isMaster(player)) {
@@ -554,7 +554,7 @@ public class MasterCommands {
             long attr = sheet.getNumeric(pericia.attribute().field());
             ctx.getSource().sendSystemMessage(Component.literal(
                     "§7- §f" + pericia.name() + " §8| §e" + pericia.value()
-                            + " §7+ §e" + attr + " §8(" + pericia.attribute().abbr() + ")"
+                            + " §7+ §e" + attr + " §8(" + pericia.attribute().shortName() + ")"
                             + " §8= §e" + (pericia.value() + attr)));
         }
         return sheet.pericias().size();

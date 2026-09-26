@@ -55,16 +55,17 @@ public final class SpectatorCameraController {
     /**
      * Modos de câmera de espectador (ciclo da tecla V).
      *
-     * <p><b>Quem pode usar cada um (decisão do usuário em 25/09/2026):</b> a
-     * câmera <b>FREE</b> só existe no modo Livre da sessão — nos modos
-     * Investigação e Combate valem apenas as três de base (terceira, primeira e
-     * de cima). Ver {@link #isFreeModeAvailable()}.
+     * <p><b>Quem pode usar cada um (decisão do usuário em 26/09/2026):</b> a
+     * câmera <b>FREE</b> está liberada a qualquer momento, em todos os modos da
+     * sessão. Nos modos Investigação e Combate o ciclo do jogador travado passa
+     * pelas quatro (terceira, primeira, de cima e livre); o jogador que está no
+     * seu turno alterna apenas entre a câmera do jogo e a livre.
      */
     public enum Mode {
-        THIRD_PERSON("3ª Pessoa"),
-        FIRST_PERSON("1ª Pessoa"),
-        TOP_DOWN("TopDown"),
-        FREE("Livre");
+        THIRD_PERSON("3rd Person"),
+        FIRST_PERSON("1st Person"),
+        TOP_DOWN("Top-Down"),
+        FREE("Free");
 
         private final String displayName;
 
@@ -80,30 +81,34 @@ public final class SpectatorCameraController {
     private static Mode mode = Mode.THIRD_PERSON;
 
     /**
-     * A câmera livre só é permitida no modo Livre da sessão.
+     * Se o jogador estava travado no tick anterior.
      *
-     * <p><b>Por que não dá para usar {@code TabletopRpgClient.locked}:</b> no
-     * modo Livre ninguém fica travado, e mesmo assim a câmera livre é justamente
-     * a que o mestre quer. A trava responde "é o turno dele?", e a pergunta certa
-     * é "em que modo a sessão está?".
+     * <p>Usado para detectar o instante em que o turno chega (travado -&gt; livre),
+     * que é quando a câmera volta sozinha para a câmera do jogo. A câmera livre
+     * continua liberada durante o próprio turno.
      */
-    public static boolean isFreeModeAvailable() {
-        return TabletopRpgClient.isFreeMode();
-    }
+    private static boolean wasLocked = false;
 
     /**
-     * Escolhe um modo, recusando a câmera livre fora do modo Livre.
+     * Modo da sessao visto no tick anterior, para saber se ele mudou.
      *
-     * <p>Centraliza a regra para o menu de configurações e o ciclo da tecla V
-     * não divergirem entre si.
+     * <p>O servidor reenvia {@code locked=false} para todo mundo tanto numa
+     * troca de turno quanto quando o mestre muda o modo da sessao. Sem esta
+     * guarda, trocar Combate -&gt; Livre derrubaria a camera livre de todo
+     * jogador travado, como se o turno deles tivesse comecado.
+     */
+    private static int lastGameModeOrdinal = -1;
+
+    /**
+     * Escolhe um modo.
+     *
+     * <p>Todos os modos valem em todos os modos da sessão: a câmera livre está
+     * liberada a qualquer momento (decisão do usuário em 26/09/2026).
      *
      * @return true se o modo foi aceito
      */
     public static boolean requestMode(Mode newMode) {
         if (newMode == null) {
-            return false;
-        }
-        if (newMode == Mode.FREE && !isFreeModeAvailable()) {
             return false;
         }
         mode = newMode;
@@ -112,29 +117,6 @@ public final class SpectatorCameraController {
             resetTransition(client);
         }
         return true;
-    }
-
-    /**
-     * Corrige o modo atual quando o modo da sessão muda.
-     *
-     * <p>Sem isto, trocar o modo da sessão enquanto a câmera livre estava
-     * selecionada deixaria a câmera livre ativa em Investigação/Combate, que é
-     * justamente o que a regra acima proíbe.
-     *
-     * @return true se o modo foi trocado (ou seja, houve algo a corrigir)
-     */
-    public static boolean enforceModeForSession() {
-        if (mode == Mode.FREE && !isFreeModeAvailable()) {
-            mode = Mode.THIRD_PERSON;
-            Minecraft client = Minecraft.getInstance();
-            if (client.player != null) {
-                resetTransition(client);
-                client.player.displayClientMessage(
-                        Component.literal("§b[Câmera] §cLivre só existe no modo Livre; voltando para 3ª Pessoa"), true);
-            }
-            return true;
-        }
-        return false;
     }
 
     /** "Câmera Orbital: Sim/Não" — se false, o mouse controla a 3ª pessoa. */
@@ -319,24 +301,23 @@ public final class SpectatorCameraController {
     /**
      * Cicla o modo de câmera (tecla V / menu). O modo persiste como preferência.
      *
-     * <p><b>Ignora a câmera livre fora do modo Livre</b> (decisão do usuário em
-     * 25/09/2026): em Investigação/Combate o ciclo salta de TOP_DOWN direto
-     * para THIRD_PERSON, em vez de passar por um modo que seria recusado. Sem
-     * esse salto, o jogador precisaria apertar V duas vezes para "não mudar
-     * nada", o que parece um botão quebrado.
+     * <p><b>A câmera livre está liberada em todos os modos da sessão</b> (decisão
+     * do usuário em 26/09/2026). Antes ela só existia no modo Livre e era
+     * recusada em Investigação/Combate.
      *
      * <p><b>Fora do modo espectador, V só alterna entre a câmera livre e a
-     * câmera normal do Minecraft</b> (decisão do usuário em 25/09/2026). Antes
-     * o V percorria 1ª → 3ª → Cima → Livre mesmo fora de Investigação/Combate,
-     * o que não faz sentido: sem espectador, primeira/terceira pessoa é
-     * justamente o F5 do próprio Minecraft. Agora:
+     * câmera normal do Minecraft.</b> Sem espectador, primeira/terceira pessoa é
+     * justamente o F5 do próprio Minecraft, então o V fica com duas posições:
      * <ul>
-     *   <li>V fora do modo espectador e câmera normal → <b>câmera livre</b>;</li>
-     *   <li>V fora do modo espectador e câmera livre → <b>volta ao normal</b>
-     *       (o {@code deactivate} restaura a perspectiva que o jogador escolheu
-     *       com F5, então ela é preservada).</li>
+     *   <li>câmera normal → <b>câmera livre</b>;</li>
+     *   <li>câmera livre → <b>volta ao normal</b> (o {@code deactivate} restaura
+     *       a perspectiva que o jogador escolheu com F5, então ela é
+     *       preservada).</li>
      * </ul>
-     * Em Investigação/Combate (jogador travado) o ciclo completo continua igual.
+     * Vale nos três modos da sessão e também durante o próprio turno.
+     *
+     * <p><b>No modo espectador o ciclo passa pelas quatro</b>: terceira → primeira
+     * → de cima → livre → terceira.
      */
     public static void cycleMode() {
         Minecraft client = Minecraft.getInstance();
@@ -349,14 +330,7 @@ public final class SpectatorCameraController {
                 mode = Mode.THIRD_PERSON;
                 if (client.player != null) {
                     client.player.displayClientMessage(
-                            Component.literal("§b[Câmera] §fCâmera normal"), true);
-                }
-                return;
-            }
-            if (!isFreeModeAvailable()) {
-                if (client.player != null) {
-                    client.player.displayClientMessage(
-                            Component.literal("§b[Câmera] §cLivre só existe no modo Livre"), true);
+                            Component.literal("§b[Camera] §fNormal camera"), true);
                 }
                 return;
             }
@@ -364,22 +338,17 @@ public final class SpectatorCameraController {
             if (client.player != null) {
                 resetTransition(client);
                 client.player.displayClientMessage(
-                        Component.literal("§b[Câmera] §f" + Mode.FREE.getDisplayName()), true);
+                        Component.literal("§b[Camera] §f" + Mode.FREE.getDisplayName()), true);
             }
             return;
         }
 
         Mode[] modes = Mode.values();
-        int next = (mode.ordinal() + 1) % modes.length;
-        // A camera livre e a ultima do enum; se ela for barrada, emenda no
-        // primeiro modo em vez de parar nela.
-        if (modes[next] == Mode.FREE && !isFreeModeAvailable()) {
-            next = 0;
-        }
-        mode = modes[next];
+        mode = modes[(mode.ordinal() + 1) % modes.length];
         if (client.player != null) {
             resetTransition(client);
-            client.player.displayClientMessage(Component.literal("§b[Câmera] §f" + mode.getDisplayName()), true);
+            client.player.displayClientMessage(
+                    Component.literal("§b[Camera] §f" + mode.getDisplayName()), true);
         }
     }
 
@@ -406,6 +375,15 @@ public final class SpectatorCameraController {
     /** Chamado a cada tick do cliente. Liga/desliga a câmera de espectador. */
     public static void tick(Minecraft client) {
         boolean locked = TabletopRpgClient.locked;
+        // Instante em que o turno chega para quem estava travado. Precisa ser lido
+        // antes de `wasLocked` e `lastGameModeOrdinal` serem sobrescritos abaixo.
+        // Mudanca do modo da sessao tambem reenvia locked=false, entao nao conta
+        // como turno: senao o mestre derrubaria a camera de todo mundo ao trocar
+        // de modo.
+        boolean sessionModeChanged = lastGameModeOrdinal != TabletopRpgClient.gameModeOrdinal;
+        lastGameModeOrdinal = TabletopRpgClient.gameModeOrdinal;
+        boolean turnJustStarted = !locked && wasLocked && !sessionModeChanged;
+        wasLocked = locked;
 
         // Sem jogador (tela de título, mundo carregando): garante desligamento.
         if (client.player == null) {
@@ -413,19 +391,26 @@ public final class SpectatorCameraController {
             return;
         }
 
-        // A sessao pode ter mudado de modo com a camera livre selecionada; corrige
-        // antes de decidir se a camara de espectador fica ligada.
-        enforceModeForSession();
-
         // A camara de espectador liga em dois casos:
         //  1. o jogador esta travado (nao e o turno dele) -- cameras de
-        //     terceira/primeira/cima, nos modos Investigacao e Combate;
-        //  2. a camera LIVRE esta selecionada e a sessao esta no modo Livre.
-        //
-        // O segundo caso e' separado de proposito (decisao do usuario em
-        // 25/09/2026): no modo Livre ninguem fica travado, entao testar apenas
-        // `locked` desligaria a camera justamente onde ela foi liberada.
-        boolean freeCamSelected = mode == Mode.FREE && isFreeModeAvailable();
+        //     terceira/primeira/cima/livre, em qualquer modo da sessao;
+        //  2. a camera LIVRE esta selecionada e o jogador age normalmente
+        //     (turno dele, ou sessao no modo Livre, onde ninguem trava).
+        boolean freeCamSelected = mode == Mode.FREE;
+
+        // Regra do turno (decisao do usuario em 26/09/2026): quando o turno chega
+        // para quem estava travado, a camera volta sozinha para a camera do jogo.
+        // A camera livre continua liberada durante o proprio turno -- o jogador
+        // que esta no turno alterna entre a camera do jogo e a livre, e o ciclo
+        // do modo espectador (com as quatro cameras) e' so do jogador travado.
+        if (turnJustStarted && freeCamSelected) {
+            mode = Mode.THIRD_PERSON;
+            freeCamSelected = false;
+            resetTransition(client);
+            client.player.displayClientMessage(
+                    Component.literal("§b[Camera] §fNormal camera"), true);
+        }
+
         if (!locked && !freeCamSelected) {
             deactivate(client);
             return;

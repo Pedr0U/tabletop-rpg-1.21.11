@@ -525,6 +525,16 @@ public final class RpgNetworking {
             return new SheetSkillPayload(targetName, skill, SheetData.SkillOp.REMOVE, "");
         }
 
+        /**
+         * Atalho: mover a skill um passo na lista (setas da tela de Skills).
+         *
+         * <p>O passo viaja no campo {@code description} porque ela e' o que sobra
+         * livre nesta operacao: {@code delta = -1} sobe, {@code +1} desce.
+         */
+        public static SheetSkillPayload move(String targetName, String skill, int delta) {
+            return new SheetSkillPayload(targetName, skill, SheetData.SkillOp.MOVE, Integer.toString(delta));
+        }
+
         @Override
         public Type<? extends CustomPacketPayload> type() {
             return TYPE;
@@ -860,6 +870,7 @@ public final class RpgNetworking {
             SheetData updated = switch (payload.op() == null ? SheetData.SkillOp.INVALID : payload.op()) {
                 case ADD -> current.withSkill(payload.skill(), payload.description());
                 case REMOVE -> current.withoutSkill(payload.skill());
+                case MOVE -> moveSkill(current, payload);
                 // Pacote corrompido: melhor não fazer nada do que transformar
                 // um índice inválido em "criar skill".
                 case INVALID -> current;
@@ -900,6 +911,27 @@ public final class RpgNetworking {
     // ------------------------------------------------------------------
     // FICHA DO PERSONAGEM — RESOLUÇÃO DE ALVO, PERMISSÃO E ENVIO
     // ------------------------------------------------------------------
+
+    /**
+     * Aplica o {@code SkillOp.MOVE}: move a skill um passo na lista.
+     *
+     * <p>O passo viaja dentro do campo {@code description} do payload ("-1" sobe,
+     * "+1" desce). Qualquer valor fora de -1/+1, ou texto nao numerico, e'
+     * descartado e devolve a ficha intacta — um pacote adulterado nao pode
+     * deslocar a skill para o fim da lista.
+     */
+    private static SheetData moveSkill(SheetData current, SheetSkillPayload payload) {
+        int delta;
+        try {
+            delta = Integer.parseInt(payload.description() == null ? "" : payload.description().trim());
+        } catch (NumberFormatException ex) {
+            return current;
+        }
+        if (delta != -1 && delta != 1) {
+            return current;
+        }
+        return current.withSkillMoved(payload.skill(), delta);
+    }
 
     /**
      * Resolve o alvo de uma operação de ficha a partir do nome enviado.
