@@ -1,6 +1,7 @@
 package com.pedro.tabletoprpg.mixin;
 
 import com.pedro.tabletoprpg.CombatController;
+import com.pedro.tabletoprpg.DamageControlHandler;
 import com.pedro.tabletoprpg.SessionManager;
 import net.minecraft.network.protocol.game.ServerboundMovePlayerPacket;
 import net.minecraft.server.level.ServerPlayer;
@@ -33,6 +34,14 @@ public abstract class ServerGamePacketListenerImplMixin {
             // Ignora completamente o pacote: nada de posi├º├úo/rota├º├úo ├®
             // atualizado no servidor, ent├úo o cliente ├® corrigido de volta
             // na posi├º├úo travada no pr├│ximo pacote de sincroniza├º├úo.
+            ci.cancel();
+            return;
+        }
+        // Personagem deitado (HP da ficha <= 0): bloqueia o DESLOCAMENTO, mas
+        // deixa os pacotes de rota├º├úo passarem (um personagem deitado ainda
+        // olha para os lados). O cliente tambem congela o movimento local
+        // (LocalPlayerMixin), ent├úo n├úo h├¡ rubber-banding.
+        if (DamageControlHandler.isDowned(this.player) && packet.hasPosition()) {
             ci.cancel();
             return;
         }

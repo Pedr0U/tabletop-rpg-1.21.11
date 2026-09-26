@@ -3,6 +3,7 @@ package com.pedro.tabletoprpg;
 import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
+import net.minecraft.core.UUIDUtil;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.codec.ByteBufCodecs;
@@ -49,6 +50,10 @@ import java.util.UUID;
  *   <li>{@link WeatherSetPayload} (C2S): mestre define o clima (0=sol, 1=chuva, 2=tempestade).</li>
  *   <li>{@link WeatherQueryPayload} (C2S): cliente pede o clima atual (ao abrir as Settings).</li>
  *   <li>{@link WeatherStatePayload} (S2C): clima atual do mundo (resposta/broadcast).</li>
+ *   <li>{@link SheetQueryPayload} (C2S): abre a ficha de um jogador (nome vazio = a própria).</li>
+ *   <li>{@link SheetStatePayload} (S2C): conteúdo de uma ficha + se o destinatário pode editá-la.</li>
+ *   <li>{@link SheetFieldPayload} (C2S): edição de um campo da ficha (texto ou número).</li>
+ *   <li>{@link SheetSkillPayload} (C2S): adiciona/remove uma habilidade da ficha.</li>
  * </ul>
  */
 public final class RpgNetworking {
@@ -391,6 +396,167 @@ public final class RpgNetworking {
     }
 
     // ------------------------------------------------------------------
+    // PAYLOADS — FICHA DO PERSONAGEM (FASE 3)
+    // ------------------------------------------------------------------
+
+    /**
+     * Cliente -> Servidor: abre a ficha de um jogador. {@code targetName} vazio
+     * (ou igual ao próprio nome) significa "a minha ficha".
+     *
+     * <p>Usa <b>nome</b> e não UUID de propósito: a lista de jogadores já
+     * chega ao cliente como nomes (MenuDataPayload) e o servidor sabe
+     * resolver nome -> jogador com {@code getPlayerByName}. Assim o cliente
+     * não precisa carregar UUIDs, e um cliente antigo/incompatível não quebra.
+     */
+    public record SheetQueryPayload(String targetName) implements CustomPacketPayload {
+        public static final Type<SheetQueryPayload> TYPE = new Type<>(TabletopRpg.id("sheet_query"));
+        public static final StreamCodec<FriendlyByteBuf, SheetQueryPayload> STREAM_CODEC = StreamCodec.composite(
+                ByteBufCodecs.stringUtf8(64), SheetQueryPayload::targetName,
+                SheetQueryPayload::new
+        );
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
+    /**
+     * Servidor -> Cliente: o conteúdo de uma ficha.
+     *
+     * @param targetName nome do dono da ficha
+     * @param ownerUuid  UUID do dono (string), para o cliente identificar a quem pertence
+     * @param sheet      os dados da ficha
+     * @param canEdit    se o destinatário pode editar esta ficha
+     *                   (mestre: sempre; jogador: só a própria)
+     */
+    public record SheetStatePayload(
+            String targetName,
+            String ownerUuid,
+            SheetData sheet,
+            boolean canEdit
+    ) implements CustomPacketPayload {
+        public static final Type<SheetStatePayload> TYPE = new Type<>(TabletopRpg.id("sheet_state"));
+        public static final StreamCodec<FriendlyByteBuf, SheetStatePayload> STREAM_CODEC = StreamCodec.composite(
+                ByteBufCodecs.stringUtf8(64), SheetStatePayload::targetName,
+                ByteBufCodecs.stringUtf8(36), SheetStatePayload::ownerUuid,
+                SheetData.STREAM_CODEC, SheetStatePayload::sheet,
+                ByteBufCodecs.BOOL, SheetStatePayload::canEdit,
+                SheetStatePayload::new
+        );
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
+    /**
+     * Cliente -> Servidor: edição de um campo da ficha.
+     *
+     * <p>Um único payload para texto e número: o campo é um identificador
+     * ("hp", "race", ...) e o valor chega como texto. O servidor converte e
+     * limita em {@link SheetData#withField(String, String)} — o cliente nunca
+     * escreve direto no estado.
+     */
+    public record SheetFieldPayload(String targetName, String field, String value) implements CustomPacketPayload {
+        public static final Type<SheetFieldPayload> TYPE = new Type<>(TabletopRpg.id("sheet_field"));
+        public static final StreamCodec<FriendlyByteBuf, SheetFieldPayload> STREAM_CODEC = StreamCodec.composite(
+                ByteBufCodecs.stringUtf8(64), SheetFieldPayload::targetName,
+                ByteBufCodecs.stringUtf8(32), SheetFieldPayload::field,
+                ByteBufCodecs.stringUtf8(64), SheetFieldPayload::value,
+                SheetFieldPayload::new
+        );
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
+    /**
+     * Cliente -&gt; Servidor: adiciona (add=true) ou remove (add=false) uma
+     * habilidade.
+     *
+     * <p>Os campos {@code description}, {@code value} e {@code attribute} só
+     * são usados quando o {@code op} é {@code ADD}; as demais operações mexem
+     * só no campo indicado, para que um clique de seta não sobrescreva a
+     * descrição digitada. Campo novo em payload existente: cliente e servidor
+     * precisam da mesma versão do mod, senão a conexão cai no handshake.
+     */
+    public record SheetSkillPayload(String targetName, String skill, SheetData.SkillOp op, String description,
+                                    int value, SheetData.Attribute attribute) implements CustomPacketPayload {
+        public static final Type<SheetSkillPayload> TYPE = new Type<>(TabletopRpg.id("sheet_skill"));
+        public static final StreamCodec<FriendlyByteBuf, SheetSkillPayload> STREAM_CODEC = StreamCodec.composite(
+                ByteBufCodecs.stringUtf8(64), SheetSkillPayload::targetName,
+                ByteBufCodecs.stringUtf8(SheetData.SKILL_MAX), SheetSkillPayload::skill,
+                SheetData.SkillOp.STREAM_CODEC, SheetSkillPayload::op,
+                ByteBufCodecs.stringUtf8(SheetData.SKILL_DESC_MAX), SheetSkillPayload::description,
+                ByteBufCodecs.VAR_INT, SheetSkillPayload::value,
+                SheetData.Attribute.STREAM_CODEC, SheetSkillPayload::attribute,
+                SheetSkillPayload::new
+        );
+
+        /** Atalho: criar/atualizar uma pericia com todos os campos. */
+        public static SheetSkillPayload add(String targetName, String skill, String description, int value,
+                                            SheetData.Attribute attribute) {
+            return new SheetSkillPayload(targetName, skill, SheetData.SkillOp.ADD, description, value, attribute);
+        }
+
+        /** Atalho: remover a pericia pelo nome (so o nome importa). */
+        public static SheetSkillPayload remove(String targetName, String skill) {
+            return new SheetSkillPayload(targetName, skill, SheetData.SkillOp.REMOVE, "", 0,
+                    SheetData.Attribute.DEXTERITY);
+        }
+
+        /** Atalho: mexer so no valor (setas da tela de Skills). */
+        public static SheetSkillPayload setValue(String targetName, String skill, int value) {
+            return new SheetSkillPayload(targetName, skill, SheetData.SkillOp.SET_VALUE, "", value,
+                    SheetData.Attribute.DEXTERITY);
+        }
+
+        /** Atalho: mexer so no atributo (botao de lista suspensa). */
+        public static SheetSkillPayload setAttribute(String targetName, String skill, SheetData.Attribute attribute) {
+            return new SheetSkillPayload(targetName, skill, SheetData.SkillOp.SET_ATTRIBUTE, "", 0, attribute);
+        }
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
+    /**
+     * Servidor -&gt; Todos os clientes: o personagem deste UUID está deitado
+     * (HP da ficha &lt;= 0).
+     *
+     * <p><b>FACT (por que o UUID no payload e broadcast):</b> o cliente
+     * recalcula a pose de <b>todos</b> os jogadores a cada tick em
+     * {@code Player.tick() -&gt; updatePlayerPose()}, não só do jogador local.
+     * Se o servidor avisasse apenas o próprio jogador, o cliente do MESTRE
+     * levantaria os personagens caídos dos outros e o mestre — que é quem
+     * precisa avaliar quem está deitado — veria o estado errado. Por isso o
+     * estado é transmitido a todos os clientes conectados.
+     *
+     * <p>Enviado só quando o estado MUDA (não a cada tick), para não gerar
+     * tráfego. O HP em si não vem aqui: a barra da ficha mostra o valor pelo
+     * {@link SheetStatePayload}.
+     */
+    public record DownedStatePayload(UUID playerId, boolean downed) implements CustomPacketPayload {
+        public static final Type<DownedStatePayload> TYPE = new Type<>(TabletopRpg.id("downed_state"));
+        public static final StreamCodec<FriendlyByteBuf, DownedStatePayload> STREAM_CODEC = StreamCodec.composite(
+                UUIDUtil.STREAM_CODEC, DownedStatePayload::playerId,
+                ByteBufCodecs.BOOL, DownedStatePayload::downed,
+                DownedStatePayload::new
+        );
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
+    // ------------------------------------------------------------------
     // REGISTRO (comum a servidor e cliente)
     // ------------------------------------------------------------------
     /** Deve ser chamado no onInitialize() (lado comum). */
@@ -416,6 +582,12 @@ public final class RpgNetworking {
         PayloadTypeRegistry.playS2C().register(WeatherStatePayload.TYPE, WeatherStatePayload.STREAM_CODEC);
         PayloadTypeRegistry.playS2C().register(SpectatorTargetsPayload.TYPE, SpectatorTargetsPayload.STREAM_CODEC);
         PayloadTypeRegistry.playS2C().register(ActivePlayerPayload.TYPE, ActivePlayerPayload.STREAM_CODEC);
+        // Ficha do personagem (FASE 3)
+        PayloadTypeRegistry.playC2S().register(SheetQueryPayload.TYPE, SheetQueryPayload.STREAM_CODEC);
+        PayloadTypeRegistry.playS2C().register(SheetStatePayload.TYPE, SheetStatePayload.STREAM_CODEC);
+        PayloadTypeRegistry.playC2S().register(SheetFieldPayload.TYPE, SheetFieldPayload.STREAM_CODEC);
+        PayloadTypeRegistry.playC2S().register(SheetSkillPayload.TYPE, SheetSkillPayload.STREAM_CODEC);
+        PayloadTypeRegistry.playS2C().register(DownedStatePayload.TYPE, DownedStatePayload.STREAM_CODEC);
     }
 
     /** Registra os receptores no lado do servidor. */
@@ -432,6 +604,16 @@ public final class RpgNetworking {
         // MenuDataPayload aqui, pois isso abriria o menu automaticamente ao entrar.
         ServerPlayConnectionEvents.JOIN.register((handler, sender, server) -> {
             sendLockToPlayer(handler.getPlayer());
+            // Estado "deitado" no JOIN: sem isto o cliente ficaria 1 tick com o
+            // valor antigo de `downed` (que e estatico e sobrevive a troca de
+            // mundo) e um personagem deitado poderia andar nesse intervalo.
+            SheetData sheet = SessionManager.getSheet(handler.getPlayer().getUUID());
+            sendDownedState(handler.getPlayer(), sheet != null && sheet.isDowned());
+            // O estado deitado e por UUID e chega por broadcast quando MUDA, so
+            // que quem entra depois do evento nao receberia nada e o vanilla
+            // levantaria o caido na frente dele. Manda o retrato atual de todos
+            // os jogadores conectados para quem acabou de entrar.
+            sendDownedSnapshotTo(handler.getPlayer());
             sendHoverConfigToPlayer(handler.getPlayer());
             sendSpectatorTargetsToPlayer(handler.getPlayer());
             sendActivePlayerToPlayer(handler.getPlayer());
@@ -584,8 +766,168 @@ public final class RpgNetworking {
             }
         });
 
+        // ------------------------------------------------------------------
+        // Ficha do personagem (FASE 3)
+        // ------------------------------------------------------------------
+
+        // Cliente abre uma ficha: a própria, ou a de qualquer jogador se for o mestre.
+        ServerPlayNetworking.registerGlobalReceiver(SheetQueryPayload.TYPE, (payload, context) -> {
+            ServerPlayer sender = context.player();
+            ServerPlayer target = resolveSheetTarget(sender, payload.targetName());
+            if (target == null) {
+                return; // alvo não está conectado: não há ficha para mostrar
+            }
+            // Leitura é mais restrita que edição: só o dono e o mestre.
+            if (!canViewSheet(sender, target)) {
+                TabletopRpg.LOGGER.warn("[TabletopRPG] {} tentou abrir a ficha de {} — negado (não é dono nem mestre).",
+                        sender.getName().getString(), target.getName().getString());
+                return;
+            }
+            sendSheetTo(sender, target);
+        });
+
+        // Edição de um campo. Permissão conferida no servidor: o mestre edita
+        // qualquer ficha, o jogador só a própria. O cliente manda texto, e quem
+        // converte/limita é o SheetData — o estado do servidor nunca é escrito
+        // diretamente a partir do payload.
+        ServerPlayNetworking.registerGlobalReceiver(SheetFieldPayload.TYPE, (payload, context) -> {
+            ServerPlayer sender = context.player();
+            ServerPlayer target = resolveSheetTarget(sender, payload.targetName());
+            if (target == null || !canEditSheet(sender, target)) {
+                return;
+            }
+            SheetData current = SessionManager.getOrCreateSheet(target.getUUID(), target.getName().getString());
+            SheetData updated = current.withField(payload.field(), payload.value());
+            if (updated == current) {
+                return; // campo desconhecido ou valor não numérico: nada mudou
+            }
+            SessionManager.setSheet(target.getUUID(), updated);
+            broadcastSheet(target);
+        });
+
+        // Cria/remove/altera uma pericia (mesma regra de permissão do campo).
+        ServerPlayNetworking.registerGlobalReceiver(SheetSkillPayload.TYPE, (payload, context) -> {
+            ServerPlayer sender = context.player();
+            ServerPlayer target = resolveSheetTarget(sender, payload.targetName());
+            if (target == null || !canEditSheet(sender, target)) {
+                return;
+            }
+            SheetData current = SessionManager.getOrCreateSheet(target.getUUID(), target.getName().getString());
+            // SkillOp.ADD cria OU atualiza os 4 campos; as demais operações
+            // tocam só o campo pedido, preservando a descrição digitada.
+            SheetData updated = switch (payload.op() == null ? SheetData.SkillOp.INVALID : payload.op()) {
+                case ADD -> current.withSkill(payload.skill(), payload.description(), payload.value(),
+                        payload.attribute());
+                case REMOVE -> current.withoutSkill(payload.skill());
+                case SET_VALUE -> current.withSkillValue(payload.skill(), payload.value());
+                case SET_ATTRIBUTE -> current.withSkillAttribute(payload.skill(), payload.attribute());
+                // Pacote corrompido: melhor nao fazer nada do que sobrescrever
+                // os 4 campos da pericia com os zeros que vem no payload.
+                case INVALID -> current;
+            };
+            if (updated == current) {
+                return; // pericia duplicada/inexistente, lista cheia, ou nada mudou
+            }
+            SessionManager.setSheet(target.getUUID(), updated);
+            broadcastSheet(target);
+        });
+
         // Registra o receptor de pausar/retomar ciclo dia e noite no servidor
         registerDayCycleReceiver();
+    }
+
+    // ------------------------------------------------------------------
+    // FICHA DO PERSONAGEM — RESOLUÇÃO DE ALVO, PERMISSÃO E ENVIO
+    // ------------------------------------------------------------------
+
+    /**
+     * Resolve o alvo de uma operação de ficha a partir do nome enviado.
+     *
+     * <p>Nome vazio, ou igual ao próprio nome, significa "a minha ficha".
+     * Retorna null quando o nome não corresponde a ninguém conectado — o
+     * chamador simplesmente ignora a operação.
+     */
+    private static ServerPlayer resolveSheetTarget(ServerPlayer sender, String targetName) {
+        if (sender == null) {
+            return null;
+        }
+        String name = targetName == null ? "" : targetName.trim();
+        if (name.isEmpty() || name.equalsIgnoreCase(sender.getName().getString())) {
+            return sender;
+        }
+        MinecraftServer server = sender.level().getServer();
+        if (server == null) {
+            return null;
+        }
+        return server.getPlayerList().getPlayerByName(name);
+    }
+
+    /**
+     * Regra de edição da ficha: o mestre pode editar a de qualquer jogador;
+     * um jogador comum só pode editar a própria.
+     */
+    private static boolean canEditSheet(ServerPlayer sender, ServerPlayer target) {
+        return SessionManager.isMaster(sender) || sender.getUUID().equals(target.getUUID());
+    }
+
+    /**
+     * Regra de <b>leitura</b> da ficha. É mais restrita que a de edição: a
+     * ficha é dado do personagem, então nem o próprio dono de uma ficha
+     * alheia consegue abri-la.
+     *
+     * <p>Sem esta checagem, um cliente comum poderia forjar um
+     * {@link SheetQueryPayload} com o nome de outro jogador e receber a ficha
+     * dele (não edita, mas vazaria a informação).
+     */
+    private static boolean canViewSheet(ServerPlayer viewer, ServerPlayer target) {
+        return SessionManager.isMaster(viewer) || viewer.getUUID().equals(target.getUUID());
+    }
+
+    /**
+     * Envia a ficha de {@code target} para um visualizador específico,
+     * incluindo se ele pode editá-la.
+     *
+     * <p>A permissão de leitura é reconferida aqui (e não só no receptor da
+     * query) para que nenhum caminho futuro de envio vaze a ficha de alguém.
+     */
+    public static void sendSheetTo(ServerPlayer viewer, ServerPlayer target) {
+        if (viewer == null || target == null || viewer.connection == null) {
+            return;
+        }
+        if (!canViewSheet(viewer, target)) {
+            return; // sem permissão de leitura: não envia nada
+        }
+        SheetData sheet = SessionManager.getOrCreateSheet(target.getUUID(), target.getName().getString());
+        ServerPlayNetworking.send(viewer, new SheetStatePayload(
+                target.getName().getString(),
+                target.getUUID().toString(),
+                sheet,
+                canEditSheet(viewer, target)
+        ));
+    }
+
+    /**
+     * Reenvia a ficha do alvo para quem tem legitimidade para vê-la: o próprio
+     * jogador e o mestre. É este reenvio que torna a edição bidirecional — o
+     * dono vê a alteração feita pelo mestre, e o mestre vê a feita pelo
+     * jogador. Ninguém mais recebe nada.
+     */
+    public static void broadcastSheet(ServerPlayer target) {
+        if (target == null) {
+            return;
+        }
+        MinecraftServer server = target.level().getServer();
+        if (server == null) {
+            return;
+        }
+        // O dono vê a própria ficha (com permissão de edição).
+        sendSheetTo(target, target);
+        // O mestre acompanha a ficha, mesmo de outro jogador.
+        for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+            if (SessionManager.isMaster(player) && !player.getUUID().equals(target.getUUID())) {
+                sendSheetTo(player, target);
+            }
+        }
     }
 
     // ------------------------------------------------------------------
@@ -623,6 +965,60 @@ public final class RpgNetworking {
         ServerPlayNetworking.send(player, new PlayerLockPayload(!SessionManager.canPlayerAct(player)));
     }
 
+    /**
+     * Envia o estado "deitado" (HP da ficha &lt;= 0) para o próprio jogador,
+     * para o cliente congelar o movimento local.
+     *
+     * <p>Chamado por {@code DamageControlHandler} só quando o estado muda
+     * (inclusive na primeira vez que o jogador é visto no tick), então não
+     * gera tráfego por tick.
+     */
+    public static void sendDownedState(ServerPlayer player, boolean downed) {
+        if (player == null || player.connection == null) {
+            return;
+        }
+        // ServerPlayer.server e privado nesta versao: o caminho publico e
+        // ServerLevel.getServer().
+        MinecraftServer server = player.level().getServer();
+        if (server == null) {
+            return;
+        }
+        DownedStatePayload payload = new DownedStatePayload(player.getUUID(), downed);
+        // Broadcast, e nao so para o dono: o vanilla recalcula a pose de TODOS os
+        // jogadores no cliente, entao se so o dono soubesse, o mestre veria os
+        // caidos em pe. Ver a justificativa em DownedStatePayload.
+        for (ServerPlayer viewer : server.getPlayerList().getPlayers()) {
+            ServerPlayNetworking.send(viewer, payload);
+        }
+    }
+
+    /**
+     * Manda para quem acabou de entrar o estado deitado de <b>todos</b> os
+     * jogadores ja conectados.
+     *
+     * <p><b>Por que precisa existir:</b> {@link #sendDownedState} so dispara
+     * quando o estado MUDA, entao um jogador que entra/reconecta depois de
+     * alguem cair receberia informacao nenhuma sobre o caido -- e o
+     * {@code ClientPlayerPoseMixin} dele nao seguraria a pose, deixando o
+     * vanilla levantar o personagem na frente de quem acabou de entrar.
+     *
+     * @param viewer quem esta entrando (tambem recebe o proprio estado, inofensivo)
+     */
+    public static void sendDownedSnapshotTo(ServerPlayer viewer) {
+        if (viewer == null || viewer.connection == null) {
+            return;
+        }
+        MinecraftServer server = viewer.level().getServer();
+        if (server == null) {
+            return;
+        }
+        for (ServerPlayer other : server.getPlayerList().getPlayers()) {
+            SheetData otherSheet = SessionManager.getSheet(other.getUUID());
+            boolean downed = otherSheet != null && otherSheet.isDowned();
+            ServerPlayNetworking.send(viewer, new DownedStatePayload(other.getUUID(), downed));
+        }
+    }
+
     /** Envia os dados da sessão + estado de trava, abrindo o menu no cliente (resposta ao apertar R). */
     public static void sendMenuToPlayer(ServerPlayer player) {
         if (player == null || player.connection == null) {
@@ -630,10 +1026,16 @@ public final class RpgNetworking {
         }
 
         // Lista de jogadores conectados (para o mestre poder dar turno pelo menu).
+        // O mestre NAO entra na lista: ele nao tem ficha propria (feedback do
+        // usuario), entao clicar no proprio nome abriria uma ficha vazia sem
+        // nenhuma utilidade.
         List<String> playerNames = new ArrayList<>();
         MinecraftServer server = player.level().getServer();
         if (server != null) {
             for (ServerPlayer p : server.getPlayerList().getPlayers()) {
+                if (SessionManager.isMaster(p)) {
+                    continue;
+                }
                 playerNames.add(p.getName().getString());
             }
         }
