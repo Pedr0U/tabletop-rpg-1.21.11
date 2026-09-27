@@ -11,8 +11,13 @@ import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.Mob;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.levelgen.Heightmap;
+import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
+import net.minecraft.world.phys.shapes.CollisionContext;
+import net.minecraft.world.phys.shapes.VoxelShape;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -205,14 +210,74 @@ public final class CombatController {
         }
 
         // Movimento direto (sem IA): o mob fica congelado (noAi=true) e o
-        // servidor o move em linha reta até o destino. O Y do destino é a
-        // superfície do terreno (Level.getHeight já retorna o primeiro Y
-        // vazio acima do bloco mais alto (+1). NÃO somar +1, senão o mob flutua).
-        double groundY = level.getHeight(Heightmap.Types.MOTION_BLOCKING, dest.getX(), dest.getZ());
+        // servidor o move em linha reta até o destino.
+        //
+        // O Y do destino é o TOPO DA SUPERFÍCIE onde o mob vai se segurar,
+        // e esse topo não é sempre o topo do bloco clicado. Três situações:
+        //
+        // 1. ESCADA. O clique é num bloco de escada, que fica no ar encostado
+        //    na parede e não tem chão embaixo. O mob é posto com os pés no
+        //    fundo do bloco da escada, ou seja, na altura dela, e FICA NO AR:
+        //    com NoAI a gravidade não roda (LivingEntity.travel só é chamado
+        //    com IA efetiva) e nada prende a entidade, então ele permanece
+        //    segurando a escada até o mestre mandar outro lugar
+        //    (bug pedido em 26/09/2026).
+        //
+        // 2. O bloco tem superfície real. Aí se usa o topo da FORMA DE COLISÃO
+        //    dele, e não dest.getY() + 1. Isso importa porque isSolid() é um
+        //    teste grosseiro de "é mais ou menos um bloco inteiro"
+        //    (getSize() >= 0.729 OU altura >= 1), então meio bloco, placa de
+        //    pressão e moldura de portal do fim, que têm menos de 1 bloco de
+        //    altura, passam por ele. Com +1 fixo o mob ficava boiando acima
+        //    dessas formas (bug relatado em 26/09/2026). Andaime entra
+        //    aqui: ScaffoldingBlock devolve SHAPE_STABLE mesmo com
+        //    CollisionContext vazio, então o mob fica em cima dele.
+        //
+        // 3. O bloco é atravessável (grama, samambaia, fio de redstone, teia,
+        //    camada de neve, luz, videira): a forma de colisão é vazia, logo
+        //    não há superfície onde o mob se segure, e o +1 o deixava 1 bloco
+        //    acima do chão real, apoiado no vazio (bug relatado em 26/09/2026).
+        //    Aqui usa a superfície sólida da coluna em MOTION_BLOCKING_NO_LEAVES,
+        //    que ignora o bloco atravessável e também a folha — preserva a
+        //    correção da copa sem reintroduzir o buraco da grama.
+        //
+        // Antes, para o caso 2, vinha Level.getHeight(MOTION_BLOCKING, x, z):
+        // o heightmap guarda o Y do bloco que bloqueia movimento na COLUNA, e
+        // esse predicado inclui tronco e folha. Debaixo de uma árvore o topo
+        // era a copa, e o mob era posto em cima dela em vez de ficar embaixo
+        // (bug relatado em 26/09/2026). Por isso a forma de colisão do bloco
+        // clicado tem precedência sobre o heightmap.
+        BlockState clicked = level.getBlockState(dest);
+        VoxelShape clickedShape = clicked.getCollisionShape(level, dest, CollisionContext.empty());
+        double groundY;
+        if (clicked.is(Blocks.LADDER)) {
+            groundY = dest.getY();
+        } else if (!clickedShape.isEmpty() && clickedShape.bounds().maxY > 0.0) {
+            groundY = dest.getY() + clickedShape.bounds().maxY;
+        } else {
+            groundY = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, dest.getX(), dest.getZ());
+        }
+        // Sem esta checagem o vanilla empurra o mob para fora do bloco em que
+        // ele foi posto, e ele volta a subir. O mestre é avisado e o
+        // movimento é recusado, para o destino continuar sendo o que ele
+        // clicou em vez de um lugar acima que ninguém pediu.
+        //
+        // Testa a AABB que o mob teria no destino, e não só a coluna 1x1 acima
+        // do bloco: assim folha, slab, cerca, bau e placa bloqueiam, e um mob
+        // largo (ravager, ghast) tambem e recusado. `noCollision` tambem
+        // respeita a borda do mundo.
+        double dx = dest.getX() + 0.5 - mob.getX();
+        double dy = groundY - mob.getY();
+        double dz = dest.getZ() + 0.5 - mob.getZ();
+        if (!level.noCollision(mob, mob.getBoundingBox().move(dx, dy, dz))) {
+            master.sendSystemMessage(Component.literal(
+                    "§c[RPG] No room above that block to place the entity."));
+            return;
+        }
         monsterDestinations.put(selectedMonsterUuid,
                 new Vec3(dest.getX() + 0.5, groundY, dest.getZ() + 0.5));
         master.sendSystemMessage(Component.literal("§a[RPG] Monster moving to §e" + dest.getX() + ", "
-                + dest.getZ() + "§a."));
+                + dest.getY() + ", " + dest.getZ() + "§a."));
     }
 
     private static void tickControlledMonsters(MinecraftServer server) {

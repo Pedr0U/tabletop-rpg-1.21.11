@@ -109,6 +109,14 @@ public class SkillsScreen extends CharacterSheetScreen {
      * tela, entao precisa se destacar do nome da skill e do botao em si.
      */
     private static final int COL_REMOVE_ICON = 0xFFFF7070;
+    /**
+     * Cor do "X" quando a remocao esta armada (aguardando o segundo clique).
+     *
+     * <p>Dourado: o mesmo dourado de {@link #COL_SELECTED}, que ja marca a
+     * linha da skill aberta. Assim o "X" fica igual ao resto da linha da
+     * skill armada, e nao e preciso caber texto extra dentro dos 20px.
+     */
+    private static final int COL_REMOVE_ARMED = COL_SELECTED;
     /** Cor da seta de reordenar ativa. */
     private static final int COL_ARROW = 0xFFE0E0E6;
     /**
@@ -155,6 +163,17 @@ public class SkillsScreen extends CharacterSheetScreen {
     private String selectedSkill;
     /** Rolagem do texto dentro do popup. */
     private int popupScroll;
+    /**
+     * Skill ARMADA para remocao: o primeiro clique no "X" marca, o segundo
+     * confirma (decisao do usuario em 26/09/2026).
+     *
+     * <p>Guarda o <b>nome</b>, como {@link #selectedSkill}, porque a lista
+     * chega de novo do servidor a cada edicao e um objeto velho miraria a linha
+     * errada. Clicar no nome de qualquer skill ou receber a ficha atualizada
+     * desarma. Sair pelo botao Back tambem desarma; pelo ESC a tela inteira e
+     * descartada, entao a arma morre junto com o objeto.
+     */
+    private String pendingRemoval;
 
     // ---------------------------------------------------------------
     // BARRA DE ROLAGEM DO POPUP (visivel, clicavel e arrastavel)
@@ -363,8 +382,11 @@ public class SkillsScreen extends CharacterSheetScreen {
      *
      * <p>Usa "X" maiusculo em vez de "x": em 6px de largura a minuscula
      * ficava indistinguivel de um borrão dentro de uma caixa de 20px.
+     *
+     * @param armed true desenha dourado: a remocao desta skill espera o
+     *              segundo clique
      */
-    private void renderRemoveIcon(GuiGraphics graphics, Button button) {
+    private void renderRemoveIcon(GuiGraphics graphics, Button button, boolean armed) {
         if (button == null || !button.visible) {
             return;
         }
@@ -372,7 +394,7 @@ public class SkillsScreen extends CharacterSheetScreen {
         int textW = this.font.width(icon);
         int tx = button.getX() + (button.getWidth() - textW) / 2;
         int ty = button.getY() + (button.getHeight() - 8) / 2;
-        graphics.drawString(this.font, icon, tx, ty, COL_REMOVE_ICON, false);
+        graphics.drawString(this.font, icon, tx, ty, armed ? COL_REMOVE_ARMED : COL_REMOVE_ICON, false);
     }
 
     /**
@@ -441,6 +463,8 @@ public class SkillsScreen extends CharacterSheetScreen {
      */
     @Override
     protected void onSheetReceived() {
+        // A ficha chegou nova: a linha armada pode ter mudado de lugar ou sumido.
+        pendingRemoval = null;
         if (selectedSkill != null && findSkill(selectedSkill) == null) {
             selectedSkill = null;
             popupScroll = 0;
@@ -571,6 +595,9 @@ public class SkillsScreen extends CharacterSheetScreen {
         if (skill == null) {
             return;
         }
+        // Abrir a descricao de qualquer linha cancela a remocao armada: e a
+        // mesma coisa que clicar em "Cancelar" num aviso.
+        pendingRemoval = null;
         if (skill.name().equalsIgnoreCase(selectedSkill)) {
             selectedSkill = null;
             popupScroll = 0;
@@ -588,6 +615,15 @@ public class SkillsScreen extends CharacterSheetScreen {
         if (skill == null) {
             return;
         }
+        // Confirmacao em dois cliques (decisao do usuario em 26/09/2026): o
+        // primeiro arma, o segundo remove. Nao ha como desfazer, e o jogador
+        // que recriar a skill com o mesmo nome nao recupera o valor nem o
+        // atributo. Outro "X" apenas move a mira para a outra skill.
+        if (!skill.name().equalsIgnoreCase(pendingRemoval)) {
+            pendingRemoval = skill.name();
+            return;
+        }
+        pendingRemoval = null;
         // Se a skill removida era a do popup, fecha: senao o popup ficaria
         // aberto mostrando uma skill que acabou de sumir.
         if (skill.name().equalsIgnoreCase(selectedSkill)) {
@@ -627,6 +663,7 @@ public class SkillsScreen extends CharacterSheetScreen {
      */
     @Override
     protected void close() {
+        pendingRemoval = null;
         if (this.minecraft != null) {
             this.minecraft.setScreen(new StatusScreen(targetName, returnScreen()));
             TabletopRpgClient.requestSheet(targetName);
@@ -753,7 +790,7 @@ public class SkillsScreen extends CharacterSheetScreen {
                 graphics.fill(bx, by, bx + 2, by + nameButtons[i].getHeight(), COL_SELECTED);
             }
 
-            renderRemoveIcon(graphics, removeButtons[i]);
+            renderRemoveIcon(graphics, removeButtons[i], skill.name().equalsIgnoreCase(pendingRemoval));
             renderArrow(graphics, upButtons[i], true, upButtons[i].active);
             renderArrow(graphics, downButtons[i], false, downButtons[i].active);
 
