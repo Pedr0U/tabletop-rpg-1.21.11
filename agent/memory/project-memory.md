@@ -336,3 +336,53 @@ Relatorios de sessao: `agent/reports/`. Memoria de proceso do TCC:
 - **Nada prende entidade numa escada com NoAI**: `Entity.collide` devolve o vetor intacto quando `lengthSqr()==0` e `LivingEntity.handleOnClimbable` só é chamado de dentro de `travel`, que não roda sem IA efetiva. Por isso o mob fica pendurado no ar sem `setNoGravity` nem `noPhysics`. E **não existe animação de escalada para mobs**: `Pose` não tem `CLIMBING` e `HumanoidModel.setupAnim` não menciona escalada. Fazer o mob levantar os braços exigiria mixin no renderizador.
 - `ScaffoldingBlock.getCollisionShape` **não** é vazio: com `CollisionContext.empty()` o `isAbove()` retorna sempre `true`, então devolve `SHAPE_STABLE` (topo Y=16/16) e o mob fica em cima. O campo `withCollidingWithScaffolding` **não existe** em 1.21.11.
 - `getCollisionShape` neste mappings exige **três** argumentos: `getCollisionShape(BlockGetter, BlockPos, CollisionContext)`. Com um só não compila. E `Blocks` fica em `net.minecraft.world.level.block`, não `net.minecraft.world.level`.
+
+## 2026-09-26 — GitHub: publicacao, permissao de conta e envio de tags (FATO verificado)
+
+Enviado ao GitHub com sucesso. `main` foi de `a53f26f` para `47e7577` e as tres tags
+anotadas subiram.
+
+**FATO verificado: `git push origin main` envia SO a branch, nunca as tags.** O push
+reporta sucesso e as tags ficam locais, entao da para perder o versionamento no GitHub sem
+perceber. Ao versionar, sempre acompanhar com `git push origin --tags` e conferir com
+`git ls-remote --tags origin`. Confirmado com as tres tags `checkpoint-*` presentes no
+remoto apos o segundo comando.
+
+**FATO verificado: 403 que nomeia a conta e problema de PERMISSAO, nao de credencial.**
+O erro real foi `remote: Permission to Pedr0U/tabletop-rpg-1.21.11.git denied to
+Danylohcs`. O GitHub nomeia a conta que autenticou, logo a autenticacao funcionou; token
+invalido ou expirado produz outra mensagem (`could not read Username`, `Invalid username
+or password`). Nao adianta regenerar token nesse caso: o que falta e acesso de escrita.
+Para conferir o proprio nivel: abrir o repositorio e olhar a aba People.
+
+**FATO verificado: colaborador com permissao Read NAO envia commit.** O GitHub rotula
+Read e Write igualmente como "colaborador", entao "sou colaborador" nao prova que o push
+funciona. Read aparece como causa mais provavel do 403 deste projeto.
+
+**FATO verificado: mudanca de permissao nao exige token novo.** Depois que o usuario
+concedeu acesso, o push passou com a credencial antiga, sem reautenticar: a checagem de
+permissao acontece a cada requisicao.
+
+**Configuracao deste projeto.** Remoto `https://github.com/Pedr0U/tabletop-rpg-1.21.11.git`,
+repositorio **PUBLICO** (verificado pela API anonima do GitHub em 26/09/2026). A conta que
+faz o push e `Danylohcs`; o repositório pertence a conta `Pedr0U`, e `Danylohcs` precisou
+ser adicionado como colaborador **com escrita**. A credencial fica no Windows via Git
+Credential Manager (`credential.helper = manager`); `cmdkey /list` mostra o usuario
+guardado. O GitHub Desktop tambem esta autenticado como `Danylohcs`, entao ele nao e
+alternativa ao git CLI neste projeto. Nao extrair o token guardado: pedir ao usuario um
+Personal Access Token digitado direto no terminal dele.
+
+**FATO verificado: nao houve `push --force` em nenhum checkpoint.**
+
+**Risco registrado:** como o repositorio e publico e o usuario autorizou publicar o
+conteudo de `agent/`, o repositorio expoe o nome do usuario, o caminho local
+`C:\Users\Danylo Henrique\Documents\GitHub\agent` e o processo do TCC. O e-mail
+`danylohcs@gmail.com` ja consta como autor no historico enviado, o que e anterior a esta
+sessao. Publicar `agent/` em repo publico deve ser decisao explicita do usuario, nunca
+omissao por padrao.
+
+**Pendente:** C02 e C03 estao no GitHub mas NAO foram validados em jogo. Placa de pressao,
+escada, andaime e a mensagem de recusa seguem como "codigo pronto para testar". Correcao
+de videira e camada de neve nao implementadas. `AuraRenderer.java:101` segue com
+`getHeight(MOTION_BLOCKING, ...) + 1.05`, possivelmente ~1 bloco acima do mob apos a
+mudanca de Y.
