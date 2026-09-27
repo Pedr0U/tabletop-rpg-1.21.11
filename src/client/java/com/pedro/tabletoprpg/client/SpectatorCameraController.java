@@ -200,6 +200,27 @@ public final class SpectatorCameraController {
     private SpectatorCameraController() {
     }
 
+    /**
+     * Zera o estado derivado da sessao na desconexao (decisao do usuario em
+     * 27/09/2026). O {@code entityId} do jogador muda a cada login, entao um
+     * {@code targetIndex} guardado apontaria para outra pessoa ao reconectar
+     * (ou para indice fora da lista). Zera tambem {@code wasLocked} e
+     * {@code lastGameModeOrdinal} para o JOIN nao parecer troca de turno/modo.
+     * As preferencias do jogador ({@code mode}, {@code orbitalEnabled},
+     * {@code topDownZoom}, {@code transitionSpeed}) sao preservadas. Nao chama
+     * {@code deactivate} (que exige {@link Minecraft}): o {@link #tick} ja o
+     * faz quando {@code client.player == null}.
+     */
+    public static void reset() {
+        targetIndex = 0;
+        active = false;
+        wasLocked = false;
+        lastGameModeOrdinal = -1;
+        freeCamInitialized = false;
+        thirdPersonLookInitialized = false;
+        freeCamPos = null;
+    }
+
     public static boolean isActive() {
         return active;
     }

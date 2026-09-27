@@ -10,6 +10,7 @@ import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.minecraft.client.Camera;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
+import net.minecraft.resources.Identifier;
 import net.minecraft.world.entity.Mob;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.entity.projectile.ProjectileUtil;
@@ -38,6 +39,9 @@ public class TabletopRpgClient implements ClientModInitializer {
      * preferência). Usado pelo {@link SpectatorCameraController}.
      */
     public static KeyMapping rpgCameraModeKey;
+
+    /** Categoria do mod na tela de Controles (aba propria, fora de "Miscellaneous"). */
+    private static KeyMapping.Category rpgCategory = null;
 
     /**
      * UUID do jogador ativo (turno atual) como string; vazio ("") quando não
@@ -209,6 +213,19 @@ public class TabletopRpgClient implements ClientModInitializer {
             // SpectatorCameraController le isso como "chegou o meu turno" e
             // derruba a camera livre sem o jogador ter ganho turno.
             locked = false;
+            activePlayerUuid = "";
+            // -1 e sentinela de "sem sessao": o SpectatorCameraController compara
+            // este ordinal com o anterior para saber se o turno comecou ou o modo
+            // da sessao mudou. Zerar aqui faria o JOIN parecer troca de turno.
+            gameModeOrdinal = -1;
+            auras = List.of();
+            lastHoveredId = -1;
+            hoverMaxDistance = 32;
+            dayNightCycleEnabled = true;
+            playersCanBreakBlocks = false;
+            playersCanPlaceBlocks = false;
+            weatherState = 0;
+            SpectatorCameraController.reset();
         });
     }
 
@@ -216,12 +233,19 @@ public class TabletopRpgClient implements ClientModInitializer {
     public void onInitializeClient() {
         LOGGER.info("[TabletopRPG-Client] onInitializeClient() started.");
 
+        // Fora do try das teclas: se a categoria falhasse ali, o catch mascararia
+        // a excecao e as duas teclas ficariam nulas.
+        if (rpgCategory == null) {
+            rpgCategory = KeyMapping.Category.register(
+                    Identifier.fromNamespaceAndPath("tabletop-rpg", "rpg"));
+        }
+
         try {
             rpgMenuKey = KeyBindingHelper.registerKeyBinding(new KeyMapping(
                 "key.tabletoprpg.menu",
                 InputConstants.Type.KEYSYM,
                 GLFW.GLFW_KEY_R,
-                KeyMapping.Category.MISC
+                rpgCategory
             ));
             LOGGER.info("[TabletopRPG-Client] Keybinding registered successfully: {}", rpgMenuKey.getName());
 
@@ -229,7 +253,7 @@ public class TabletopRpgClient implements ClientModInitializer {
                 "key.tabletoprpg.camera_mode",
                 InputConstants.Type.KEYSYM,
                 GLFW.GLFW_KEY_V,
-                KeyMapping.Category.MISC
+                rpgCategory
             ));
             LOGGER.info("[TabletopRPG-Client] Camera mode keybinding registered successfully: {}", rpgCameraModeKey.getName());
         } catch (Throwable t) {

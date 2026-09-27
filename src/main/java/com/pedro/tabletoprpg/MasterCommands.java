@@ -645,8 +645,12 @@ public class MasterCommands {
     }
 
     /**
-     * Define a distância máxima do highlight (Glowing) para os jogadores
-     * (não-mestre). O mestre sempre vê de qualquer distância. Só o mestre.
+     * Define a distância máxima do highlight (Glowing) para <b>todos</b> os
+     * jogadores, inclusive o mestre — o valor vai por
+     * {@link RpgNetworking#sendHoverConfigToPlayer} sem tratamento especial para o
+     * mestre. Antes este texto afirmava que o mestre via de qualquer distância; não
+     * existe 1024 em nenhum lugar do código. Decisão do usuário em 27/09/2026: o
+     * comportamento foi mantido e só o texto corrigido. Só o mestre usa o comando.
      */
     private static int setHoverDistance(CommandContext<CommandSourceStack> ctx) {
         if (!verifyMasterPermission(ctx)) return 0;
@@ -676,17 +680,37 @@ public class MasterCommands {
             formula = "d20";
         }
 
-        String[] rawTerms = formula.split("\\+");
-        if (rawTerms.length == 0) {
-            ctx.getSource().sendFailure(Component.literal("§cInvalid dice formula. Example: d20+10, 2d6+d4+3"));
-            return null;
-        }
+        // Split por LOOKAHEAD: cada operador fica no COMECO do termo seguinte, e
+        // assim o sinal sobrevive. "d8-1" -> ["d8","-1"]; "2d6+d4" -> ["2d6","+d4"];
+        // "-2" -> ["-2"] (o lookahead de largura zero no inicio e ignorado pelo
+        // Pattern.split, entao o sinal inicial fica no primeiro termo).
+        // NAO usar split("([+-])"): o Pattern.split do Java NAO inclui os grupos
+        // capturados no resultado, e a subtração viraria adição silenciosa --
+        // "d8-1" rolaria o dado e descartaria o -1 sem dar erro.
+        String[] terms = formula.split("(?=[+-])", -1);
 
-        List<String> displayTerms = new ArrayList<>();
+        // Montado no laço porque o separador precisa do sinal: juntar sempre com
+        // " + " mostraria "d8 [5] + -1".
+        StringBuilder joined = new StringBuilder();
         int total = 0;
 
-        for (String rawTerm : rawTerms) {
+        for (int i = 0; i < terms.length; i++) {
+            String rawTerm = terms[i];
+            int sign = 1;
+            if (rawTerm.startsWith("-")) {
+                sign = -1;
+                rawTerm = rawTerm.substring(1);
+            } else if (rawTerm.startsWith("+")) {
+                rawTerm = rawTerm.substring(1);
+            }
             if (rawTerm.isEmpty()) {
+                // Só o primeiro termo pode ser vazio, de um sinal inicial
+                // ("+d8", "-2"). No meio é sinal duplo ("d8--1"), que nao faz
+                // sentido e e recusado.
+                if (i != 0) {
+                    ctx.getSource().sendFailure(Component.literal("§cInvalid dice formula. Example: d20+10, 2d6+d4+3"));
+                    return null;
+                }
                 continue;
             }
 
@@ -705,27 +729,30 @@ public class MasterCommands {
 
                 int[] rolls = new int[count];
                 int termSum = 0;
-                for (int i = 0; i < count; i++) {
-                    rolls[i] = RANDOM.nextInt(sides) + 1;
-                    termSum += rolls[i];
+                for (int r = 0; r < count; r++) {
+                    rolls[r] = RANDOM.nextInt(sides) + 1;
+                    termSum += rolls[r];
                 }
-                total += termSum;
+                total += sign * termSum;
 
                 StringBuilder rollsStr = new StringBuilder();
-                for (int i = 0; i < rolls.length; i++) {
-                    if (i > 0) rollsStr.append(",");
-                    rollsStr.append(rolls[i]);
+                for (int r = 0; r < rolls.length; r++) {
+                    if (r > 0) rollsStr.append(",");
+                    rollsStr.append(rolls[r]);
                 }
 
                 // Não mostra o "1" quando é um único dado (ex: "d20", não "1d20")
                 String countPrefix = count == 1 ? "" : String.valueOf(count);
-                displayTerms.add(countPrefix + "d" + sides + " [" + rollsStr + "]");
+                appendRollTerm(joined, sign, countPrefix + "d" + sides + " [" + rollsStr + "]");
 
             } else if (modMatcher.matches()) {
-                // Termo é um número fixo somado ao total (ex: "+10")
+                // Termo é um número fixo somado (ou subtraído) do total (ex: "+10")
                 int mod = Integer.parseInt(rawTerm);
-                total += mod;
-                displayTerms.add(String.valueOf(mod));
+                total += sign * mod;
+                // Valor absoluto: o sinal ja vai no separador, senão o chat
+                // mostraria "d8 [5] - -1". No primeiro termo o helper recoloca o
+                // sinal, porque não há separador antes ("-2" sozinho).
+                appendRollTerm(joined, sign, String.valueOf(Math.abs(mod)));
 
             } else {
                 ctx.getSource().sendFailure(Component.literal(
@@ -734,15 +761,27 @@ public class MasterCommands {
             }
         }
 
-        if (displayTerms.isEmpty()) {
+        if (joined.isEmpty()) {
             ctx.getSource().sendFailure(Component.literal("§cInvalid dice formula. Example: d20+10, 2d6+d4+3"));
             return null;
         }
 
-        String joined = String.join(" §f+ §b", displayTerms);
-
         return "§6§e" + player.getName().getString()
             + " §frolled a: §b" + joined + " §f= §l§a" + total;
+    }
+
+    /**
+     * Joga um termo na mensagem de resultado com o separador correto (" §f+ §b"
+     * ou " §f- §b"). O {@code text} deve vir sem sinal, porque o separador já
+     * carrega o dele; no primeiro termo não existe separador, então o sinal é
+     * posto aqui. Sem isso o chat mostraria "d8 [5] - -1".
+     */
+    private static void appendRollTerm(StringBuilder joined, int sign, String text) {
+        if (joined.isEmpty()) {
+            joined.append(sign < 0 ? "-" : "").append(text);
+        } else {
+            joined.append(sign < 0 ? " §f- §b" : " §f+ §b").append(text);
+        }
     }
 
     private static boolean verifyMasterPermission(CommandContext<CommandSourceStack> ctx) {

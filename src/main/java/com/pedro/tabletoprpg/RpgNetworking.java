@@ -233,8 +233,13 @@ public final class RpgNetworking {
 
     /**
      * Servidor -> Cliente: distância máxima (em blocos) do highlight para este
-     * jogador. O mestre recebe um valor alto (ilimitado na prática); os demais
-     * recebem a distância configurada (/rpg hoverdistance).
+     * jogador. <b>Todos recebem o mesmo valor</b>, inclusive o mestre: o que vale e
+     * {@link SessionManager#getHoverDistance()}, ajustado por /rpg hoverdistance
+     * (padrao 32). Antes este texto afirmava que o mestre recebia "um valor alto
+     * (ilimitado na pratica)" e a memoria do projeto falava em 1024 blocos — nao
+     * existe 1024 em lugar nenhum do codigo. Decisao do usuario em 27/09/2026: o
+     * comportamento atual (mesmo valor para todos) foi mantido e so o texto foi
+     * corrigido.
      */
     public record HoverConfigPayload(int maxDistance) implements CustomPacketPayload {
         public static final Type<HoverConfigPayload> TYPE = new Type<>(TabletopRpg.id("hover_config"));
@@ -670,6 +675,9 @@ public final class RpgNetworking {
             sendHoverConfigToPlayer(handler.getPlayer());
             sendSpectatorTargetsToPlayer(handler.getPlayer());
             sendActivePlayerToPlayer(handler.getPlayer());
+            // A aura (barreira azul) NAO era reenviada no JOIN: quem reconectava
+            // voltava sem a barreira ate o proximo /rpg turn.
+            sendAuraStateToPlayer(server, handler.getPlayer());
             // A lista de alvos do carrossel mudou (um jogador entrou): atualiza
             // também os jogadores já conectados, senão o novo jogador só
             // apareceria no carrossel deles no próximo broadcast.
@@ -677,9 +685,9 @@ public final class RpgNetworking {
         });
 
         // Ao desconectar: se era o mestre, libera o cargo e pausa a sessão
-        // (modo volta para FREE, turno limpo, combate resetado). Se era o
-        // jogador ativo, limpa o turno dele. Evita estado quebrado (jogadores
-        // travados sem mestre, ou turno preso num jogador que caiu).
+        // (modo volta para FREE, turno limpo, combate resetado). Evita estado
+        // quebrado (jogadores travados sem mestre). O turno de quem caiu nao e
+        // limpo: fica reservado para o mestre pular com /rpg turn revoke.
         ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> {
             ServerPlayer player = handler.getPlayer();
             if (player == null) {
@@ -696,13 +704,16 @@ public final class RpgNetworking {
                 server.getPlayerList().broadcastSystemMessage(
                         Component.literal("§c[RPG] The master left the session. Mode set to FREE."), false);
             }
-            if (SessionManager.isActivePlayer(player)) {
-                SessionManager.clearActivePlayer();
-                CombatController.clearPlayerAnchor(player.getUUID());
-                changed = true;
-            }
             // Limpa o hover deste jogador (entrada do mapa por jogador).
             CombatController.clearHoveredEntity(player.getUUID());
+            // O turno do jogador que caiu NAO e limpo: a vez dele fica reservada
+            // e o mestre pode pular com /rpg turn revoke (decisao do usuario em
+            // 27/09/2026).
+            if (!SessionManager.isMaster(player) && SessionManager.isActivePlayer(player)) {
+                server.getPlayerList().broadcastSystemMessage(
+                        Component.literal("§6[RPG] §e" + player.getName().getString()
+                                + " §fdisconnected. Their turn is reserved; the Master can skip it with /rpg turn revoke."), false);
+            }
             if (changed) {
                 sendToAll(server);
                 sendAuraStateToAll(server);
@@ -1166,16 +1177,33 @@ public final class RpgNetworking {
         }
     }
 
+    /** Envia o estado atual das auras de limite para um jogador especifico. */
+    public static void sendAuraStateToPlayer(MinecraftServer server, ServerPlayer player) {
+        if (server == null || player == null || player.connection == null) {
+            return;
+        }
+        sendAuraState(server, player, new AuraStatePayload(CombatController.getAuraData(server)));
+    }
+
     /** Envia o estado atual das auras de limite para todos os jogadores. */
     public static void sendAuraStateToAll(MinecraftServer server) {
         if (server == null) {
             return;
         }
+        // Monta o payload UMA vez: getAuraData percorre ancoras e mobs selecionados,
+        // e nao faz sentido refazer isso por jogador num broadcast.
         AuraStatePayload payload = new AuraStatePayload(CombatController.getAuraData(server));
         TabletopRpg.LOGGER.info("[TabletopRPG] sendAuraStateToAll: enviando {} aura(s)", payload.auras().size());
         for (ServerPlayer player : server.getPlayerList().getPlayers()) {
-            ServerPlayNetworking.send(player, payload);
+            sendAuraState(server, player, payload);
         }
+    }
+
+    private static void sendAuraState(MinecraftServer server, ServerPlayer player, AuraStatePayload payload) {
+        if (server == null || player == null || player.connection == null) {
+            return;
+        }
+        ServerPlayNetworking.send(player, payload);
     }
 
     /** Envia a distância do highlight para um jogador (vale para todos, inclusive o mestre). */
