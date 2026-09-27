@@ -247,6 +247,16 @@ public final class CombatController {
         // era a copa, e o mob era posto em cima dela em vez de ficar embaixo
         // (bug relatado em 26/09/2026). Por isso a forma de colisão do bloco
         // clicado tem precedência sobre o heightmap.
+        // 4. A placa de pressão é o caso traiçoeiro: em Blocks.java ela é
+        //    declarada com .noCollision() E .forceSolidOn() ao mesmo tempo.
+        //    Sem colisão, getCollisionShape devolve forma VAZIA, então o caso 2
+        //    não pega; e como forceSolidOn faz blocksMotion() responder
+        //    verdadeiro, o heightmap do caso 3 CONTA a placa e devolve Y + 1,
+        //    que é o bug de boiar que o usuário viu no teste de 26/09/2026.
+        //    A saída é a forma de SELEÇÃO, que existe e tem o topo certo:
+        //    1/16 solta, 8/16 pressionada. O teste blocksMotion() é o que
+        //    separa a placa de um bloco decorativo como a grama, que também
+        //    tem forma de seleção mas não é chão.
         BlockState clicked = level.getBlockState(dest);
         VoxelShape clickedShape = clicked.getCollisionShape(level, dest, CollisionContext.empty());
         double groundY;
@@ -255,7 +265,10 @@ public final class CombatController {
         } else if (!clickedShape.isEmpty() && clickedShape.bounds().maxY > 0.0) {
             groundY = dest.getY() + clickedShape.bounds().maxY;
         } else {
-            groundY = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, dest.getX(), dest.getZ());
+            VoxelShape selectionShape = clicked.getShape(level, dest);
+            groundY = clicked.blocksMotion() && !selectionShape.isEmpty() && selectionShape.bounds().maxY > 0.0
+                    ? dest.getY() + selectionShape.bounds().maxY
+                    : level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, dest.getX(), dest.getZ());
         }
         // Sem esta checagem o vanilla empurra o mob para fora do bloco em que
         // ele foi posto, e ele volta a subir. O mestre é avisado e o
