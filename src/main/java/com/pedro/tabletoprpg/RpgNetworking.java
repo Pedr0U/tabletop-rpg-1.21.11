@@ -102,6 +102,62 @@ public final class RpgNetworking {
         }
     }
 
+    /**
+     * Servidor -&gt; Cliente: o <b>modelo</b> da ficha.
+     *
+     * <p>27/09/2026 (Sheet Editor). O modelo e global, entao vai para todo mundo
+     * e nao so para o Mestre: e ele que desenha "Name", "Race", "Strength" e a
+     * lista de pericias na ficha de cada jogador. Manda para todos, porque um
+     * jogador comum tambem ve a ficha dos outros.
+     *
+     * <p><b>Nao substitui a ficha, substitui o MOLDE.</b> Os valores continuam
+     * indo pelo {@code SheetStatePayload}: e por isso que este pacote pode ser
+     * reenviado a cada edicao do Mestre sem perder o que o jogador digitou.
+     *
+     * <p>Vai no JOIN e de novo depois de cada edicao.
+     */
+    public record SheetModelPayload(SheetModel model) implements CustomPacketPayload {
+        public static final Type<SheetModelPayload> TYPE =
+                new Type<>(TabletopRpg.id("sheet_model"));
+        public static final StreamCodec<FriendlyByteBuf, SheetModelPayload> STREAM_CODEC =
+                StreamCodec.composite(SheetModel.STREAM_CODEC, SheetModelPayload::model, SheetModelPayload::new);
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
+    /**
+     * Cliente (Mestre) -&gt; Servidor: o modelo inteiro, ja montado.
+     *
+     * <p><b>Por que o modelo inteiro e nao uma operacao ("renomear X"):</b> a tela
+     * do Mestre tem um botao <b>Salvar</b>, entao o que o cliente faz e editar uma
+     * copia local e enviar o resultado de uma vez. Mandar uma operacao por
+     * mudanca seria varios pacotes, nenhum deles atomico: se o terceiro chegasse
+     * depois de um comando do servidor, a tela mostraria um modelo hibrido que
+     * ninguem salvou de fato.
+     *
+     * <p><b>Isso nao da poder de escrever no mundo.</b> O construtor compacto de
+     * {@link SheetModel} limita cada rotulo a {@code LABEL_MAX}, deduplica
+     * atributos e pericias e corta as listas nos maximos (10 e 30) — e ele roda
+     * <b>antes</b> do servidor ver o objeto, porque o {@code record} e
+     * reconstruido na desserializacao. Ou seja: um cliente forjado pode enviar
+     * um modelo invalido, mas ele chega saneado. O servidor ainda confine a
+     * checagem de Mestre, e ainda decide se grava.
+     */
+    public record SheetModelSavePayload(SheetModel model) implements CustomPacketPayload {
+        public static final Type<SheetModelSavePayload> TYPE =
+                new Type<>(TabletopRpg.id("sheet_model_save"));
+        public static final StreamCodec<FriendlyByteBuf, SheetModelSavePayload> STREAM_CODEC =
+                StreamCodec.composite(SheetModel.STREAM_CODEC, SheetModelSavePayload::model, SheetModelSavePayload::new);
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
     /** Servidor -> Cliente: dados da sessão usados para montar o menu. */
     public record MenuDataPayload(
             boolean isMaster,
@@ -574,32 +630,44 @@ public final class RpgNetworking {
     /**
      * Cliente -&gt; Servidor: muda o <b>valor</b> ou o <b>atributo</b> de uma perícia.
      *
-     * <p>Não existe "add" nem "remove" aqui, de propósito: a lista de perícias
-     * é fixa (definida em {@link SheetData#PERICIAS_PADRAO}) e o jogador só
-     * ajusta estes dois campos. Se o nome não estiver na lista, o servidor
-     * ignora — a lista não cresce nem encolhe pela rede.
+     * <p>Não existe "add" nem "remove" aqui, de propósito. A lista de perícias
+     * pertence ao <b>modelo</b> (que o Mestre muda no Sheet Editor), e este
+     * pacote existe só para o jogador ajustar o valor e a escolha de atributo de
+     * uma perícia que <b>já existe</b> na ficha. Criar e remover é trabalho do
+     * editor, e o servidor recusa uma perícia fora do modelo: se o nome não
+     * casar, {@code withPericiaValue} devolve a ficha intacta.
+     *
+     * <p><b>27/09/2026:</b> o campo {@code attribute} virou {@code attributeId}
+     * do tipo {@code String}. Antes era o enum {@code SheetData.Attribute},
+     * removido junto com os seis campos fixos da ficha. O id é a chave estável;
+     * um id fora do modelo é ignorado.
      */
     public record SheetPericiaPayload(String targetName, String pericia, SheetData.PericiaOp op, int value,
-                                      SheetData.Attribute attribute) implements CustomPacketPayload {
+                                      String attributeId) implements CustomPacketPayload {
         public static final Type<SheetPericiaPayload> TYPE = new Type<>(TabletopRpg.id("sheet_pericia"));
         public static final StreamCodec<FriendlyByteBuf, SheetPericiaPayload> STREAM_CODEC = StreamCodec.composite(
                 ByteBufCodecs.stringUtf8(64), SheetPericiaPayload::targetName,
                 ByteBufCodecs.stringUtf8(SheetData.SKILL_MAX), SheetPericiaPayload::pericia,
                 SheetData.PericiaOp.STREAM_CODEC, SheetPericiaPayload::op,
                 ByteBufCodecs.VAR_INT, SheetPericiaPayload::value,
-                SheetData.Attribute.STREAM_CODEC, SheetPericiaPayload::attribute,
+                ByteBufCodecs.stringUtf8(32), SheetPericiaPayload::attributeId,
                 SheetPericiaPayload::new
         );
 
-        /** Atalho: mexer só no valor (setas da lista de perícias no Status). */
+        /**
+         * Atalho: mexer só no valor (setas da lista de perícias no Status).
+         *
+         * <p>Manda {@code attributeId} vazio porque, em {@code SET_VALUE}, o
+         * servidor nem olha o atributo. Não existe mais um "DEXTERITY" padrão
+         * para inventar: o atributo de uma perícia nova é escolhido pelo Mestre.
+         */
         public static SheetPericiaPayload setValue(String targetName, String pericia, int value) {
-            return new SheetPericiaPayload(targetName, pericia, SheetData.PericiaOp.SET_VALUE, value,
-                    SheetData.Attribute.DEXTERITY);
+            return new SheetPericiaPayload(targetName, pericia, SheetData.PericiaOp.SET_VALUE, value, "");
         }
 
         /** Atalho: mexer só no atributo (botão de lista suspensa). */
-        public static SheetPericiaPayload setAttribute(String targetName, String pericia, SheetData.Attribute attribute) {
-            return new SheetPericiaPayload(targetName, pericia, SheetData.PericiaOp.SET_ATTRIBUTE, 0, attribute);
+        public static SheetPericiaPayload setAttribute(String targetName, String pericia, String attributeId) {
+            return new SheetPericiaPayload(targetName, pericia, SheetData.PericiaOp.SET_ATTRIBUTE, 0, attributeId);
         }
 
         @Override
@@ -673,6 +741,11 @@ public final class RpgNetworking {
         PayloadTypeRegistry.playC2S().register(SheetSkillPayload.TYPE, SheetSkillPayload.STREAM_CODEC);
         PayloadTypeRegistry.playC2S().register(SheetPericiaPayload.TYPE, SheetPericiaPayload.STREAM_CODEC);
         PayloadTypeRegistry.playS2C().register(DownedStatePayload.TYPE, DownedStatePayload.STREAM_CODEC);
+        // Modelo global da ficha (27/09/2026, Sheet Editor). S2C para todo mundo
+        // porque o modelo desenha a ficha dos OUTROS tambem; C2S porque a edicao
+        // e sempre do Mestre.
+        PayloadTypeRegistry.playS2C().register(SheetModelPayload.TYPE, SheetModelPayload.STREAM_CODEC);
+        PayloadTypeRegistry.playC2S().register(SheetModelSavePayload.TYPE, SheetModelSavePayload.STREAM_CODEC);
     }
 
     /** Registra os receptores no lado do servidor. */
@@ -920,9 +993,10 @@ public final class RpgNetworking {
             broadcastSheet(target);
         });
 
-        // Muda o VALOR ou o ATRIBUTO de uma PERÍCIA. A lista de perícias é
-        // fixa, então este pacote não cria nem remove nada — e vale a mesma
-        // regra de permissão dos outros campos da ficha.
+        // Muda o VALOR ou o ATRIBUTO de uma PERÍCIA já existente. Criar e
+        // remover perícia é do Mestre, no Sheet Editor; este pacote só ajusta os
+        // dois campos, e vale a mesma regra de permissão dos outros campos da
+        // ficha.
         ServerPlayNetworking.registerGlobalReceiver(SheetPericiaPayload.TYPE, (payload, context) -> {
             ServerPlayer sender = context.player();
             ServerPlayer target = resolveSheetTarget(sender, payload.targetName());
@@ -932,14 +1006,57 @@ public final class RpgNetworking {
             SheetData current = SessionManager.getOrCreateSheet(target.getUUID(), target.getName().getString());
             SheetData updated = switch (payload.op() == null ? SheetData.PericiaOp.INVALID : payload.op()) {
                 case SET_VALUE -> current.withPericiaValue(payload.pericia(), payload.value());
-                case SET_ATTRIBUTE -> current.withPericiaAttribute(payload.pericia(), payload.attribute());
+                case SET_ATTRIBUTE -> current.withPericiaAttribute(payload.pericia(), payload.attributeId());
                 case INVALID -> current;
             };
             if (updated == current) {
-                return; // perícia fora da lista fixa, ou o valor não mudou
+                return; // perícia fora do modelo, ou o valor não mudou
             }
             SessionManager.setSheet(target.getUUID(), updated);
             broadcastSheet(target);
+        });
+
+        // Salvar o MODELO global. So o Mestre edita, e a checagem e aqui, no
+        // servidor: um cliente forjado pode chamar o pacote que quiser.
+        //
+        // O modelo que chega ja passou pelo construtor compacto de SheetModel
+        // (a desserializacao reconstrói o record), entao ja vem saneado. O que o
+        // servidor ainda precisa decidir e se vale a pena gravar: um modelo
+        // identico ao que ja estava so causaria realinhamento e broadcast sem
+        // motivo, entao ele sai cedo.
+        ServerPlayNetworking.registerGlobalReceiver(SheetModelSavePayload.TYPE, (payload, context) -> {
+            ServerPlayer sender = context.player();
+            if (!SessionManager.isMaster(sender)) {
+                return;
+            }
+            MinecraftServer server = sender.level().getServer();
+            SheetModelStore store = SheetModelStore.get(server);
+            SheetModel next = payload.model();
+            if (next == null) {
+                return;
+            }
+            if (next.equals(store.model())) {
+                return; // nada mudou de fato
+            }
+            store.update(next);
+
+            // As fichas que ja existem em memoria ainda tem a lista antiga.
+            // Re-alinhar aqui e o que faz o valor de quem sobreviveu a edicao
+            // continuar no lugar, em vez da ficha precisar recarregar.
+            int realinhadas = SessionManager.realignAllSheets();
+            TabletopRpg.LOGGER.info("[TabletopRPG] Mestre {} editou o modelo: {} atributo(s), {} pericia(s), "
+                            + "{} ficha(s) realinhada(s).", sender.getName().getString(),
+                    next.attributeCount(), next.periciaCount(), realinhadas);
+
+            broadcastSheetModel(server, next);
+            // As fichas mudaram de forma (podem ter gained/lost linhas), entao
+            // quem estiver olhando precisa receber a ficha nova tambem.
+            for (ServerPlayer online : server.getPlayerList().getPlayers()) {
+                SheetData sheet = SessionManager.getSheet(online.getUUID());
+                if (sheet != null) {
+                    broadcastSheet(online);
+                }
+            }
         });
 
         // Registra o receptor de pausar/retomar ciclo dia e noite no servidor
@@ -1176,6 +1293,39 @@ public final class RpgNetworking {
             return;
         }
         ServerPlayNetworking.send(player, new OpenSheetEditorPayload());
+    }
+
+    /**
+     * Manda o modelo para UM jogador.
+     *
+     * <p>Sem checagem de Mestre: o modelo nao e segredo. Todo mundo precisa
+     * dele para desenhar a ficha dos outros, e esconder isso so faria o cliente
+     * mostrar o padrao enquanto o Mestre ve o modelo salvo.
+     */
+    public static void sendSheetModel(ServerPlayer player, SheetModel model) {
+        if (player == null || player.connection == null) {
+            return;
+        }
+        ServerPlayNetworking.send(player,
+                new SheetModelPayload(model == null ? SheetModel.defaults() : model));
+    }
+
+    /**
+     * Reenvia o modelo para todo mundo online.
+     *
+     * <p>Chamado depois de cada edicao do Mestre. E o que faz a mudanca
+     * aparecer na ficha de quem nao tem a tela do editor aberta.
+     */
+    public static void broadcastSheetModel(MinecraftServer server, SheetModel model) {
+        if (server == null) {
+            return;
+        }
+        SheetModelPayload payload = new SheetModelPayload(model == null ? SheetModel.defaults() : model);
+        for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+            if (player.connection != null) {
+                ServerPlayNetworking.send(player, payload);
+            }
+        }
     }
 
     /** Envia os dados da sessão + estado de trava, abrindo o menu no cliente (resposta ao apertar R). */

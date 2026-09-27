@@ -30,6 +30,23 @@ dependencies {
 
 	// Fabric API. This is technically optional, but you probably want it anyway.
 	modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
+
+	// 27/09/2026: testes unitarios, adicionados junto com o Sheet Editor.
+	// Nao existia nenhum source set de teste, e a primeira coisa que os testes
+	// pegaram foi o ENCODER e o DECODER de SheetModel em ordens diferentes: o
+	// pacote compilava e so quebrava em runtime, com um dos lados lendo um
+	// comprimento de string no lugar do valor. testImplementation nao entra no
+	// jar entregue, entao o custo para o mod e zero.
+	testImplementation "org.junit.jupiter:junit-jupiter:5.10.2"
+	testRuntimeOnly "org.junit.platform:junit-platform-launcher"
+}
+
+test {
+	useJUnitPlatform()
+	testLogging {
+		events "passed", "failed", "skipped"
+		showStandardStreams = false
+	}
 }
 
 processResources {

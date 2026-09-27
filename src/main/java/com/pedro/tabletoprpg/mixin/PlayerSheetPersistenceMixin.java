@@ -2,6 +2,8 @@ package com.pedro.tabletoprpg.mixin;
 
 import com.pedro.tabletoprpg.SessionManager;
 import com.pedro.tabletoprpg.SheetData;
+import com.pedro.tabletoprpg.SheetModel;
+import com.pedro.tabletoprpg.SheetModelHolder;
 import com.pedro.tabletoprpg.TabletopRpg;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.player.Player;
@@ -69,11 +71,25 @@ public abstract class PlayerSheetPersistenceMixin {
         input.read(KEY, SheetData.CODEC)
                 .ifPresentOrElse(
                         sheet -> {
-                            SessionManager.setSheet(self.getUUID(), sheet);
+                            // 27/09/2026 (Sheet Editor): alinha na CARGA, alem de
+                            // na criacao. Sem isso, uma ficha salva antes de o Mestre
+                            // adicionar um atributo voltaria do NBT com a lista
+                            // antiga e a tela mostraria a fichavel sem o campo novo
+                            // ate alguem editar algo e disparar um realinhamento.
+                            //
+                            // Usa o Holder e nao SheetModelStore.get(server) porque
+                            // este ponto roda durante a carga do mundo, quando o
+                            // overworld ainda pode nao estar disponivel para o
+                            // getDataStorage(). O Holder ja foi publicado em
+                            // SERVER_STARTED e nunca devolve null.
+                            SheetModel model = SheetModelHolder.current();
+                            SheetData aligned = model.align(sheet);
+                            SessionManager.setSheet(self.getUUID(), aligned);
                             TabletopRpg.LOGGER.info(
-                                    "[TabletopRPG] Ficha carregada do NBT de {} ({} skills, {} pericias)",
-                                    self.getName().getString(), sheet.skills().size(),
-                                    sheet.pericias().size());
+                                    "[TabletopRPG] Ficha carregada do NBT de {} ({} skills, {} pericias, "
+                                            + "modelo: {} atributo(s) / {} pericia(s))",
+                                    self.getName().getString(), aligned.skills().size(),
+                                    aligned.pericias().size(), model.attributeCount(), model.periciaCount());
                         },
                         // Sem a chave: jogador novo. Nao e erro -- o
                         // getOrCreateSheet cria o default no primeiro uso.

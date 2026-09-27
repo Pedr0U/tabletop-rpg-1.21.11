@@ -679,3 +679,58 @@ anterior" (**nao ha negociacao de versao; um cliente de 3 campos leria a 4a stri
 `CharacterSheetScreen` "atributos nao tem teto", `StatusScreen` "setas `>` `<`" e "sem limite".
 Regra: **quando o comportamento muda, procurar o texto que descreve o comportamento antigo.**
 Vários desses textos eram Javadoc de 26/09, nao deste diff.
+
+## `SheetModelStore`: `get` vs `computeIfAbsent` (27/09/2026) - FATO verificado por crash real
+
+- **FATO (crash real, `Exception in server tick loop`):** `SheetModelStore.get(MinecraftServer)`
+  usava `server.overworld().getDataStorage().get(TYPE)`. `DimensionDataStorage` tem
+  **DUAS** sobrecargas e elas diferem em **comportamento**, nao so em assinatura:
+  - `get(SavedDataType)` e **so busca**: devolve `null` quando o dado nunca foi gravado.
+  - `computeIfAbsent(SavedDataType)` **cria** o dado, usando a factory que o proprio
+    `SavedDataType` carrega.
+  Como `null` e um retorno legal para `get()`, o bug **nao aparece em tempo de compilacao**:
+  build verde com 8/8 testes. O NPE estourava em `SERVER_STARTED`, primeira linha do handler,
+  em **todo** boot de um mundo novo. Fix: `computeIfAbsent(TYPE)`.
+- **COMO CONFIRMAR QUE O DADO NUNCA FOI GRAVADO:** procurar `tabletop*.dat` em
+  `saves\<mundo>\data\`. Se nao existe, `get()` devolve `null`. Foi o que is confirmava:
+  0 arquivos em 5 mundos. Se o `.dat` existir e o crash continuar, o problema e o codec,
+  nao a obtencao do dado.
+- **FATO:** neste mappings o `SavedDataType` recebe a factory no construtor
+  (`new SavedDataType<>(id, Supplier, codec, DataFixType)`), entao a sobrecarga de **um**
+  argumento do `computeIfAbsent` basta. Nao existe overload com `Supplier` separado.
+- **REGRA GERAL:** `javap` prova que uma assinatura **compila**, nunca que a
+  implementacao escolhe a sobrecarga com a semantica correta. Documentacao que registra
+  *que* uma API foi checada, sem registrar *qual comportamento* ela garante, produz
+  falsa confianca.
+- **O Javadoc da propria classe afirmava "API verificada com javap no jar do Loom (1.21.11)"**
+  e estava factualmente correto - mas so tinha conferido o TIPO do parametro. O Javadoc foi
+  ampliado com a distincao `get`/`computeIfAbsent` e o motivo do crash, para o proximo nao
+  cair no mesmo.
+- **REGRA DE DIAGNOSTICO:** a mensagem do NPE dizia qual variavel era nula (`"store" is null`).
+  Isso apontava a camada de **obtencao do dado**, nao o codec. A hypothesis anterior (codec
+  assimetrico) era plausivel e explicava o sintoma errado. Mensagem de excecao vence hypothesis.
+
+## Como saber QUAL jogo o usuario testou (27/09/2026) - corrige nota de 26/09
+
+- **A NOTA de 26/09 ("o usuario testa com `runClient`, nunca jar instalado") esta
+  DESATUALIZADA.** Em 27/09/2026 o crash report do usuario foi gravado em
+  `%APPDATA%\.minecraft\crash-reports\crash-2026-09-27_20.17.26-server.txt`, o que prova
+  que **aquele** jogo rodou com o JAR instalado em `%APPDATA%\.minecraft\mods\`. Havia
+  tambem crashes anteriores em `run/crash-reports\` (20:16:26 e 20:17:06), ou seja o
+  `runClient` tambem foi usado no mesmo dia. **Os dois caminhos estao em uso.**
+- **COMO DESCUBRIR sem perguntar:** o diretorio onde o crash report e gravado identifica o
+  game dir. `run/crash-reports/` = `runClient`. `%APPDATA%\.minecraft\crash-reports\` =
+  jogo com jar instalado. Conferir ANTES de dizer "rode `runClient`".
+- **CONSEQUENCIA:** copiar `build/libs/tabletop-rpg-1.0.0.jar` para
+  `%APPDATA%\.minecraft\mods\` e o passo correto quando o crash veio de la. Quando o teste
+  for `runClient` a copia e inofensiva, mas nao substitui rodar `runClient`.
+- **FATO:** o mundo do crash de 27/09 se chamava `map_client.txt` e **nao** aparece em
+  `%APPDATA%\.minecraft\saves` (que tem 'a mn vaitomarnocu', 'IAHSD LKJASGHRFLJKASHF',
+  'New World', 'New World (1)'). Nao assumir que `saves/` lista o mundo do crash report.
+
+## `?` no console NAO e mojibake (27/09/2026)
+- Ao ler `agent/memory/project-memory.md`, acentos latinos legitimos aparecem como `?` no
+  console (ex.: "Varios" -> `V?rios`). **Verificar por codepoint antes de "consertar".** Os
+  caracteres realmente corrompidos sao U+FFFD ou bytes soltos na faixa 0xD0-0xDD. Nesta
+  sessao o texto estava SAO e quase apaguei acentos legitimos. Regra ja esta no AGENTS.md;
+  aqui so o caso concreto.

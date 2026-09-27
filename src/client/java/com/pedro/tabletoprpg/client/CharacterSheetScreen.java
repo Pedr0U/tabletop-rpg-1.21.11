@@ -304,6 +304,18 @@ public abstract class CharacterSheetScreen extends Screen {
     // LAYOUT
     // ------------------------------------------------------------------
 
+    /**
+     * O Mestre trocou o modelo e esta ficha esta aberta agora.
+     *
+     * <p>Precisa remontar tudo, e nao apenas redesenhar: o numero de campos,
+     * de atributos e de pericias vem do modelo, entao os widgets velhos apontam
+     * para linhas que podem nao existir mais. {@code rebuildWidgets()} limpa os
+     * filhos e chama {@code init()}, que ja refaz o layout do zero.
+     */
+    public void onModelChanged() {
+        rebuildWidgets();
+    }
+
     @Override
     protected void init() {
         super.init();

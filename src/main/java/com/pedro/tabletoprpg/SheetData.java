@@ -8,9 +8,11 @@ import net.minecraft.network.codec.StreamCodec;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Ficha do personagem de um jogador (FASE 3).
@@ -21,7 +23,7 @@ import java.util.Map;
  * {@code attributes} (6) e {@code skills} (lista).
  *
  * <p><b>Invariante de faixa:</b> os construtores compactos limitam o que
- * <b>precisa</b> ser limitado — vida (com piso {@link #MAX_HP_FLOOR} e teto
+ * <b>precisa</b> ser limitado - vida (com piso {@link #MAX_HP_FLOOR} e teto
  * {@link #MAX_RESOURCE}), mana, nível, textos (nome/descrição) e o valor da
  * perícia (0-3). A validação acontece <b>por construção</b> e não depende do
  * chamador lembrar de clamp. O servidor continua sendo a autoridade (a edição
@@ -30,7 +32,7 @@ import java.util.Map;
  *
  * <p><b>Atributos: teto 30, sem piso</b> (27/09/2026). Eles viraram modificadores
  * somados às rolagens e podem ser negativos, então o piso é
- * {@link Integer#MIN_VALUE} — ver {@link Attributes}. O teto 30 entrou depois,
+ * {@link Integer#MIN_VALUE} - ver {@link Attributes}. O teto 30 entrou depois,
  * quando a ficha ganhou botões {@code -}/{@code +} de dois dígitos: sem teto, o
  * número cresce até invadir o rótulo e os botões. A aritmética das rolagens usa
  * {@code long} para não estourar.
@@ -40,7 +42,7 @@ import java.util.Map;
  * ({@link #isDowned()}). <b>HP e Mana também podem PASSAR do máximo</b>
  * (decisão do usuário): {@code 12/10} = 10 permanentes + 2 temporários. Por
  * isso o teto do valor atual é {@link #MAX_RESOURCE}, e não
- * {@code hpMax}/{@code manaMax} — se fosse o máximo, o excedente seria
+ * {@code hpMax}/{@code manaMax} - se fosse o máximo, o excedente seria
  * truncado na construção e nunca apareceria. O <b>máximo</b> em si continua
  * valendo {@code 1..MAX_RESOURCE} (HP) e {@code 0..MAX_RESOURCE} (Mana).
  *
@@ -69,7 +71,7 @@ public record SheetData(
      * que aparece truncado é só a <i>exibição</i> no tooltip. O valor aqui é
      * alto o bastante para não atrapalhar (10.000 caracteres) e existe porque
      * {@code ByteBufCodecs.stringUtf8(n)} lança exceção ao decodificar uma
-     * string maior que {@code n} — ou seja, um cliente modificado mandando
+     * string maior que {@code n} - ou seja, um cliente modificado mandando
      * 50 MB derrubaria a conexão do jogador. O texto é cortado silenciosamente
      * nesse caso, em vez de derrubar a conexão.
      */
@@ -91,7 +93,7 @@ public record SheetData(
     public static final int MAX_RESOURCE = 9999;
     /**
      * Piso do HP: o personagem pode ficar com HP negativo (decisão do
-     * usuário). Abaixo disso o valor é truncado — o piso existe só para
+     * usuário). Abaixo disso o valor é truncado - o piso existe só para
      * impedir overflow no protocolo e não tem significado de jogo.
      * {@code hp <= 0} = personagem deitado (ver {@link #isDowned()}).
      */
@@ -101,11 +103,18 @@ public record SheetData(
 
     /** Campos de texto livre (editáveis). */
     public static final List<String> TEXT_FIELDS = List.of("characterName", "race", "characterClass", "background");
-    /** Campos numéricos (editáveis). */
+    /**
+     * Campos numericos que NAO sao atributos: vida, mana e progressao.
+     *
+     * <p><b>27/09/2026 (Sheet Editor):</b> esta lista deixou de enumerar os
+     * atributos, porque a quantidade e os nomes deles passam a vir do
+     * {@link SheetModel}. Os atributos sao resolvidos por {@link #getNumeric}
+     * depois destes casos, e o que decide se o campo existe e
+     * {@link #attributes()} da ficha.
+     */
     public static final List<String> NUMERIC_FIELDS = List.of(
             "hp", "hpMax", "mana", "manaMax",
-            "level", "xp",
-            "strength", "dexterity", "constitution", "intelligence", "wisdom", "charisma"
+            "level", "xp"
     );
 
     /**
@@ -114,7 +123,7 @@ public record SheetData(
      * {@code ByteBufCodecs.list()} já impõe um teto de quantidade.
      *
      * <p>São 6 grupos, que é exatamente o limite de {@link
-     * StreamCodec#composite} — por isso {@code skills} e {@code pericias} são
+     * StreamCodec#composite} - por isso {@code skills} e {@code pericias} são
      * listas de records separados em vez de um record único com 8 campos.
      */
     public static final StreamCodec<FriendlyByteBuf, SheetData> STREAM_CODEC = StreamCodec.composite(
@@ -131,18 +140,9 @@ public record SheetData(
     // PERSISTENCIA EM NBT (Codec do DataFixer, nao o StreamCodec acima)
     // ------------------------------------------------------------------
 
-    /**
-     * Codec de atributo para NBT, gravado pelo <b>nome do campo</b>
-     * ("strength") e nao pela sigla ("FOR").
-     *
-     * <p><b>Por que o nome do campo:</b> a sigla aparece na UI e poderia ser
-     * reescrita a qualquer momento; o nome do campo e a chave estavel. E a
-     * leitura e leniente de proposito ({@link Attribute#decode}), entao um
-     * save antigo ou editado a mao nao derruba o login -- cai no atributo
-     * padrao em vez de estourar a excecao.
-     */
-    public static final Codec<Attribute> ATTRIBUTE_CODEC =
-            Codec.STRING.xmap(Attribute::decode, Attribute::field);
+    // Nao ha mais um "ATTRIBUTE_CODEC": o atributo de uma pericia passou a ser
+    // gravado como o id cru (String), dentro de PERICIA_CODEC. O save antigo
+    // gravava o mesmo id ("strength"), entao nenhum valor se perde na troca.
 
     private static final Codec<Identity> IDENTITY_CODEC = RecordCodecBuilder.create(i -> i.group(
             Codec.STRING.optionalFieldOf("characterName", "").forGetter(Identity::characterName),
@@ -160,17 +160,47 @@ public record SheetData(
 
     private static final Codec<Progress> PROGRESS_CODEC = RecordCodecBuilder.create(i -> i.group(
             Codec.INT.optionalFieldOf("level", Progress.defaults().level()).forGetter(Progress::level),
-            Codec.INT.optionalFieldOf("xp", Progress.defaults().xp()).forGetter(Progress::xp)
+            Codec.INT.optionalFieldOf("xp", Progress.defaults().xp()).forGetter(Progress::xp),
+            Codec.STRING.optionalFieldOf("xpText", "").forGetter(Progress::xpText)
     ).apply(i, Progress::new));
 
-    private static final Codec<Attributes> ATTRIBUTES_CODEC = RecordCodecBuilder.create(i -> i.group(
-            Codec.INT.optionalFieldOf("strength", 0).forGetter(Attributes::strength),
-            Codec.INT.optionalFieldOf("dexterity", 0).forGetter(Attributes::dexterity),
-            Codec.INT.optionalFieldOf("constitution", 0).forGetter(Attributes::constitution),
-            Codec.INT.optionalFieldOf("intelligence", 0).forGetter(Attributes::intelligence),
-            Codec.INT.optionalFieldOf("wisdom", 0).forGetter(Attributes::wisdom),
-            Codec.INT.optionalFieldOf("charisma", 0).forGetter(Attributes::charisma)
+    /**
+     * Codec dos atributos no formato ATUAL: {@code {values: [{id, value}...]}}.
+     *
+     * <p>Para o save gravado quando ainda nao havia Sheet Editor, os atributos
+     * eram seis inteiros soltos ({@code {strength: 3, dexterity: 1, ...}}). Ver
+     * {@link #ATTRIBUTES_CODEC} para a migracao.
+     */
+    private static final Codec<Attributes> ATTRIBUTES_CURRENT_CODEC = RecordCodecBuilder.create(i -> i.group(
+            Codec.list(Attributes.AttributeValue.CODEC).fieldOf("values").forGetter(Attributes::values)
     ).apply(i, Attributes::new));
+
+    /**
+     * Migracao do NBT: o formato antigo dos seis inteiros soltos.
+     *
+     * <p>Os ids do formato antigo sao exatamente os que o {@link SheetModel}
+     * padrao ainda usa, entao o valor de cada atributo sobrevive a mudanca sem
+     * nenhum mapa de conversao.
+     */
+    private static final Codec<Attributes> ATTRIBUTES_LEGACY_CODEC = RecordCodecBuilder.create(i -> i.group(
+            Codec.INT.optionalFieldOf("strength", 0).forGetter(s -> s.valueOf("strength")),
+            Codec.INT.optionalFieldOf("dexterity", 0).forGetter(s -> s.valueOf("dexterity")),
+            Codec.INT.optionalFieldOf("constitution", 0).forGetter(s -> s.valueOf("constitution")),
+            Codec.INT.optionalFieldOf("intelligence", 0).forGetter(s -> s.valueOf("intelligence")),
+            Codec.INT.optionalFieldOf("wisdom", 0).forGetter(s -> s.valueOf("wisdom")),
+            Codec.INT.optionalFieldOf("charisma", 0).forGetter(s -> s.valueOf("charisma"))
+    ).apply(i, Attributes::fromLegacyIds));
+
+    /**
+     * Tenta o formato novo; se o NBT nao tiver {@code values}, cai no antigo.
+     *
+     * <p><b>Por que {@code values} e obrigatorio no codec novo:</b> se fosse
+     * opcional, um save antigo seria lido com sucesso e a lista sairia vazia —
+     * a migracao nunca rodaria e todo mundo perderia os seis numeros sem erro
+     * nenhum. Obrigatorio faz o save antigo falhar aqui e cair no codec legado.
+     */
+    private static final Codec<Attributes> ATTRIBUTES_CODEC =
+            ATTRIBUTES_CURRENT_CODEC.withAlternative(ATTRIBUTES_LEGACY_CODEC);
 
     private static final Codec<Skill> SKILL_CODEC = RecordCodecBuilder.create(i -> i.group(
             Codec.STRING.optionalFieldOf("name", "").forGetter(Skill::name),
@@ -180,7 +210,7 @@ public record SheetData(
     private static final Codec<Pericia> PERICIA_CODEC = RecordCodecBuilder.create(i -> i.group(
             Codec.STRING.optionalFieldOf("name", "").forGetter(Pericia::name),
             Codec.INT.optionalFieldOf("value", 0).forGetter(Pericia::value),
-            ATTRIBUTE_CODEC.optionalFieldOf("attribute", Attribute.STRENGTH).forGetter(Pericia::attribute)
+            Codec.STRING.optionalFieldOf("attribute", "").forGetter(Pericia::attributeId)
     ).apply(i, Pericia::new));
 
     /**
@@ -238,7 +268,7 @@ public record SheetData(
      * versão entre cliente e servidor</b>, então acrescentar o 4o campo quebra
      * cliente antigo de qualquer jeito: ele leria a 4a string como se fosse o
      * próximo campo do record. Por isso {@code background} foi posto no fim
-     * apenas por convencao de leitura — a posição é indiferente para a
+     * apenas por convencao de leitura - a posição é indiferente para a
      * segurança, e a compatibilidade real vem de o mod ir junto com o cliente.
      */
     public record Identity(String characterName, String race, String characterClass, String background) {
@@ -313,188 +343,200 @@ public record SheetData(
         }
     }
 
-    /** Nível e XP. */
-    public record Progress(int level, int xp) {
+    /**
+     * Nivel, XP numerico e XP em texto.
+     *
+     * <p><b>Por que dois campos de XP (27/09/2026):</b> o pedido do Mestre foi
+     * "renomear XP, mudar o tipo de dado (numero/texto) ou desativar". Numero e
+     * texto nao cabem no mesmo {@code int}, e um {@code String} so para o modo
+     * texto obrigaria as setas de -/+ a fazerem parse a cada tecla. Os dois
+     * campos coexistem e <b>so um deles e lido</b>, escolhido pelo
+     * {@link SheetModel.XpMode}: e o que mantem cada modo simples.
+     */
+    public record Progress(int level, int xp, String xpText) {
         public static final StreamCodec<FriendlyByteBuf, Progress> STREAM_CODEC = StreamCodec.composite(
                 ByteBufCodecs.VAR_INT, Progress::level,
                 ByteBufCodecs.VAR_INT, Progress::xp,
+                ByteBufCodecs.stringUtf8(MAX_NAME), Progress::xpText,
                 Progress::new
         );
 
         public Progress {
             level = clamp(level, 1, MAX_LEVEL);
             xp = clamp(xp, 0, MAX_XP);
+            xpText = clean(xpText);
         }
 
         public static Progress defaults() {
-            return new Progress(1, 0);
-        }
-    }
-
-    /** Os seis atributos clássicos. Todos com o mesmo teto. */
-    public record Attributes(
-            int strength,
-            int dexterity,
-            int constitution,
-            int intelligence,
-            int wisdom,
-            int charisma
-    ) {
-        public static final StreamCodec<FriendlyByteBuf, Attributes> STREAM_CODEC = StreamCodec.composite(
-                ByteBufCodecs.VAR_INT, Attributes::strength,
-                ByteBufCodecs.VAR_INT, Attributes::dexterity,
-                ByteBufCodecs.VAR_INT, Attributes::constitution,
-                ByteBufCodecs.VAR_INT, Attributes::intelligence,
-                ByteBufCodecs.VAR_INT, Attributes::wisdom,
-                ByteBufCodecs.VAR_INT, Attributes::charisma,
-                Attributes::new
-        );
-
-        /**
-         * Teto do valor de um atributo.
-         *
-         * <p><b>Mudanca de decisao (27/09/2026).</b> Antes o atributo nao tinha
-         * clamp nenhum, por decisao do usuario de 25/09/2026 ("nao coloque
-         * limitacao"). O pedido de 27/09/2026 foi o oposto: teto de 30, com o
-         * botao "+" escurecendo quando o valor chega nele. O que continua valendo
-         * da decisao antiga e o <b>piso livre</b>: o atributo e um modificador
-         * somado, entao ainda pode ser negativo.
-         *
-         * <p>O clamp mora AQUI, e nao na tela, porque o servidor e a fonte da
-         * verdade: sem ele, um cliente modificado mandaria
-         * {@code withField("strength", "99999")} e o valor entraria assim. A UI
-         * apenas reflete o limite e desliga o "+".
-         *
-         * <p>A aritmetica das rolagens (ver {@code RpgSkillRoll}) usa
-         * {@code long} para um valor grande nao estourar o resultado.
-         */
-        public static final int VALUE_MAX = 30;
-
-        public Attributes {
-            strength = clamp(strength, Integer.MIN_VALUE, VALUE_MAX);
-            dexterity = clamp(dexterity, Integer.MIN_VALUE, VALUE_MAX);
-            constitution = clamp(constitution, Integer.MIN_VALUE, VALUE_MAX);
-            intelligence = clamp(intelligence, Integer.MIN_VALUE, VALUE_MAX);
-            wisdom = clamp(wisdom, Integer.MIN_VALUE, VALUE_MAX);
-            charisma = clamp(charisma, Integer.MIN_VALUE, VALUE_MAX);
-        }
-
-        public static Attributes defaults() {
-            // 0 e o padrao pedido ("que comece com 0"): o atributo e um
-            // modificador somado a pericia, nao um "status" que quanto maior
-            // melhor. O docx antigo falava em 2 -- desatualizado.
-            return new Attributes(0, 0, 0, 0, 0, 0);
+            return new Progress(1, 0, "");
         }
     }
 
     /**
-     * Os 6 atributos, e a abreviacao de cada um nos botoes.
+     * Os valores dos atributos: um par (id, valor) por atributo do modelo.
      *
-     * <p><b>Por que um enum e nao um String solto:</b> o usuario pediu um
-     * botao de "lista suspensa" na tela de Skills para escolher com qual
-     * atributo a pericia soma. Um enum da exatamente as 6 opcoes finitas que a
-     * UI precisa desenhar, e o codec grava a ABREVIACAO (FOR, DES...), que e
-     * curta e estavel se a ordem do enum mudar.
+     * <p><b>Mudanca de 27/09/2026 (Sheet Editor).</b> Antes isto era um record
+     * com seis campos {@code int} fixos e o enum {@code Attribute} tinha
+     * exatamente seis constantes. Isso impedia o que o Mestre pediu: renomear,
+     * remover e ate ter dez atributos. Um enum nao cresce, e um record com seis
+     * campos nao encolhe.
      *
-     * <p><b>Nota sobre o .docx:</b> a versao antiga do documento listava 5
-     * (FOR, DES, INT, CON, CAR) e nao tinha Sabedoria. O usuario respondeu
-     * "alternando os 6 atributos", entao<SAB> (Sabedoria) foi incluido.
+     * <p>Agora o <b>rotulo</b> do atributo vive no {@link SheetModel} e aqui
+     * mora so o <b>valor</b>, ligado pelo {@code id}. O id e a chave estavel: e
+     * o que o NBT guarda e o que uma pericia aponta. Renomear um atributo mexe
+     * so no modelo, e nenhuma ficha de jogador e reescrita.
      */
-    public enum Attribute {
-        // field e' a chave do NBT e abbr e' o valor que vai na rede -- ver
-        // STREAM_CODEC. NAO traduzir nenhum dos dois. Para exibicao existe
-        // shortName (3 letras em ingles) e fullName.
-        STRENGTH("strength", "FOR", "STR", "Strength"),
-        DEXTERITY("dexterity", "DES", "DEX", "Dexterity"),
-        CONSTITUTION("constitution", "CON", "CON", "Constitution"),
-        INTELLIGENCE("intelligence", "INT", "INT", "Intelligence"),
-        WISDOM("wisdom", "SAB", "WIS", "Wisdom"),
-        CHARISMA("charisma", "CAR", "CHA", "Charisma");
+    public record Attributes(List<AttributeValue> values) {
 
-        /** Todos, na ordem em que a UI apresenta a lista suspensa. */
-        public static final List<Attribute> VALUES = List.of(values());
+        /** Teto do valor de um atributo (decisao do usuario, 27/09/2026). */
+        public static final int VALUE_MAX = 30;
+        /** Piso do valor de um atributo (decisao do usuario, 27/09/2026). */
+        public static final int VALUE_MIN = -30;
 
         /**
-         * Codec de rede por ABREVIACAO, escrito a mao.
+         * O valor de UM atributo.
          *
-         * <p><b>Por que nao {@code StringRepresentable.fromEnum}:</b> apesar do
-         * nome sugerir o contrario, o {@code EnumCodec} do vanilla implementa
-         * {@code com.mojang.serialization.Codec} (serializacao JSON/DataFixer) e
-         * <b>nao</b> {@code StreamCodec}, que e o que os payloads de rede
-         * exigem. Confirmado por {@code javap}: a classe pai
-         * {@code StringRepresentableCodec} implementa so {@code Codec}.
+         * <p>{@code id} e a chave com que o {@link SheetModel} chama este
+         * atributo ("strength", "attr_1"). E estavel: mudar o rotulo do
+         * atributo no editor nao muda o id, e por isso nao perde o valor de
+         * ninguem.
          *
-         * <p>Vantagem de escrever a mao: um cliente modificado mandando
-         * "XXX" cai em DEXTERITY em vez de estourar a conexao, e a busca aceita
-         * tambem o nome do campo ("strength"), o que deixa o comando
-         * {@code /rpg roll} mais tolerante.
+         * <p>Fica dentro de {@link Attributes} porque e o elemento da lista
+         * dela, e nao um campo solto da ficha.
          */
-        public static final StreamCodec<io.netty.buffer.ByteBuf, Attribute> STREAM_CODEC =
-                ByteBufCodecs.stringUtf8(16).map(Attribute::decode, Attribute::abbr);
+        public record AttributeValue(String id, int value) {
+            public static final StreamCodec<FriendlyByteBuf, AttributeValue> STREAM_CODEC =
+                    StreamCodec.composite(
+                            ByteBufCodecs.stringUtf8(32), AttributeValue::id,
+                            ByteBufCodecs.VAR_INT, AttributeValue::value,
+                            AttributeValue::new
+                    );
 
-        /** Nome do campo em {@link SheetData#getNumeric}, ex.: "strength". */
-        private final String field;
-        /** Abreviacao de 3 letras que VAI NA REDE (payload de pericia). */
-        private final String abbr;
-        /**
-         * Abreviacao de 3 letras mostrada ao jogador. So exibicao.
-         *
-         * <p>Sai separada de {@link #abbr} porque {@code abbr} e o valor gravado
-         * no pacote (ver {@link #STREAM_CODEC}): trocar o valor dela quebraria a
-         * conversa entre cliente e servidor. Traduzir so o que o jogador ve e
-         * decision do usuario em 26/09/2026.
-         */
-        private final String shortName;
-        /** Nome por extenso, usado no texto de ajuda. */
-        private final String fullName;
+            public static final Codec<AttributeValue> CODEC = RecordCodecBuilder.create(i -> i.group(
+                    Codec.STRING.fieldOf("id").forGetter(AttributeValue::id),
+                    Codec.INT.optionalFieldOf("value", 0).forGetter(AttributeValue::value)
+            ).apply(i, AttributeValue::new));
 
-        Attribute(String field, String abbr, String shortName, String fullName) {
-            this.field = field;
-            this.abbr = abbr;
-            this.shortName = shortName;
-            this.fullName = fullName;
-        }
-
-        public String field() {
-            return field;
-        }
-
-        public String abbr() {
-            return abbr;
-        }
-
-        /** Abreviacao em ingles para exibicao; {@code abbr()} e' a da rede. */
-        public String shortName() {
-            return shortName;
-        }
-
-        public String fullName() {
-            return fullName;
-        }
-
-        /**
-         * Procura um atributo pela abreviacao ("FOR") ou pelo nome do campo
-         * ("strength"), sem diferenciar maiusculas. Devolve {@code null} se
-         * nao encontrar -- quem chama decide o fallback.
-         */
-        public static Attribute find(String name) {
-            if (name == null) {
-                return null;
+            public AttributeValue {
+                id = id == null ? "" : id.trim();
+                if (id.length() > 32) {
+                    id = id.substring(0, 32);
+                }
+                value = clamp(value, Attributes.VALUE_MIN, Attributes.VALUE_MAX);
             }
-            for (Attribute attribute : VALUES) {
-                if (attribute.abbr.equalsIgnoreCase(name) || attribute.field.equalsIgnoreCase(name)) {
-                    return attribute;
+        }
+
+        /**
+         * O {@code collection} sem {@code map}, com o tipo de destino escrito
+         * explicitamente.
+         *
+         * <p><b>Por que nao encadear o {@code map} direto:</b> o
+         * {@code collection} so aceita {@code ArrayList::new} e devolve
+         * {@code ArrayList<E>}; o {@code map} projeta o
+         * {@link Attributes#values()}, que devolve {@code List<E>}. Como
+         * {@code List} nao e subtipo de {@code ArrayList}, o encadeamento nao
+         * compila. Declarar o destino como {@code List} resolve e ainda deixa
+         * este codec reaproveitavel.
+         */
+        public static final StreamCodec<FriendlyByteBuf, List<AttributeValue>> VALUES_STREAM_CODEC =
+                ByteBufCodecs.collection(ArrayList::new, AttributeValue.STREAM_CODEC, SheetModel.MAX_ATTRIBUTES);
+
+        public static final StreamCodec<FriendlyByteBuf, Attributes> STREAM_CODEC =
+                VALUES_STREAM_CODEC.map(Attributes::new, Attributes::values);
+
+        public Attributes {
+            values = sanitizeValues(values);
+        }
+
+        /** Ficha nova: um zero para cada atributo que o modelo declara. */
+        public static Attributes defaults() {
+            List<AttributeValue> out = new ArrayList<>();
+            for (SheetModel.AttributeDef def : SheetModelHolder.current().attributes()) {
+                out.add(new AttributeValue(def.id(), 0));
+            }
+            return new Attributes(out);
+        }
+
+        /**
+         * Le os seis campos do formato ANTIGO (quando os atributos eram fixos no
+         * record) e monta a lista nova. Usado so pela migracao do NBT.
+         */
+        static Attributes fromLegacyIds(int strength, int dexterity, int constitution,
+                                        int intelligence, int wisdom, int charisma) {
+            return new Attributes(List.of(
+                    new AttributeValue("strength", strength),
+                    new AttributeValue("dexterity", dexterity),
+                    new AttributeValue("constitution", constitution),
+                    new AttributeValue("intelligence", intelligence),
+                    new AttributeValue("wisdom", wisdom),
+                    new AttributeValue("charisma", charisma)
+            ));
+        }
+
+        /** Valor do atributo com este id; 0 se a ficha nao o tem. */
+        public int valueOf(String id) {
+            if (id == null) {
+                return 0;
+            }
+            for (AttributeValue value : values) {
+                if (value.id().equals(id)) {
+                    return value.value();
                 }
             }
-            return null;
+            return 0;
         }
 
-        /** Igual a {@link #find}, mas cai em {@link #DEXTERITY} se nao achar. */
-        public static Attribute decode(String name) {
-            Attribute found = find(name);
-            return found == null ? DEXTERITY : found;
+        /** Copia com um atributo trocado. Id que a ficha nao tem nao muda nada. */
+        public Attributes withValue(String id, int value) {
+            if (id == null) {
+                return this;
+            }
+            List<AttributeValue> out = new ArrayList<>(values.size());
+            boolean found = false;
+            for (AttributeValue current : values) {
+                if (current.id().equals(id)) {
+                    out.add(new AttributeValue(id, value));
+                    found = true;
+                } else {
+                    out.add(current);
+                }
+            }
+            return found ? new Attributes(out) : this;
+        }
+
+        /**
+         * Descarta nulos, ids vazios e ids repetidos, e corta no teto do modelo.
+         *
+         * <p>Nao descarta valor fora de faixa: quem faz isso e o construtor de
+         * {@link AttributeValue}, e um save editado a mao nao pode fazer a ficha
+         * perder o atributo inteiro.
+         */
+        private static List<AttributeValue> sanitizeValues(List<AttributeValue> raw) {
+            List<AttributeValue> out = new ArrayList<>();
+            Set<String> seen = new LinkedHashSet<>();
+            if (raw != null) {
+                for (AttributeValue value : raw) {
+                    if (value == null || out.size() >= SheetModel.MAX_ATTRIBUTES) {
+                        continue;
+                    }
+                    if (!value.id().isEmpty() && seen.add(value.id().toLowerCase(Locale.ROOT))) {
+                        out.add(value);
+                    }
+                }
+            }
+            return List.copyOf(out);
         }
     }
+
+    /**
+     * Os seis ids que a ficha gravava antes do Sheet Editor, na ordem em que
+     * eram campos do record {@code Attributes}.
+     *
+     * <p>Serve a migracao do NBT e a {@link Attributes#fromLegacyIds}. Nao e a
+     * lista de atributos do jogo anymore - essa vem do {@link SheetModel}.
+     */
+    private static final List<String> LEGACY_ATTRIBUTE_IDS =
+            List.of("strength", "dexterity", "constitution", "intelligence", "wisdom", "charisma");
 
     /**
      * O que um {@code SheetSkillPayload} quer fazer com a <b>skill</b>.
@@ -502,7 +544,7 @@ public record SheetData(
      * <p><b>Skill e Perícia são coisas diferentes</b> (decisão do usuário, 25/09/2026).
      * A skill é a lista <i>livre</i> que o jogador monta: um nome e uma
      * descrição, adicionar e remover. A perícia é uma lista <i>fixa</i>,
-     * definida em {@link #PERICIAS_PADRAO}, em que só o valor e o atributo
+     * definida em {@link SheetModel}, em que só o valor e o atributo
      * mudam. Por isso existem dois enums e dois payloads: {@code SET_VALUE} e
      * {@code SET_ATTRIBUTE} pertencem a {@link PericiaOp}, não a este.
      *
@@ -555,7 +597,7 @@ public record SheetData(
     /**
      * Uma <b>skill</b> da ficha: {@code name} + {@code description}. Só isso.
      *
-     * <p><b>Por que só dois campos:</b> decisão do usuário em 25/09/2026 —
+     * <p><b>Por que só dois campos:</b> decisão do usuário em 25/09/2026 -
      * "skills" e "perícias são completamente diferentes". A skill é a lista
      * livre que o jogador monta, servindo para descrever o que ele sabe fazer
      * (uma técnica, um ofício, um truque). O que ela <i>soma</i> na rolagem é
@@ -564,7 +606,7 @@ public record SheetData(
      * atributo.
      *
      * <p>A descrição é opcional (pode ser vazia: a skill aparece, só não abre
-     * tooltip) e o usuário pediu <b>sem limite de caracteres</b> — o corte
+     * tooltip) e o usuário pediu <b>sem limite de caracteres</b> - o corte
      * acontece só na exibição. O teto em {@link #SKILL_DESC_MAX} é um limite
      * de segurança do protocolo, não de uso.
      */
@@ -585,7 +627,7 @@ public record SheetData(
      * O que um {@code SheetPericiaPayload} quer fazer com a perícia.
      *
      * <p>Só duas operações, porque a lista de perícias é <b>fixa</b>: não há
-     * como criar nem remover (decisão do usuário em 25/09/2026 — "perícias são
+     * como criar nem remover (decisão do usuário em 25/09/2026 - "perícias são
      * fixas que serão personalizados para cada sistema"). O que muda é o valor
      * (0-3) e o atributo que ela soma.
      */
@@ -625,18 +667,18 @@ public record SheetData(
      * perícias são definidas em código e personalizadas por sistema de RPG; o
      * jogador não pode criar nem apagar, só ajustar o <b>valor</b> e o
      * <b>atributo</b> que a perícia soma. A lista que vale é
-     * {@link #PERICIAS_PADRAO} e {@link #sanitizePericias} garante que a ficha
-     * sempre tenha exatamente essa lista — nem a mais, nem a menos.
+     * {@link SheetModel} e {@link #sanitizePericias} garante que a ficha
+     * sempre tenha exatamente essa lista - nem a mais, nem a menos.
      *
      * <p>Sem descrição de propósito: o usuário não pediu descrição de perícia,
      * e o nome já identifica a perícia. Se um dia quiser, é um campo a mais
      * aqui e no codec.
      */
-    public record Pericia(String name, int value, Attribute attribute) {
+    public record Pericia(String name, int value, String attributeId) {
         public static final StreamCodec<FriendlyByteBuf, Pericia> STREAM_CODEC = StreamCodec.composite(
                 ByteBufCodecs.stringUtf8(SKILL_MAX), Pericia::name,
                 ByteBufCodecs.VAR_INT, Pericia::value,
-                Attribute.STREAM_CODEC, Pericia::attribute,
+                ByteBufCodecs.stringUtf8(32), Pericia::attributeId,
                 Pericia::new
         );
 
@@ -662,18 +704,19 @@ public record SheetData(
         public Pericia {
             name = cleanSkill(name);
             value = clamp(value, VALUE_MIN, VALUE_MAX);
-            // Cenario defensivo: um payload antigo ou um cliente modificado
-            // poderia mandar null. Sem isto, o NPE rebentaria a ficha inteira.
-            attribute = attribute == null ? Attribute.DEXTERITY : attribute;
+            // Cenario defensivo: um payload antigo, um save editado a mao ou um
+            // cliente modificado poderiam mandar null. Sem isto, o NPE rebentaria
+            // a ficha inteira. String vazia significa "ainda nao sabe com qual
+            // atributo soma" e e resolvido por SheetModel.align.
+            attributeId = attributeId == null ? "" : attributeId.trim();
+            if (attributeId.length() > 32) {
+                attributeId = attributeId.substring(0, 32);
+            }
         }
 
         /** Total que esta pericia soma na rolagem: valor + atributo. */
         public int rollBonus(SheetData sheet) {
-            return value + attributeValue(sheet, attribute);
-        }
-
-        private static int attributeValue(SheetData sheet, Attribute attr) {
-            return attr == null ? 0 : sheet.getNumeric(attr.field());
+            return value + (sheet == null ? 0 : sheet.attributeValue(attributeId));
         }
     }
 
@@ -682,60 +725,27 @@ public record SheetData(
     // ------------------------------------------------------------------
 
     /**
-     * <b>A LISTA FIXA DE PERÍCIAS.</b> É aqui que o sistema de RPG define
-     * quais perícias existem e quais são os valores iniciais.
+     * As pericias do <b>modelo padrao</b>, ja como ficha.
      *
-     * <p><b>Para personalizar o sistema, edite só esta lista.</b> Acrescentar
-     * uma perícia aqui faz ela aparecer na ficha de todo mundo; tirar uma
-     * daqui a remove das fichas (veja {@link #sanitizePericias}). Nenhuma
-     * outra parte do código precisa mudar, e nenhuma alteração de valor ou
-     * atributo feita na tela é preservada para uma perícia que saiu daqui —
-     * a ficha passa a recomeçar no padrão.
+     * <p><b>27/09/2026 (Sheet Editor):</b> esta lista deixou de ser a definicao
+     * do sistema. Quem decide agora e o Mestre, no item Sheet Editor, e o que
+     * existe em {@link SheetModel}. Este metodo existe so para o modelo padrao
+     * (as 18 basicas de D&amp;D 5e) e para o cliente, que antes de receber o
+     * modelo do servidor mostra o padrao em vez de uma ficha vazia.
      *
-     * <p><b>Decisões do usuario (27/09/2026):</b> a lista e exatamente as
-     * <b>18 perícias básicas de D&amp;D 5e</b> em inglês, cada uma com o
-     * atributo que o D&amp;D 5e define para ela, todas com valor 0 para o Mestre
-     * distribuir. "Initiative" e "Melee", que o sistema tinha desde o começo,
-     * <b>saíram da lista</b> — ver o aviso de perda em
-     * {@code sanitizePericias}. Antes desta troca, as 16 últimas posições eram
-     * espaço reservado (<code>perícia 0</code>..<code>perícia 15</code>)
-     * preenchido pelo RPG.
-     *
-     * <p>A lista é escrita na mão, e não gerada por um laço, justamente para
-     * ficar fácil de editar: dá para mudar nome, valor e atributo de uma linha
-     * só, sem pensar em índice ou rotação.
+     * <p><b>Nao e mais a fonte da verdade:</b> {@link #sanitizePericias} nao
+     * mais prende a ficha a esta lista. Quem alinha a ficha com a lista de
+     * pericias do sistema e {@link SheetModel#align}, que e chamado no login e
+     * a cada edicao do modelo.
      */
-    public static final List<Pericia> PERICIAS_PADRAO = List.of(
-            // As 18 pericias basicas de D&D 5e, em ingles, com o atributo que
-            // cada uma usa. Todas comecam em 0: o bonus e preenchido pelo
-            // jogador (ou pelo Mestre) na tela, nao pelo codigo.
-            //
-            // 27/09/2026, decisao do usuario: a lista e SO estas 18. "Initiative"
-            // e "Melee", que o sistema tinha desde o inicio, sairam daqui.
-            // Conferido antes da decisao: a pericia "Initiative" NAO era lida em
-            // lugar nenhum de src/ -- o modo combate nao consulta a ficha para
-            // ordenar turnos -- e "Melee" so duplicava "Athletics" (FOR) com um
-            // nome que o D&D nao usa para teste de habilidade. Ver o aviso de
-            // perda em {@code sanitizePericias}.
-            new Pericia("Acrobatics", 0, Attribute.DEXTERITY),
-            new Pericia("Animal Handling", 0, Attribute.WISDOM),
-            new Pericia("Arcana", 0, Attribute.INTELLIGENCE),
-            new Pericia("Athletics", 0, Attribute.STRENGTH),
-            new Pericia("Deception", 0, Attribute.CHARISMA),
-            new Pericia("History", 0, Attribute.INTELLIGENCE),
-            new Pericia("Insight", 0, Attribute.WISDOM),
-            new Pericia("Intimidation", 0, Attribute.CHARISMA),
-            new Pericia("Investigation", 0, Attribute.INTELLIGENCE),
-            new Pericia("Medicine", 0, Attribute.WISDOM),
-            new Pericia("Nature", 0, Attribute.INTELLIGENCE),
-            new Pericia("Perception", 0, Attribute.WISDOM),
-            new Pericia("Performance", 0, Attribute.CHARISMA),
-            new Pericia("Persuasion", 0, Attribute.CHARISMA),
-            new Pericia("Religion", 0, Attribute.INTELLIGENCE),
-            new Pericia("Stealth", 0, Attribute.DEXTERITY),
-            new Pericia("Survival", 0, Attribute.WISDOM),
-            new Pericia("Thievery", 0, Attribute.DEXTERITY)
-    );
+    public static List<Pericia> defaultPericias() {
+        SheetModel model = SheetModelHolder.current();
+        List<Pericia> out = new ArrayList<>(model.periciaCount());
+        for (SheetModel.PericiaDef def : model.pericias()) {
+            out.add(new Pericia(def.name(), 0, def.attributeId()));
+        }
+        return List.copyOf(out);
+    }
 
     /**
      *apelidos ANTIGOS de cada pericia do padrao, indexados pelo nome ATUAL.
@@ -781,10 +791,12 @@ public record SheetData(
 
     private static Map<String, List<String>> buildLegacyPericiaNames() {
         Map<String, List<String>> map = new HashMap<>();
-        for (Pericia padrao : PERICIAS_PADRAO) {
-            List<String> aliases = legacyPericiaNames(padrao.name());
+        // O indice e do modelo PADRAO, nao do modelo salvo: e a lista de apelidos
+        // de 26/09/2026 que se quer preservar, e ela nao muda com o Sheet Editor.
+        for (SheetModel.PericiaDef def : SheetModel.defaults().pericias()) {
+            List<String> aliases = legacyPericiaNames(def.name());
             if (!aliases.isEmpty()) {
-                map.put(padrao.name().toLowerCase(Locale.ROOT), List.copyOf(aliases));
+                map.put(def.name().toLowerCase(Locale.ROOT), List.copyOf(aliases));
             }
         }
         return Map.copyOf(map);
@@ -829,6 +841,34 @@ public record SheetData(
         return false;
     }
 
+    /**
+     * A pericia deste nome, aceitando tambem os apelidos antigos.
+     *
+     * <p><b>27/09/2026:</b> existia mas nao era chamado por ninguem, e
+     * {@link #LEGACY_PERICIA_NAMES} so servia a ele — ou seja, a protecao contra a
+     * perda de valor de uma ficha salva ANTES da troca da lista de pericias
+     * estava escrita e desligada. O {@code align} do modelo casava o nome
+     * exato, nao achava "Acrobacia" para o padrao "Acrobatics", e o valor
+     * virava 0 <b>em silencio</b>, no proximo login ou na proxima edicao do
+     * Mestre.
+     *
+     * <p>E por isso que este metodo e o ponto de entrada do {@code align}: ele
+     * tenta o nome exato primeiro, e so depois cai nos apelidos, para nunca
+     * confundir uma pericia renomeada pelo Mestre com uma de um save antigo.
+     */
+    public Pericia periciaByNameOrLegacy(String name) {
+        Pericia exact = periciaByName(name);
+        if (exact != null || name == null) {
+            return exact;
+        }
+        for (Pericia candidate : pericias) {
+            if (matchesPericiaName(candidate.name(), name)) {
+                return candidate;
+            }
+        }
+        return null;
+    }
+
     /** Ficha inicial de um jogador: nome = nome da conta, resto no padrão. */
     public static SheetData defaultSheet(String playerName) {
         return new SheetData(
@@ -837,7 +877,7 @@ public record SheetData(
                 Progress.defaults(),
                 Attributes.defaults(),
                 List.of(),
-                PERICIAS_PADRAO
+                defaultPericias()
         );
     }
 
@@ -848,7 +888,7 @@ public record SheetData(
     /**
      * <b>FACT (regra do usuário):</b> o personagem está <b>deitado</b> quando
      * {@code hp <= 0}. Ele não morre por isso: a vida real do Minecraft é uma
-     * camada separada (e os jogadores já são imunes a dano físico — ver
+     * camada separada (e os jogadores já são imunes a dano físico - ver
      * {@code DamageControlHandler}) e o estado deitado é aplicado por
      * {@code DownedController}. Com {@code hp > 0} o personagem levanta
      * automaticamente.
@@ -866,7 +906,7 @@ public record SheetData(
      *
      * <p>O valor chega como texto (o cliente pode enviar qualquer string), então
      * é convertido e limitado aqui. Campo desconhecido ou valor numérico
-     * inválido devolve a ficha inalterada — o servidor nunca confi no cliente.
+     * inválido devolve a ficha inalterada - o servidor nunca confi no cliente.
      */
     public SheetData withField(String field, String rawValue) {
         if (field == null || rawValue == null) {
@@ -886,23 +926,35 @@ public record SheetData(
             case "mana" -> replaceVitals(new Vitals(vitals.hp(), vitals.hpMax(), parseInt(value, vitals.mana()), vitals.manaMax()));
             case "manamax" -> replaceVitals(new Vitals(vitals.hp(), vitals.hpMax(), vitals.mana(), parseInt(value, vitals.manaMax())));
 
-            case "level" -> new SheetData(identity, vitals, new Progress(parseInt(value, progress.level()), progress.xp()), attributes, skills, pericias);
-            case "xp" -> new SheetData(identity, vitals, new Progress(progress.level(), parseInt(value, progress.xp())), attributes, skills, pericias);
+            case "level" -> new SheetData(identity, vitals, new Progress(parseInt(value, progress.level()), progress.xp(), progress.xpText()), attributes, skills, pericias);
+            // Com o modelo em modo TEXT, o campo da barra mostra o texto que o
+            // Mestre digitou (ex.: "Fiel aogrupo"). O numero continua guardado
+            // para quando o modelo voltar para NUMBER.
+            case "xp" -> SheetModelHolder.current().xp() == SheetModel.XpMode.TEXT
+                    ? new SheetData(identity, vitals, new Progress(progress.level(), progress.xp(), value), attributes, skills, pericias)
+                    : new SheetData(identity, vitals, new Progress(progress.level(), parseInt(value, progress.xp()), progress.xpText()), attributes, skills, pericias);
 
-            case "strength" -> replaceAttributes(new Attributes(parseInt(value, attributes.strength()), attributes.dexterity(),
-                    attributes.constitution(), attributes.intelligence(), attributes.wisdom(), attributes.charisma()));
-            case "dexterity" -> replaceAttributes(new Attributes(attributes.strength(), parseInt(value, attributes.dexterity()),
-                    attributes.constitution(), attributes.intelligence(), attributes.wisdom(), attributes.charisma()));
-            case "constitution" -> replaceAttributes(new Attributes(attributes.strength(), attributes.dexterity(),
-                    parseInt(value, attributes.constitution()), attributes.intelligence(), attributes.wisdom(), attributes.charisma()));
-            case "intelligence" -> replaceAttributes(new Attributes(attributes.strength(), attributes.dexterity(),
-                    attributes.constitution(), parseInt(value, attributes.intelligence()), attributes.wisdom(), attributes.charisma()));
-            case "wisdom" -> replaceAttributes(new Attributes(attributes.strength(), attributes.dexterity(),
-                    attributes.constitution(), attributes.intelligence(), parseInt(value, attributes.wisdom()), attributes.charisma()));
-            case "charisma" -> replaceAttributes(new Attributes(attributes.strength(), attributes.dexterity(),
-                    attributes.constitution(), attributes.intelligence(), attributes.wisdom(), parseInt(value, attributes.charisma())));
+            // O texto do XP vem num campo SEPARADO do numero, e nao no mesmo
+            // "xp": e o que a tela de Status abre em modo TEXT. Sem este caso o
+            // pacote caia no `default` abaixo, que e o ramo de atributo, e
+            // Attributes.withValue devolvia a propria ficha -- o texto aparecia
+            // na caixa do Mestre e sumia no proximo refresh, porque getText
+            // ("xptext") lia de novo o valor do servidor.
+            //
+            // So aceita em modo TEXT, pelo mesmo motivo do "xp" acima: em NUMBER
+            // a tela nao mostra essa caixa, entao um pacote com "xptext" so pode
+            // vir de um cliente forjado.
+            case "xptext" -> SheetModelHolder.current().xp() == SheetModel.XpMode.TEXT
+                    ? new SheetData(identity, vitals, new Progress(progress.level(), progress.xp(), value), attributes, skills, pericias)
+                    : this;
 
-            default -> this;
+            // Qualquer outra chave e um id de atributo. O que decide se ela
+            // existe e Attributes.withValue: id que a ficha nao tem devolve a
+            // propria ficha, entao um cliente nao inventa atributo.
+            default -> {
+                Attributes next = attributes.withValue(key, parseInt(value, attributes.valueOf(key)));
+                yield next == attributes ? this : replaceAttributes(next);
+            }
         };
     }
 
@@ -919,7 +971,7 @@ public record SheetData(
      *
      * <p>Se o nome JA existe, só a descrição é ATUALIZADA no lugar (preservando
      * a posição) em vez de a entrada ser duplicada. <b>Decisão:</b> sem isso o
-     * jogador não teria como corrigir uma descrição errada — só poderia remover
+     * jogador não teria como corrigir uma descrição errada - só poderia remover
      * e digitar tudo de novo.
      */
     public SheetData withSkill(String skill, String description) {
@@ -957,13 +1009,23 @@ public record SheetData(
      */
     public SheetData withPericiaValue(String pericia, int value) {
         return mutatePericia(pericia, existing ->
-                new Pericia(existing.name(), value, existing.attribute()));
+                new Pericia(existing.name(), value, existing.attributeId()));
     }
 
-    /** Troca com qual atributo a perícia soma (botão de lista suspensa). */
-    public SheetData withPericiaAttribute(String pericia, Attribute attribute) {
+    /**
+     * Troca com qual atributo a pericia soma (botao de lista suspensa).
+     *
+     * <p>27/09/2026: o parametro virou o <b>id</b> do atributo (String) em vez
+     * do enum {@code Attribute}, que nao existe mais. O id precisa existir no
+     * modelo: um id desconhecido e ignorado, e a pericia fica com o atributo que
+     * ela ja tinha.
+     */
+    public SheetData withPericiaAttribute(String pericia, String attributeId) {
+        if (attributeId == null || SheetModelHolder.current().attribute(attributeId) == null) {
+            return this;
+        }
         return mutatePericia(pericia, existing ->
-                new Pericia(existing.name(), existing.value(), attribute));
+                new Pericia(existing.name(), existing.value(), attributeId));
     }
 
     /** Altera UM campo de uma perícia existente; nunca cria nem remove. */
@@ -1051,6 +1113,10 @@ public record SheetData(
             case "race" -> identity.race();
             case "characterclass" -> identity.characterClass();
             case "background" -> identity.background();
+            // XP em modo TEXT e um campo de texto, e nao um numero. Sem esta
+            // linha, a caixa de texto da tela de Status cairia no `default` e o
+            // Mestre nao veria o que digitou.
+            case "xptext" -> progress.xpText();
             default -> "";
         };
     }
@@ -1063,45 +1129,82 @@ public record SheetData(
         if (field == null) {
             return 0;
         }
-        return switch (field.toLowerCase(Locale.ROOT)) {
+        String key = field.toLowerCase(Locale.ROOT);
+        // HP/Mana/Level/XP sao resolvidos aqui; qualquer outra chave e o id de
+        // um atributo. Um id que a ficha nao tem devolve 0, que e a mesma
+        // resposta de antes quando o campo nao existia.
+        return switch (key) {
             case "hp" -> vitals.hp();
             case "hpmax" -> vitals.hpMax();
             case "mana" -> vitals.mana();
             case "manamax" -> vitals.manaMax();
             case "level" -> progress.level();
             case "xp" -> progress.xp();
-            case "strength" -> attributes.strength();
-            case "dexterity" -> attributes.dexterity();
-            case "constitution" -> attributes.constitution();
-            case "intelligence" -> attributes.intelligence();
-            case "wisdom" -> attributes.wisdom();
-            case "charisma" -> attributes.charisma();
-            default -> 0;
+            default -> attributes.valueOf(key);
         };
     }
 
-    /** Rótulo amigável de um campo, para a UI. */
+    /**
+     * Valor de um atributo pelo id do modelo.
+     *
+     * <p>Este e o metodo que o resto do codigo usa para "soma este atributo na
+     * rolagem" (ex.: {@link Pericia#rollBonus}). Ele nao passa por
+     * {@link #getNumeric} de proposito: um id de atributo e um dado de
+     * <b>valor</b>, e nao um campo editavel da ficha.
+     */
+    public int attributeValue(String attributeId) {
+        return attributeId == null ? 0 : attributes.valueOf(attributeId.toLowerCase(Locale.ROOT));
+    }
+
+    /**
+     * Devolve a copia desta ficha alinhada com o modelo atual.
+     *
+     * <p>Alinhar e seguro de chamar a cada leitura: quando a ficha ja esta
+     * alinhada, devolve a propria instancia. Quem chama e {@code SessionManager}
+     * (ao criar/carregar) e o servidor (a cada edicao do modelo).
+     */
+    public SheetData aligned() {
+        return SheetModelHolder.current().align(this);
+    }
+
+    /** A pericia deste nome, ou {@code null}. Busca ignora maiusculas. */
+    public Pericia periciaByName(String name) {
+        if (name == null) {
+            return null;
+        }
+        String key = name.trim().toLowerCase(Locale.ROOT);
+        for (Pericia pericia : pericias) {
+            if (pericia.name().toLowerCase(Locale.ROOT).equals(key)) {
+                return pericia;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Rotulo amigavel de um campo, para a UI.
+     *
+     * <p><b>27/09/2026 (Sheet Editor):</b> o rotulo vem do
+     * {@link SheetModelHolder#current()}, e nao mais deste switch. E por isso
+     * que renomear um campo no editor muda o texto na ficha de todo mundo sem
+     * tocar em uma linha de codigo.
+     *
+     * <p>Este metodo so resolve os campos <b>de sistema</b> (identidade, vitais,
+     * progressao). O rotulo de um atributo mora no modelo e e lido por
+     * {@link SheetModel#attributeLabel(String)}; o de uma pericia e o proprio
+     * {@code name} que o Mestre digitou no editor.
+     */
     public static String labelOf(String field) {
         if (field == null) {
             return "";
         }
+        String label = SheetModelHolder.current().labelOf(field);
+        if (!label.isEmpty()) {
+            return label;
+        }
         return switch (field.toLowerCase(Locale.ROOT)) {
-            case "charactername" -> "Name";
-            case "race" -> "Race";
-            case "characterclass" -> "Class";
-            case "background" -> "Background";
-            case "hp" -> "HP";
             case "hpmax" -> "Max HP";
-            case "mana" -> "Mana";
             case "manamax" -> "Max Mana";
-            case "level" -> "Level";
-            case "xp" -> "XP";
-            case "strength" -> "STR";
-            case "dexterity" -> "DEX";
-            case "constitution" -> "CON";
-            case "intelligence" -> "INT";
-            case "wisdom" -> "WIS";
-            case "charisma" -> "CHA";
             default -> field;
         };
     }
@@ -1175,52 +1278,44 @@ public record SheetData(
     }
 
     /**
-     * Garante que a ficha tenha <b>exatamente</b> a lista de perícias do
-     * código, nem mais nem menos.
+     * Higiene estrutural da lista de pericias: descarta nulo, nome vazio e nome
+     * repetido, e corta no teto do modelo.
      *
-     * <p><b>Esta é a regra que faz a lista ser fixa.</b> Ela roda em todo
-     * construtor de {@code SheetData}, então o resultado vale para qualquer
-     * origem da ficha — inclusive um payload de rede ou o NBT do jogador:
+     * <p><b>27/09/2026 (Sheet Editor) - regra mudou.</b> Este metodo JA NAO
+     * prende a ficha a lista do codigo. Antes ele reescrevia a lista inteira
+     * para casar com {@code PERICIAS_PADRAO}, o que tornava impossivel ao
+     * Mestre adicionar, renomear ou remover uma pericia em tempo de jogo.
+     *
+     * <p>Agora quem decide a lista e o {@link SheetModel}, e o metodo que
+     * casa a ficha com ela e {@link SheetModel#align}. A separacao e
+     * deliberada:
      * <ul>
-     *   <li>Perícia da lista do código que veio com valor/atributo → mantida.</li>
-     *   <li>Perícia da lista do código que <b>não</b> veio (ficha nova, ou o
-     *       jogador ainda não abriu a tela) → entra no padrão do código.</li>
-     *   <li>Perícia que <b>não</b> está na lista do código (payload adulterado,
-     *       ou uma perícia que você removeu do código depois) → descartada.</li>
+     *   <li>Aqui: a ficha nao pode vir com lixo (nulo, vazio, duplicata) de
+     *       nenhuma origem, inclusive um payload adulterado.</li>
+     *   <li>Em {@code align}: a ficha ganha as pericias novas, perde as
+     *       removidas e mantem o valor das que sobreviveram pelo nome.</li>
      * </ul>
      *
-     * <p>Ou seja: é impossível uma ficha ter uma perícia a mais, a menos, ou com
-     * um nome que o sistema não conhece.
+     * <p>Por que nao foi tudo deixado em {@code align}: {@code align} roda no
+     * construtor de {@link SheetModel#align} e o construtor de {@code SheetData}
+     * chama este metodo. Se o {@code align} fosse chamado aqui, o construtor
+     * chamaria o align, que constroi uma ficha, que chama este metodo, que
+     * chamaria o align outra vez. A limpeza fica estrutural para o loop
+     * terminar.
      */
     private static List<Pericia> sanitizePericias(List<Pericia> raw) {
-        List<Pericia> out = new ArrayList<>(PERICIAS_PADRAO.size());
-        for (Pericia padrao : PERICIAS_PADRAO) {
-            Pericia achada = null;
-            if (raw != null) {
-                // <b>Ordem de desempate (importante):</b> quando DOIS nomes
-                // salvos casam com a mesma pericia do padrao -- caso de
-                // "Diplomacy" e "Diplomacia", que viraram os dois "Persuasion"
-                // -- vence o <b>primeiro na lista salva</b>, nao o primeiro
-                // apelido. Na pratica isso favorece o nome em ingles, porque a
-                // lista padrao de 26/09/2026 gravou "Diplomacy" antes de
-                // qualquer traducao para portugues existir. Quem jogou nas duas
-                // epocas e editou o valor em ingles mantem o valor; quem so
-                // jogou na epoca antiga tambem. Perderia o valor so quem
-                // ajustou "Diplomacy" em ingles E ainda tinha "Diplomacia" salvo
-                // com outro numero. Isso e aceito, porque o padrao e nao
-                // somar dois numeros diferentes na mesma celula.
-                for (Pericia candidate : raw) {
-                    if (candidate != null && matchesPericiaName(candidate.name(), padrao.name())) {
-                        achada = candidate;
-                        break;
-                    }
-                }
+        List<Pericia> out = new ArrayList<>();
+        if (raw == null) {
+            return List.of();
+        }
+        Set<String> seen = new LinkedHashSet<>();
+        for (Pericia pericia : raw) {
+            if (pericia == null || out.size() >= SheetModel.MAX_PERICIAS) {
+                continue;
             }
-            // O nome vem sempre do código, nunca da ficha: assim uma perícia
-            // não consegue "renomear" a si mesma.
-            out.add(achada == null
-                    ? padrao
-                    : new Pericia(padrao.name(), achada.value(), achada.attribute()));
+            if (!pericia.name().isEmpty() && seen.add(pericia.name().toLowerCase(Locale.ROOT))) {
+                out.add(pericia);
+            }
         }
         return List.copyOf(out);
     }

@@ -2,6 +2,7 @@ package com.pedro.tabletoprpg;
 
 import net.minecraft.server.level.ServerPlayer;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
@@ -194,12 +195,54 @@ public class SessionManager {
     /**
      * Ficha de um jogador, criando a ficha padrão na primeira vez.
      * O nome da conta é usado como nome inicial do personagem.
+     *
+     * <p><b>27/09/2026 (Sheet Editor):</b> a ficha criada ja sai alinhada com o
+     * modelo, porque {@link SheetData#defaultSheet} ja le a lista de atributos e
+     * de perícias do {@link SheetModelHolder}.
      */
     public static SheetData getOrCreateSheet(UUID playerUuid, String playerName) {
         if (playerUuid == null) {
             return SheetData.defaultSheet("");
         }
         return characterSheets.computeIfAbsent(playerUuid, uuid -> SheetData.defaultSheet(playerName));
+    }
+
+    /**
+     * Re-alinha <b>todas</b> as fichas carregadas com o modelo atual.
+     *
+     * <p><b>Por que existe:</b> o modelo e global e muda em tempo de jogo
+     * (o Mestre edita pelo Sheet Editor). Quem tem uma cópia da ficha em memória
+     * precisa ser reconciliado com a lista nova: ganha as perícias e os atributos
+     * que passaram a existir, perde os que saíram, e mantém o valor dos que
+     * sobreviveram pelo id/nome.
+     *
+     * <p><b>Por que não alinhar em {@link #getSheet}:</b> {@code getSheet} é
+     * chamado por handlers de dano e de tique. Alinhar ali alocaria uma ficha
+     * nova por chamada, mesmo quando nada mudou. Alinhar só na criação, na
+     * carga do NBT e aqui, neste método, cobre todos os momentos em que o
+     * modelo pode ter mudado.
+     *
+     * @return quantas fichas mudaram de fato (as demais já estavam em dia)
+     */
+    public static int realignAllSheets() {
+        int changed = 0;
+        for (Map.Entry<UUID, SheetData> entry : new ArrayList<>(characterSheets.entrySet())) {
+            SheetData current = entry.getValue();
+            if (current == null) {
+                continue;
+            }
+            SheetData aligned = current.aligned();
+            // Compara por CONTEUDO, e nao por identidade. O align() sempre
+            // devolve uma ficha nova, entao um "aligned != current" seria
+            // sempre verdadeiro e o contador contaria todas as fichas em
+            // memoria, nunca quantas mudaram de fato -- que e o que o
+            // Javadoc acima promete.
+            if (!aligned.equals(current)) {
+                characterSheets.put(entry.getKey(), aligned);
+                changed++;
+            }
+        }
+        return changed;
     }
 
     /** Substitui a ficha de um jogador. */

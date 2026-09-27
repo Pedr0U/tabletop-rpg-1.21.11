@@ -37,6 +37,12 @@ public class TabletopRpg implements ModInitializer {
 		RpgNetworking.registerPayloads();
 		RpgNetworking.registerServerReceivers();
 
+		// Liga o modelo global da ficha ao ciclo de vida do servidor: carrega do
+		// SavedData do overworld no boot e manda o modelo atual a cada jogador
+		// que entra. Precisa vir DEPOIS de registerServerReceivers, porque o
+		// JOIN usa o payload que ali foi registrado.
+		SheetModelStore.register();
+
 		// Grava a ficha de cada jogador no encerramento do servidor (Ctrl+C).
 		// Sem isso a ficha vive so no mapa estatico e se perde ao fechar.
 		SheetPersistenceEvents.register();

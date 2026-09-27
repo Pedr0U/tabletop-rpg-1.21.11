@@ -508,12 +508,16 @@ public class MasterCommands {
         // nao existem nesta versao; Entity#getRandom devolve o RandomSource do
         // level, que e exatamente o do servidor.
         int die = 1 + player.getRandom().nextInt(20);
-        long attrValue = sheet.getNumeric(pericia.attribute().field());
+        // 27/09/2026: o bonus vem por id de atributo, e o rotulo vem do modelo.
+        // Antes era pericia.attribute().field() e pericia.attribute().shortName(),
+        // dois metodos do enum SheetData.Attribute, que nao existe mais.
+        int attrValue = sheet.attributeValue(pericia.attributeId());
         long total = (long) die + pericia.value() + attrValue;
+        String attrLabel = SheetModelHolder.current().attributeLabel(pericia.attributeId());
 
         String message = "§6§l" + player.getName().getString() + " §frolled §6" + pericia.name() + "§f: "
                 + "§7d20 §f(§e" + die + "§f) + §7" + pericia.value()
-                + " + §7" + pericia.attribute().shortName() + " " + attrValue
+                + " + §7" + attrLabel + " " + attrValue
                 + " = §e§l" + total;
 
         if (SessionManager.isMaster(player)) {
@@ -550,10 +554,10 @@ public class MasterCommands {
         ctx.getSource().sendSystemMessage(Component.literal(
                 "§6Skills §7(§f/rpg roll <name>§7): " + sheet.pericias().size()));
         for (SheetData.Pericia pericia : sheet.pericias()) {
-            long attr = sheet.getNumeric(pericia.attribute().field());
+            int attr = sheet.attributeValue(pericia.attributeId());
             ctx.getSource().sendSystemMessage(Component.literal(
                     "§7- §f" + pericia.name() + " §8| §e" + pericia.value()
-                            + " §7+ §e" + attr + " §8(" + pericia.attribute().shortName() + ")"
+                            + " §7+ §e" + attr + " §8(" + SheetModelHolder.current().attributeLabel(pericia.attributeId()) + ")"
                             + " §8= §e" + (pericia.value() + attr)));
         }
         return sheet.pericias().size();
