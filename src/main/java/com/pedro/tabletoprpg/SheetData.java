@@ -17,7 +17,7 @@ import java.util.Map;
  *
  * <p>Estrutura agrupada em sub-records para manter cada
  * {@code StreamCodec.composite} com no máximo 6 campos (limite da API):
- * {@code identity} (3), {@code vitals} (4), {@code progress} (2),
+     * {@code identity} (4), {@code vitals} (4), {@code progress} (2),
  * {@code attributes} (6) e {@code skills} (lista).
  *
  * <p><b>Invariante de faixa:</b> os construtores compactos limitam o que
@@ -28,11 +28,12 @@ import java.util.Map;
  * chega por payload e é convertida com {@link #withField}), mas mesmo um cliente
  * malicioso não consegue gravar um valor fora de faixa.
  *
- * <p><b>Exceção: atributos não têm faixa</b> (decisão do usuário). Eles viraram
- * modificadores somados às rolagens, podem ser negativos e o usuário pediu
- * "sem limitação" — ver {@link Attributes}. O único teto é o do próprio
- * {@code int} do {@code VAR_INT}, e a aritmética das rolagens usa {@code long}
- * para não estourar.
+ * <p><b>Atributos: teto 30, sem piso</b> (27/09/2026). Eles viraram modificadores
+ * somados às rolagens e podem ser negativos, então o piso é
+ * {@link Integer#MIN_VALUE} — ver {@link Attributes}. O teto 30 entrou depois,
+ * quando a ficha ganhou botões {@code -}/{@code +} de dois dígitos: sem teto, o
+ * número cresce até invadir o rótulo e os botões. A aritmética das rolagens usa
+ * {@code long} para não estourar.
  *
  * <p><b>HP pode ser negativo</b> (decisão do usuário): o piso é
  * {@link #MAX_HP_FLOOR} e {@code hp <= 0} significa personagem deitado
@@ -78,10 +79,11 @@ public record SheetData(
     /** Teto de nível. */
     public static final int MAX_LEVEL = 99;
     /**
-     * <b>DESUSADO.</b> Era o teto dos atributos (0..30). O usuário pediu
-     * atributos SEM limite e QUE PODEM SER NEGATIVOS (eles viraram
-     * modificadores das rolagens de perícia), então o clamp foi removido.
-     * A constante fica só para não quebrar referências antigas; não é usada.
+     * <b>DESUSADO.</b> Era o teto dos atributos (0..30). O clamp foi removido em
+     * 26/09/2026 por decisão do usuário (atributos sem limite e podendo ser
+     * negativos, porque viraram modificadores das rolagens) e <b>voltou em
+     * 27/09/2026</b> com o mesmo valor, agora como {@link Attributes#VALUE_MAX}.
+     * Esta constante segue sem uso: quem usa é {@code Attributes}.
      */
     @Deprecated
     public static final int MAX_STAT = 30;
@@ -98,7 +100,7 @@ public record SheetData(
     public static final int MAX_XP = 999_999;
 
     /** Campos de texto livre (editáveis). */
-    public static final List<String> TEXT_FIELDS = List.of("characterName", "race", "characterClass");
+    public static final List<String> TEXT_FIELDS = List.of("characterName", "race", "characterClass", "background");
     /** Campos numéricos (editáveis). */
     public static final List<String> NUMERIC_FIELDS = List.of(
             "hp", "hpMax", "mana", "manaMax",
@@ -145,7 +147,8 @@ public record SheetData(
     private static final Codec<Identity> IDENTITY_CODEC = RecordCodecBuilder.create(i -> i.group(
             Codec.STRING.optionalFieldOf("characterName", "").forGetter(Identity::characterName),
             Codec.STRING.optionalFieldOf("race", "").forGetter(Identity::race),
-            Codec.STRING.optionalFieldOf("characterClass", "").forGetter(Identity::characterClass)
+            Codec.STRING.optionalFieldOf("characterClass", "").forGetter(Identity::characterClass),
+            Codec.STRING.optionalFieldOf("background", "").forGetter(Identity::background)
     ).apply(i, Identity::new));
 
     private static final Codec<Vitals> VITALS_CODEC = RecordCodecBuilder.create(i -> i.group(
@@ -199,7 +202,7 @@ public record SheetData(
      * {@link #sanitizePericias} e volta a lista fixa.
      */
     public static final Codec<SheetData> CODEC = RecordCodecBuilder.create(i -> i.group(
-            IDENTITY_CODEC.optionalFieldOf("identity", new Identity("", "", "")).forGetter(SheetData::identity),
+            IDENTITY_CODEC.optionalFieldOf("identity", new Identity("", "", "", "")).forGetter(SheetData::identity),
             VITALS_CODEC.optionalFieldOf("vitals", Vitals.defaults()).forGetter(SheetData::vitals),
             PROGRESS_CODEC.optionalFieldOf("progress", Progress.defaults()).forGetter(SheetData::progress),
             ATTRIBUTES_CODEC.optionalFieldOf("attributes", Attributes.defaults()).forGetter(SheetData::attributes),
@@ -209,7 +212,7 @@ public record SheetData(
 
     /** Normaliza nulos, a lista de skills e a lista de perícias. */
     public SheetData {
-        identity = identity == null ? new Identity("", "", "") : identity;
+        identity = identity == null ? new Identity("", "", "", "") : identity;
         vitals = vitals == null ? Vitals.defaults() : vitals;
         progress = progress == null ? Progress.defaults() : progress;
         attributes = attributes == null ? Attributes.defaults() : attributes;
@@ -221,12 +224,29 @@ public record SheetData(
     // SUB-RECORDS
     // ------------------------------------------------------------------
 
-    /** Nome do personagem, raça e classe. Textos livres. */
-    public record Identity(String characterName, String race, String characterClass) {
+    /**
+     * Nome do personagem, raça, classe e origem. Textos livres.
+     *
+     * <p><b>{@code background} (27/09/2026):</b> quarto campo, pedido do
+     * usuario como "campo embaixo da classe". Ele fica dentro de
+     * {@code Identity} e <b>nao</b> vira um sétimo grupo de
+     * {@link SheetData#STREAM_CODEC}: o limite de 6 grupos é do record de
+     * fora, e um record de 4 campos cabe folgadamente.
+     *
+     * <p>Ordem importa no codec de rede ({@code StreamCodec.composite} é
+     * posicional) mas nao no de NBT, que é por nome. <b>Não há negociação de
+     * versão entre cliente e servidor</b>, então acrescentar o 4o campo quebra
+     * cliente antigo de qualquer jeito: ele leria a 4a string como se fosse o
+     * próximo campo do record. Por isso {@code background} foi posto no fim
+     * apenas por convencao de leitura — a posição é indiferente para a
+     * segurança, e a compatibilidade real vem de o mod ir junto com o cliente.
+     */
+    public record Identity(String characterName, String race, String characterClass, String background) {
         public static final StreamCodec<FriendlyByteBuf, Identity> STREAM_CODEC = StreamCodec.composite(
                 ByteBufCodecs.stringUtf8(MAX_NAME), Identity::characterName,
                 ByteBufCodecs.stringUtf8(MAX_NAME), Identity::race,
                 ByteBufCodecs.stringUtf8(MAX_NAME), Identity::characterClass,
+                ByteBufCodecs.stringUtf8(MAX_NAME), Identity::background,
                 Identity::new
         );
 
@@ -234,21 +254,27 @@ public record SheetData(
             characterName = clean(characterName);
             race = clean(race);
             characterClass = clean(characterClass);
+            background = clean(background);
         }
 
         /** Cópia com o nome do personagem trocado. */
         public Identity withCharacterName(String value) {
-            return new Identity(value, race, characterClass);
+            return new Identity(value, race, characterClass, background);
         }
 
         /** Cópia com a raça trocada. */
         public Identity withRace(String value) {
-            return new Identity(characterName, value, characterClass);
+            return new Identity(characterName, value, characterClass, background);
         }
 
         /** Cópia com a classe trocada. */
         public Identity withCharacterClass(String value) {
-            return new Identity(characterName, race, value);
+            return new Identity(characterName, race, value, background);
+        }
+
+        /** Cópia com a origem trocada. */
+        public Identity withBackground(String value) {
+            return new Identity(characterName, race, characterClass, value);
         }
     }
 
@@ -325,17 +351,32 @@ public record SheetData(
         );
 
         /**
-         * <b>Sem clamp, por decisao do usuario</b> ("nao coloque limitacao"):
-         * o atributo virou modificador das rolagens de pericia, entao pode ser
-         * NEGATIVO e nao tem teto. O unico limite e o proprio int do
-         * {@code VAR_INT}, que ja e seguro no protocolo; a aritmetica das
-         * rolagens (ver {@code RpgSkillRoll}) usa {@code long} para um
-         * atributo absurdo nao estourar o resultado.
+         * Teto do valor de um atributo.
          *
-         * <p>Consequencia: o antigo {@code clampStat} (0..30) foi removido
-         * daqui. Ele era a causa de "digito 32 e volta 30, e nao sai mais".
+         * <p><b>Mudanca de decisao (27/09/2026).</b> Antes o atributo nao tinha
+         * clamp nenhum, por decisao do usuario de 25/09/2026 ("nao coloque
+         * limitacao"). O pedido de 27/09/2026 foi o oposto: teto de 30, com o
+         * botao "+" escurecendo quando o valor chega nele. O que continua valendo
+         * da decisao antiga e o <b>piso livre</b>: o atributo e um modificador
+         * somado, entao ainda pode ser negativo.
+         *
+         * <p>O clamp mora AQUI, e nao na tela, porque o servidor e a fonte da
+         * verdade: sem ele, um cliente modificado mandaria
+         * {@code withField("strength", "99999")} e o valor entraria assim. A UI
+         * apenas reflete o limite e desliga o "+".
+         *
+         * <p>A aritmetica das rolagens (ver {@code RpgSkillRoll}) usa
+         * {@code long} para um valor grande nao estourar o resultado.
          */
+        public static final int VALUE_MAX = 30;
+
         public Attributes {
+            strength = clamp(strength, Integer.MIN_VALUE, VALUE_MAX);
+            dexterity = clamp(dexterity, Integer.MIN_VALUE, VALUE_MAX);
+            constitution = clamp(constitution, Integer.MIN_VALUE, VALUE_MAX);
+            intelligence = clamp(intelligence, Integer.MIN_VALUE, VALUE_MAX);
+            wisdom = clamp(wisdom, Integer.MIN_VALUE, VALUE_MAX);
+            charisma = clamp(charisma, Integer.MIN_VALUE, VALUE_MAX);
         }
 
         public static Attributes defaults() {
@@ -599,9 +640,24 @@ public record SheetData(
                 Pericia::new
         );
 
-        /** Valor minimo e maximo da pericia (0 a 3, pedido do usuario). */
+        /**
+         * Valor minimo e maximo da pericia.
+         *
+         * <p><b>27/09/2026:</b> o teto era 3 e foi elevado para 30, a pedido
+         * do usuario, junto com a caixa de numero responsiva e o "+" que
+         * escurece no limite. O piso continua 0: o bonus de pericia e o que
+         * <b>soma</b> na rolagem ({@code 1d20 + valor + atributo}), entao
+         * negativo aqui significaria penalidade em vez de bonus -- e penalidade
+         * pertence ao atributo, que aceita negativo.
+         *
+         * <p>Este é o <b>único</b> ponto autoritativo do teto. Quem lê esta
+         * constante: a tela ({@code StatusScreen.stepPericiaValue}) e o próprio
+         * construtor deste record, que corta o valor na carga do NBT.
+         * <b>{@code MasterCommands.rollSkill} NÃO lê</b>: ele confia em
+         * {@code pericia.value()}, que já passou por aqui.
+         */
         public static final int VALUE_MIN = 0;
-        public static final int VALUE_MAX = 3;
+        public static final int VALUE_MAX = 30;
 
         public Pericia {
             name = cleanSkill(name);
@@ -636,105 +692,147 @@ public record SheetData(
      * atributo feita na tela é preservada para uma perícia que saiu daqui —
      * a ficha passa a recomeçar no padrão.
      *
-     * <p><b>Decisões do usuario:</b>
-     * <ul>
-     *   <li>As 4 nomeadas: Luta 2/FOR, Acrobacia 3/DES, Diplomacia 1/CAR e
-     *       Iniciativa 2/DES. <b>Iniciativa é a mais importante</b>: define os
-     *       turnos no modo combate.</li>
-     *   <li>As 16 padrão (perícia 0 .. perícia 15) com valor 0 e atributos
-     *       alternando os 6 (FOR, DES, CON, INT, SAB, CAR, repetindo). São o
-     *       espaço que cada RPG preenche depois com as perícias do seu
-     *       sistema.</li>
-     * </ul>
+     * <p><b>Decisões do usuario (27/09/2026):</b> a lista e exatamente as
+     * <b>18 perícias básicas de D&amp;D 5e</b> em inglês, cada uma com o
+     * atributo que o D&amp;D 5e define para ela, todas com valor 0 para o Mestre
+     * distribuir. "Initiative" e "Melee", que o sistema tinha desde o começo,
+     * <b>saíram da lista</b> — ver o aviso de perda em
+     * {@code sanitizePericias}. Antes desta troca, as 16 últimas posições eram
+     * espaço reservado (<code>perícia 0</code>..<code>perícia 15</code>)
+     * preenchido pelo RPG.
      *
      * <p>A lista é escrita na mão, e não gerada por um laço, justamente para
      * ficar fácil de editar: dá para mudar nome, valor e atributo de uma linha
      * só, sem pensar em índice ou rotação.
      */
     public static final List<Pericia> PERICIAS_PADRAO = List.of(
-            new Pericia("Melee", 2, Attribute.STRENGTH),
-            new Pericia("Acrobatics", 3, Attribute.DEXTERITY),
-            new Pericia("Diplomacy", 1, Attribute.CHARISMA),
-            new Pericia("Initiative", 2, Attribute.DEXTERITY),
-
-            new Pericia("skill 0", 0, Attribute.STRENGTH),
-            new Pericia("skill 1", 0, Attribute.DEXTERITY),
-            new Pericia("skill 2", 0, Attribute.CONSTITUTION),
-            new Pericia("skill 3", 0, Attribute.INTELLIGENCE),
-            new Pericia("skill 4", 0, Attribute.WISDOM),
-            new Pericia("skill 5", 0, Attribute.CHARISMA),
-            new Pericia("skill 6", 0, Attribute.STRENGTH),
-            new Pericia("skill 7", 0, Attribute.DEXTERITY),
-            new Pericia("skill 8", 0, Attribute.CONSTITUTION),
-            new Pericia("skill 9", 0, Attribute.INTELLIGENCE),
-            new Pericia("skill 10", 0, Attribute.WISDOM),
-            new Pericia("skill 11", 0, Attribute.CHARISMA),
-            new Pericia("skill 12", 0, Attribute.STRENGTH),
-            new Pericia("skill 13", 0, Attribute.DEXTERITY),
-            new Pericia("skill 14", 0, Attribute.CONSTITUTION),
-            new Pericia("skill 15", 0, Attribute.INTELLIGENCE)
+            // As 18 pericias basicas de D&D 5e, em ingles, com o atributo que
+            // cada uma usa. Todas comecam em 0: o bonus e preenchido pelo
+            // jogador (ou pelo Mestre) na tela, nao pelo codigo.
+            //
+            // 27/09/2026, decisao do usuario: a lista e SO estas 18. "Initiative"
+            // e "Melee", que o sistema tinha desde o inicio, sairam daqui.
+            // Conferido antes da decisao: a pericia "Initiative" NAO era lida em
+            // lugar nenhum de src/ -- o modo combate nao consulta a ficha para
+            // ordenar turnos -- e "Melee" so duplicava "Athletics" (FOR) com um
+            // nome que o D&D nao usa para teste de habilidade. Ver o aviso de
+            // perda em {@code sanitizePericias}.
+            new Pericia("Acrobatics", 0, Attribute.DEXTERITY),
+            new Pericia("Animal Handling", 0, Attribute.WISDOM),
+            new Pericia("Arcana", 0, Attribute.INTELLIGENCE),
+            new Pericia("Athletics", 0, Attribute.STRENGTH),
+            new Pericia("Deception", 0, Attribute.CHARISMA),
+            new Pericia("History", 0, Attribute.INTELLIGENCE),
+            new Pericia("Insight", 0, Attribute.WISDOM),
+            new Pericia("Intimidation", 0, Attribute.CHARISMA),
+            new Pericia("Investigation", 0, Attribute.INTELLIGENCE),
+            new Pericia("Medicine", 0, Attribute.WISDOM),
+            new Pericia("Nature", 0, Attribute.INTELLIGENCE),
+            new Pericia("Perception", 0, Attribute.WISDOM),
+            new Pericia("Performance", 0, Attribute.CHARISMA),
+            new Pericia("Persuasion", 0, Attribute.CHARISMA),
+            new Pericia("Religion", 0, Attribute.INTELLIGENCE),
+            new Pericia("Stealth", 0, Attribute.DEXTERITY),
+            new Pericia("Survival", 0, Attribute.WISDOM),
+            new Pericia("Thievery", 0, Attribute.DEXTERITY)
     );
 
     /**
-     * Nome ANTIGO (portugues) das pericias do padrao, indexado pelo nome atual.
+     *apelidos ANTIGOS de cada pericia do padrao, indexados pelo nome ATUAL.
+     * Um nome novo pode ter VARIOS apelidos velhos.
      *
      * <p><b>Por que existe:</b> a identidade de uma pericia no NBT e o NOME
      * (ver {@link #PERICIA_CODEC}) e {@link #sanitizePericias} casa o nome salvo
-     * com o nome do padrao. Os nomes foram traduzidos para ingles em
-     * 26/09/2026, entao sem este mapa toda ficha salva ANTES da traducao
-     * perderia, em silencio, o valor e o atributo das 20 pericias -- o sanitize
-     * nao devolveria um erro, so substituiria pelo padrao.
+     * com o nome do padrao. Sem este mapa toda ficha salva ANTES da mudanca
+     * perderia, <b>em silencio</b>, o valor e o atributo: o sanitize nao
+     * devolve erro, so substitui pelo padrao.
      *
-     * <p>Com o mapa, a ficha antiga e reconhecida pelo nome velho e passa a
-     * nascer com o nome novo, preservando valor e atributo. Nao apagar nenhuma
-     * entrada: uma ficha pode ter sido salva em qualquer momento.
+     * <p><b>27/09/2026:</b> a lista trocou as 16 pericias de espaco reservado
+     * ("skill 0".."skill 15") pelas 18 basicas de D&D 5e. Duas situacoes
+     * diferentes acontecem aqui:
+     * <ul>
+     *   <li><b>Mesmo nome, apelido so em portugues.</b> "Luta" e "Acrobacia"
+     *       viraram "Melee" e "Acrobatics". O apelido antigo continua valendo,
+     *       para a ficha de quem jogou antes.</li>
+     *   <li><b>Nome mudado de verdade.</b> "Diplomacy"/"Diplomacia" nao existe
+     *       mais em D&D 5e: o equivalente e "Persuasion", mesmo atributo
+     *       (CHA). O valor antigo cai em "Persuasion" em vez de sumir.</li>
+     * </ul>
+     *
+     * <p>As 16 "skill N" <b>nao</b> aparecem aqui de proposito: elas eram
+     * espaco reservado. <b>Descartar PODE perder valor:</b> a tela antiga
+     * mostrava as 20 linhas com {@code -}/{@code +} editaveis, e o padrao 0
+     * nao impediu ninguem de mexer nelas. Quem ajustou "skill 3" para 5 perde
+     * os 5 na migration, sem erro e sem log. Nao ha como recuperar: o espaco
+     * reservado nao tem destino no padrao novo. E o motivo de a troca para as
+     * 18 de D&amp;D ter sido feita com aviso, e nao em silencio.
+     *
+     * <p><b>Perda inevitavel, por decisao do usuario:</b> "Melee" (apelido
+     * "Luta") e "Initiative" (apelido "Iniciativa") sairam do padrao em
+     * 27/09/2026. Como nao ha linha no padrao novo que as receba, o valor
+     * delas e descartado junto com os {@code skill N}. O padrao antigo dava
+     * 2 a elas; quem investiu mais perde esse valor. Nao ha apelido que
+     * resolva, porque resolveria inventando uma linha que o usuario nao pediu.
+     *
+     * <p>Nao apagar nenhum apelido: uma ficha pode ter sido salva em qualquer
+     * momento.
      */
-    private static final Map<String, String> LEGACY_PERICIA_NAMES = buildLegacyPericiaNames();
+    private static final Map<String, List<String>> LEGACY_PERICIA_NAMES = buildLegacyPericiaNames();
 
-    private static Map<String, String> buildLegacyPericiaNames() {
-        Map<String, String> map = new HashMap<>();
+    private static Map<String, List<String>> buildLegacyPericiaNames() {
+        Map<String, List<String>> map = new HashMap<>();
         for (Pericia padrao : PERICIAS_PADRAO) {
-            String legacy = legacyPericiaName(padrao.name());
-            if (legacy != null) {
-                map.put(padrao.name().toLowerCase(Locale.ROOT), legacy);
+            List<String> aliases = legacyPericiaNames(padrao.name());
+            if (!aliases.isEmpty()) {
+                map.put(padrao.name().toLowerCase(Locale.ROOT), List.copyOf(aliases));
             }
         }
         return Map.copyOf(map);
     }
 
-    /** Nome que a pericia do padrao tinha antes da traducao, ou null. */
-    private static String legacyPericiaName(String standardName) {
-        // As 16 de espaco reservado: "pericia 7" -> "skill 7".
-        String prefix = "skill ";
-        if (standardName.startsWith(prefix)
-                && standardName.substring(prefix.length()).chars().allMatch(Character::isDigit)) {
-            return "perícia " + standardName.substring(prefix.length());
-        }
+    /**
+     * Todos os nomes que a pericia do padrao ja teve, do mais antigo ao atual.
+     * A lista e vazia para as 18 de D&D, que nasceram com o nome definitivo.
+     */
+    private static List<String> legacyPericiaNames(String standardName) {
         return switch (standardName) {
-            case "Melee" -> "Luta";
-            case "Acrobatics" -> "Acrobacia";
-            case "Diplomacy" -> "Diplomacia";
-            case "Initiative" -> "Iniciativa";
-            default -> null;
+            // Traducao de 26/09/2026 (portugues -> ingles).
+            case "Acrobatics" -> List.of("Acrobacia");
+            // Troca de 27/09/2026: "Diplomacy" virou "Persuasion" em D&D 5e.
+            // Vale o nome em ingles E o de portugues, porque a ficha pode ter
+            // sido salva nas duas epocas.
+            case "Persuasion" -> List.of("Diplomacy", "Diplomacia");
+            // <b>"Melee"/"Luta" e "Initiative"/"Iniciativa" NAO tem apelido aqui
+            // de proposito:</b> as duas saiu do padrao em 27/09/2026, por decisao
+            // do usuario. Nao existe nome no padrao novo para onde levar o valor,
+            // entao qualquer apelido seria codigo morto. As duas sao as unicas
+            // perda de dados conhecidas desta migracao, e sao inevitaveis sem
+            // inventar uma 19a e 20a linha que o usuario nao pediu.
+            default -> List.of();
         };
     }
 
     /**
-     * Casa o nome salvo com o nome atual do padrao, aceitando tambem o nome
-     * antigo (ver {@link #LEGACY_PERICIA_NAMES}).
+     * Casa o nome salvo com o nome atual do padrao, aceitando tambem qualquer
+     * apelido antigo (ver {@link #LEGACY_PERICIA_NAMES}).
      */
     private static boolean matchesPericiaName(String savedName, String standardName) {
         if (savedName.equalsIgnoreCase(standardName)) {
             return true;
         }
-        String legacy = LEGACY_PERICIA_NAMES.get(standardName.toLowerCase(Locale.ROOT));
-        return legacy != null && savedName.equalsIgnoreCase(legacy);
+        for (String legacy : LEGACY_PERICIA_NAMES.getOrDefault(
+                standardName.toLowerCase(Locale.ROOT), List.of())) {
+            if (savedName.equalsIgnoreCase(legacy)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** Ficha inicial de um jogador: nome = nome da conta, resto no padrão. */
     public static SheetData defaultSheet(String playerName) {
         return new SheetData(
-                new Identity(clean(playerName), "", ""),
+                new Identity(clean(playerName), "", "", ""),
                 Vitals.defaults(),
                 Progress.defaults(),
                 Attributes.defaults(),
@@ -781,6 +879,7 @@ public record SheetData(
             case "charactername" -> new SheetData(identity.withCharacterName(value), vitals, progress, attributes, skills, pericias);
             case "race" -> new SheetData(identity.withRace(value), vitals, progress, attributes, skills, pericias);
             case "characterclass" -> new SheetData(identity.withCharacterClass(value), vitals, progress, attributes, skills, pericias);
+            case "background" -> new SheetData(identity.withBackground(value), vitals, progress, attributes, skills, pericias);
 
             case "hp" -> replaceVitals(new Vitals(parseInt(value, vitals.hp()), vitals.hpMax(), vitals.mana(), vitals.manaMax()));
             case "hpmax" -> replaceVitals(new Vitals(vitals.hp(), parseInt(value, vitals.hpMax()), vitals.mana(), vitals.manaMax()));
@@ -951,6 +1050,7 @@ public record SheetData(
             case "charactername" -> identity.characterName();
             case "race" -> identity.race();
             case "characterclass" -> identity.characterClass();
+            case "background" -> identity.background();
             default -> "";
         };
     }
@@ -989,6 +1089,7 @@ public record SheetData(
             case "charactername" -> "Name";
             case "race" -> "Race";
             case "characterclass" -> "Class";
+            case "background" -> "Background";
             case "hp" -> "HP";
             case "hpmax" -> "Max HP";
             case "mana" -> "Mana";
@@ -1096,6 +1197,18 @@ public record SheetData(
         for (Pericia padrao : PERICIAS_PADRAO) {
             Pericia achada = null;
             if (raw != null) {
+                // <b>Ordem de desempate (importante):</b> quando DOIS nomes
+                // salvos casam com a mesma pericia do padrao -- caso de
+                // "Diplomacy" e "Diplomacia", que viraram os dois "Persuasion"
+                // -- vence o <b>primeiro na lista salva</b>, nao o primeiro
+                // apelido. Na pratica isso favorece o nome em ingles, porque a
+                // lista padrao de 26/09/2026 gravou "Diplomacy" antes de
+                // qualquer traducao para portugues existir. Quem jogou nas duas
+                // epocas e editou o valor em ingles mantem o valor; quem so
+                // jogou na epoca antiga tambem. Perderia o valor so quem
+                // ajustou "Diplomacy" em ingles E ainda tinha "Diplomacia" salvo
+                // com outro numero. Isso e aceito, porque o padrao e nao
+                // somar dois numeros diferentes na mesma celula.
                 for (Pericia candidate : raw) {
                     if (candidate != null && matchesPericiaName(candidate.name(), padrao.name())) {
                         achada = candidate;

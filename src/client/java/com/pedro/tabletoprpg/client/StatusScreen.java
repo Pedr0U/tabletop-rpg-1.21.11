@@ -32,11 +32,15 @@ import java.util.Map;
  * <p>O campo <b>Max</b> continua como caixa de texto editavel ao lado de cada
  * barra: sem ele nao haveria como mudar o teto do recurso.
  *
- * <p><b>Atributos sao setas, nao caixas de texto</b> (decisao do usuario): o
+ * <p><b>Atributos sao botoes, nao caixas de texto</b> (decisao do usuario): o
  * atributo virou modificador somado as pericias, entao o mestre so precisa
  * subir e descer -- e um numero solto nao limitava mais. Nao ha barra nem
- * caixa: apenas {@code rotulo  [<]  numero  [>]}. Como o atributo nao tem teto
- * e aceita valor negativo, a seta {@code <} continua funcionando em 0 e abaixo.
+ * caixa: apenas {@code rotulo  [-]  numero  [+]}. 27/09/2026: os glifos
+ * {@code <} e {@code >} viraram {@code -} e {@code +}, para o par de botoes
+ * da tela inteira falar a mesma coisa. O {@code +} desliga em
+ * {@link SheetData.Attributes#VALUE_MAX} (30). Como o atributo <b>nao tem
+ * piso</b>, o {@code -} nunca desliga: e o que permite voltar de um valor
+ * muito negativo, que a ficha aceita.
  */
 public class StatusScreen extends CharacterSheetScreen {
 
@@ -44,8 +48,16 @@ public class StatusScreen extends CharacterSheetScreen {
     // COLUNA DE PERICIAS (decisao do usuario em 25/09/2026)
     // ------------------------------------------------------------------
 
-    /** Quantas pericias a coluna mostra: a lista e fixa, entao o total e' este. */
-    private static final int PER_COUNT = 20;
+    /**
+     * Quantas pericias a coluna mostra.
+     *
+     * <p>27/09/2026: era a constante {@code 20}, duplicada a mao ao lado de
+     * {@code PERICIAS_PADRAO}. Essa duplicacao era um perigo real -- trocar a
+     * lista de pericias sem trocar este numero deixaria a ultima linha sem
+     * botao, ou criaria uma linha vazia. Agora o total vem da propria lista,
+     * entao as duas coisas nao podem sair de sincronia.
+     */
+    private static final int PER_COUNT = SheetData.PERICIAS_PADRAO.size();
     /** Painel mais largo que o das outras telas, para caber a coluna. */
     private static final int MAX_PANEL_W_STATUS = 600;
     /**
@@ -67,8 +79,6 @@ public class StatusScreen extends CharacterSheetScreen {
     private static final int FIELD_W_MAX = 240;
     /** Folga entre as pecas de um atributo, a mesma usada nas pericias. */
     private static final int WIDGET_GAP = 2;
-    /** Largura da caixa do valor, a mesma usada nas pericias. */
-    private static final int PERICIA_VALUE_W = 10;
     /** Respiro interno do painel, para o texto nao encostar na moldura. */
     private static final int PANEL_PAD = 8;
     /** Largura da coluna como fracao do painel (o resto fica com a ficha). */
@@ -90,8 +100,16 @@ public class StatusScreen extends CharacterSheetScreen {
     /** Atributo otimista por pericia, mesmo proposito de {@link #pendingPericiaValue}. */
     private final Map<String, SheetData.Attribute> pendingPericiaAttribute = new HashMap<>();
 
-    /** Geometria de uma linha de pericia: nome (x, w), valor e o botao de atributo. */
-    private record PericiaRow(int nameX, int y, int nameW, int valueX, int valueW, int h, Button attrButton) {
+    /**
+     * Geometria de uma linha de pericia: nome (x, w), valor e o botao de atributo.
+     *
+     * <p>Os dois botoes de passo ({@code -} e {@code +}) ficam guardados porque
+     * {@link #renderContent} desliga o {@code +} quando o valor chega no teto:
+     * um botao desativado ({@code active = false}) e desenhado cinza, que e o
+     * feedback de "voce ja chegou no maximo" pedido pelo usuario.
+     */
+    private record PericiaRow(int nameX, int y, int nameW, int valueX, int valueW, int h,
+                             Button attrButton, Button minusButton, Button plusButton) {
     }
 
     /** Geometria das barras, calculada em buildPanel(). */
@@ -104,8 +122,14 @@ public class StatusScreen extends CharacterSheetScreen {
     /** Onde o numero de cada atributo e desenhado (o widget e' o valor). */
     private final List<AttrRow> attrRows = new ArrayList<>();
 
-    /** Area onde o numero do atributo e centralizado. */
-    private record AttrRow(int x, int y, int w, int h, SheetData.Attribute attribute) {
+    /**
+     * Area onde o numero do atributo e centralizado.
+     *
+     * <p>Como {@link PericiaRow}, guarda os dois botoes de passo para o "+"
+     * poder escurecer no teto.
+     */
+    private record AttrRow(int x, int y, int w, int h, SheetData.Attribute attribute,
+                           Button minusButton, Button plusButton) {
     }
 
     public StatusScreen(String targetName, Screen returnTo) {
@@ -163,13 +187,26 @@ public class StatusScreen extends CharacterSheetScreen {
         perRowH = Math.max(MIN_PER_ROW_H, Math.min(perRowHCap(topY, bottomY), perAvail / PER_COUNT));
 
         // Duas colunas de atributos so quando o painel e largo o bastante para
-        // os rotulos (FOR/DES/...) nao se chocarem com as duas setas.
+        // os rotulos (FOR/DES/...) nao se chocarem com os dois botoes.
         boolean twoColumns = leftW >= 260;
         int attrRowCount = twoColumns ? 3 : 6;
-        int neededRows = 3 + 2 + 2 + attrRowCount + 4; // 4 titulos de secao
+        // 4 titulos de secao (Identity, Vitals, Progress, Attributes) + 4 campos
+        // de identidade (characterName, race, characterClass, background) + 2
+        // vitais + 2 de progresso + as linhas de atributo. Sem folga no fim.
+        //
+        // 27/09/2026, a folga era 4. Como o espaco disponivel e dividido pelo
+        // total de linhas, a folga nao "reserva" nada: ela so encolhe a altura de
+        // linha. O que ela faz de verdade e aumentar o TOTAL, e o total so vira
+        // problema quando a altura de linha esta no piso de MIN_ROW_H (12) —
+        // caso das janelas baixas. Com a folga, 18 linhas x 12 estouravam 32px e
+        // as duas ultimas caíam em cima do botao Back, que e desenhado depois e
+        // por cima. Sem folga cabem 16 linhas e o estouro cai para 8px, dentro do
+        // painel. Em janela normal a altura de linha bate em MAX_ROW_H nos dois
+        // casos, entao nada muda visualmente la.
+        int neededRows = 4 + 4 + 2 + 2 + attrRowCount;
         rowH = fitRowHeight(neededRows, topY, bottomY);
 
-        int labelW = Math.max(52, leftW / 5);
+        int labelW = fieldLabelWidth(leftW);
         // Campo de tamanho MEDIO e centralizado (feedback do usuario: as caixas
         // de texto estavam grandes demais, ocupando todo o resto da linha).
         // Em vez de esticar ate a borda, a caixa tem teto e o sobra da linha
@@ -185,6 +222,7 @@ public class StatusScreen extends CharacterSheetScreen {
         y = addField("characterName", x0, y, boxX, boxW, false);
         y = addField("race", x0, y, boxX, boxW, false);
         y = addField("characterClass", x0, y, boxX, boxW, false);
+        y = addField("background", x0, y, boxX, boxW, false);
 
         // ---------------- Vitals (barras) ----------------
         y = addSection("Vitals", x0, y);
@@ -199,8 +237,9 @@ public class StatusScreen extends CharacterSheetScreen {
         y = addField("xp", x0, y, boxX, boxW, true);
 
         // ---------------- Attributes ----------------
-        // Decisao do usuario: atributos sao setas -/+ (passo 1), sem caixa de
-        // texto e sem barra, começando em 0 e sem limite (podem ser negativos).
+        // Decisao do usuario: atributos sao botoes -/+ (passo 1), sem caixa de
+        // texto e sem barra, começando em 0, com teto 30 e sem piso (podem ser
+        // negativos).
         y = addSection("Attributes", x0, y);
         if (twoColumns) {
             int colW = (leftW - 6) / 2;
@@ -220,11 +259,65 @@ public class StatusScreen extends CharacterSheetScreen {
 
         // ---------------- Pericias (coluna da direita) ----------------
         // Lista FIXA definida em SheetData.PERICIAS_PADRAO: nao ha botao de
-        // adicionar nem de remover, so as setas de valor e o botao de atributo.
+        // adicionar nem de remover, so os botoes de valor e o botao de atributo.
         textLines.add(new TextLine("Skill Checks", perX, topY + perLabelOffset(), COL_SECTION));
         for (int i = 0; i < PER_COUNT; i++) {
             addPericiaRow(perX, topY + perTitleH + i * perRowH, perW, i);
         }
+        addBonusHeader(topY, perTitleH);
+    }
+
+    /**
+     * Cabecalho "Bonus" em cima da coluna de valores das pericias.
+     *
+     * <p>27/09/2026, pedido do usuario: o numero ao lado do nome da pericia
+     * e o <b>bonus</b>, e nao o valor final da rolagem (que ainda soma o
+     * atributo). Sem rotulo, a coluna parecia ser "o quanto essa pericia rende",
+     * e nao "quanto o jogador investiu nela".
+     *
+     * <p>Usa a MESMA geometria da primeira linha ({@link #periciaRows}), em vez
+     * de recalcular: se a largura da coluna mudar, o texto acompanha sozinho.
+     * O texto e mais largo que a caixa de 2 digitos e nao esta centralizado nela,
+     * e sim sobre a faixa, entao ele invade uns pixels para a esquerda. Por isso
+     * o {@code -9} e nao {@code -8}: com fonte 1px mais alta (resource pack), o
+     * cabecalho encostaria na linha 0 em vez de ficar com 1px de folga.
+     */
+    private void addBonusHeader(int topY, int perTitleH) {
+        if (periciaRows.isEmpty()) {
+            return;
+        }
+        PericiaRow first = periciaRows.get(0);
+        String label = "Bonus";
+        int w = this.font.width(label);
+        int x = first.valueX() + (first.valueW() - w) / 2;
+        int y = topY + perTitleH - 9;
+        textLines.add(new TextLine(label, x, y, COL_MUTED));
+    }
+
+    /**
+     * Largura reservada aos rotulos dos campos de texto.
+     *
+     * <p>27/09/2026: era {@code max(52, leftW/5)}, uma fracao fixa que
+     * aceitava "Name", "Race" e "Class", mas nao "Background" -- o rotulo mais
+     * longo que ja entrou na ficha. Com a coluna estreita ele invadia a caixa
+     * de texto, porque {@code addField} desenha o rotulo sem cortar.
+     *
+     * <p>Agora a largura vem do rotulo <b>realmente mais largo</b> entre os
+     * campos que a tela usa, e nao de uma fracao chutada. O teto de um terco da
+     * coluna existe para a caixa nao sumir quando o rotulo for enorme demais:
+     * nesse caso o rotulo invade de novo, que e o mesmo comportamento de antes
+     * e continua sendo melhor do que um campo sem espaco para digitar.
+     */
+    private int fieldLabelWidth(int leftW) {
+        int widest = 0;
+        for (String field : SheetData.TEXT_FIELDS) {
+            widest = Math.max(widest, this.font.width(SheetData.labelOf(field)));
+        }
+        // "Max" e o rotulo das caixas de teto, e "HP"/"Mana" os das barras.
+        for (String label : List.of("Max", "HP", "Mana", "Level", "XP")) {
+            widest = Math.max(widest, this.font.width(label));
+        }
+        return Math.max(52, Math.min(widest + 6, leftW / 3));
     }
 
     /** Altura de linha provisoria, so para estimar o titulo antes de {@code rowH}. */
@@ -244,10 +337,28 @@ public class StatusScreen extends CharacterSheetScreen {
     }
 
     /**
-     * Uma linha de pericia: {@code nome  [<]  valor  [>]  [atributo v]}.
+     * Largura da caixa do NUMERO, calculada a partir do teto do valor.
+     *
+     * <p><b>27/09/2026, bug relatado:</b> a largura era fixa em 10px e o
+     * numero era cortado com {@code plainSubstrByWidth}, entao ao passar de um
+     * algarismo o segundo era <b>oculto</b> -- "1" + "0" virava "1". A caixa
+     * agora e dimensionada pelo maior valor que pode aparecer, em vez de um
+     * numero chutado: os dois tetos sao 30, entao "30" e o texto mais largo que
+     * precisa caber.
+     *
+     * <p>Usar {@code font.width} (e nao um chute de pixels) e o que faz a
+     * caixa acompanhar a fonte: se a fonte mudar, a caixa acompanha.
+     */
+    private int valueBoxWidth() {
+        int teto = Math.max(SheetData.Attributes.VALUE_MAX, SheetData.Pericia.VALUE_MAX);
+        return this.font.width(Integer.toString(teto)) + 4;
+    }
+
+    /**
+     * Uma linha de pericia: {@code nome  [-]  valor  [+]  [atributo v]}.
      *
      * <p>Compacta de proposito: sao 20 linhas sem scroll, entao a altura
-     * ({@link #perRowH}) pode chegar a 9px e as setas sao menores que as dos
+     * ({@link #perRowH}) pode chegar a 9px e os botoes sao menores que os dos
      * atributos. O nome e o valor sao desenhados em {@link #renderContent} (o
      * widget e' so a moldura), o que mantem {@code applySheetToWidgets}
      * simples.
@@ -256,16 +367,16 @@ public class StatusScreen extends CharacterSheetScreen {
         int h = Math.max(8, perRowH - 1);
         int attrW = Math.max(22, Math.min(32, rowW / 5));
         int arrow = Math.max(9, Math.min(13, h - 1));
-        int valueW = 10;
+        int valueW = valueBoxWidth();
 
         int attrX = x0 + rowW - attrW;
         int plusX = attrX - 2 - arrow;
         int valueX = plusX - 2 - valueW;
         int minusX = valueX - 2 - arrow;
 
-        Button minus = Button.builder(Component.literal("<"),
+        Button minus = Button.builder(Component.literal("-"),
                 b -> stepPericiaValue(index, -1)).bounds(minusX, y, arrow, h).build();
-        Button plus = Button.builder(Component.literal(">"),
+        Button plus = Button.builder(Component.literal("+"),
                 b -> stepPericiaValue(index, 1)).bounds(plusX, y, arrow, h).build();
         Button attr = Button.builder(Component.literal(""),
                 b -> openPericiaAttribute(index)).bounds(attrX, y, attrW, h).build();
@@ -276,9 +387,10 @@ public class StatusScreen extends CharacterSheetScreen {
         arrowButtons.add(plus);
         arrowButtons.add(attr);
 
-        // 4px de folga entre o nome e a seta esquerda: o usuario apontou que
+        // 4px de folga entre o nome e o botao esquerdo: o usuario apontou que
         // "Constituição" encostava nela.
-        periciaRows.add(new PericiaRow(x0, y, Math.max(16, minusX - 4 - x0), valueX, valueW, h, attr));
+        periciaRows.add(new PericiaRow(x0, y, Math.max(16, minusX - 4 - x0), valueX, valueW, h,
+                attr, minus, plus));
     }
 
     /** Abre a lista suspensa dos 6 atributos para a pericia da linha. */
@@ -330,7 +442,7 @@ public class StatusScreen extends CharacterSheetScreen {
     }
 
     /**
-     * Uma linha de atributo: {@code rotulo  [<]  numero  [>]}.
+     * Uma linha de atributo: {@code rotulo  [-]  numero  [+]}.
      *
      * <p>Nao usa {@code createFieldBox} de proposito -- e' a unica secao da
      * ficha sem caixa de texto. O numero vive em {@link AttrRow} e e'
@@ -338,7 +450,7 @@ public class StatusScreen extends CharacterSheetScreen {
      * simples (ela so precisa atualizar as caixas de vida, mana e texto).
      *
      * <p>O rotulo abrevia (FOR, DES, ...) quando a coluna e estreita para
-     * caber as duas setas, e mostra o nome por extenso quando ha espaco.
+     * caber os dois botoes, e mostra o nome por extenso quando ha espaco.
      */
     private void addAttributeRow(int x0, int y, int rowW, SheetData.Attribute attr) {
         int h = rowH - 2;
@@ -349,27 +461,27 @@ public class StatusScreen extends CharacterSheetScreen {
         textLines.add(new TextLine(label, x0, y + labelOffset(), COL_LABEL));
 
         int minusX = x0 + labelW;
-        // Mesma geometria da linha de pericia (addPericiaRow): seta dimensionada
-        // pela altura da linha, valor com largura fixa e folga de 2px entre as
-        // pecas. Pedido do usuario: "um gap igual os da pericia para os
+        // Mesma geometria da linha de pericia (addPericiaRow): botao dimensionado
+        // pela altura da linha, valor com largura calculada e folga de 2px entre
+        // as pecas. Pedido do usuario: "um gap igual os da pericia para os
         // atributos".
-        // Antes o numero ocupava todo o vao entre as duas setas
-        // (valueW = plusX - 4 - valueX), o que o centralizava longe de ambas.
+        // Antes o numero ocupava todo o vao entre os dois botoes
+        // (valueW = plusX - 4 - valueX), o que o centralizava longe de ambos.
         int arrow = Math.max(9, Math.min(13, h - 1));
-        int valueW = PERICIA_VALUE_W;
+        int valueW = valueBoxWidth();
         int valueX = minusX + arrow + WIDGET_GAP;
         int plusX = valueX + valueW + WIDGET_GAP;
 
-        Button minus = Button.builder(Component.literal("<"),
+        Button minus = Button.builder(Component.literal("-"),
                 b -> stepNumeric(attr.field(), -ARROW_STEP)).bounds(minusX, y, arrow, h).build();
-        Button plus = Button.builder(Component.literal(">"),
+        Button plus = Button.builder(Component.literal("+"),
                 b -> stepNumeric(attr.field(), ARROW_STEP)).bounds(plusX, y, arrow, h).build();
         addRenderableWidget(minus);
         addRenderableWidget(plus);
         arrowButtons.add(minus);
         arrowButtons.add(plus);
 
-        attrRows.add(new AttrRow(valueX, y, valueW, h, attr));
+        attrRows.add(new AttrRow(valueX, y, valueW, h, attr, minus, plus));
     }
 
     /**
@@ -393,7 +505,8 @@ public class StatusScreen extends CharacterSheetScreen {
             widest = Math.max(widest, this.font.width(compact ? attr.shortName() : attr.fullName()));
         }
         int arrow = Math.max(9, Math.min(13, rowH - 3));
-        return Math.max(24, Math.min(rowW - 2 * arrow - PERICIA_VALUE_W - 2 * WIDGET_GAP - 8,
+        int valueW = valueBoxWidth();
+        return Math.max(24, Math.min(rowW - 2 * arrow - valueW - 2 * WIDGET_GAP - 8,
                 widest + 8));
     }
 
@@ -413,10 +526,10 @@ public class StatusScreen extends CharacterSheetScreen {
         int maxBoxW = Math.max(40, Math.min(56, boxW / 5));
         int barW = Math.max(24, boxW - 2 * ARROW_SIZE - 3 * 4 - maxLabelW - maxBoxW);
 
-        Button minus = Button.builder(Component.literal("<"), b -> stepNumeric(field, -ARROW_STEP))
+        Button minus = Button.builder(Component.literal("-"), b -> stepNumeric(field, -ARROW_STEP))
                 .bounds(boxX, y, ARROW_SIZE, h)
                 .build();
-        Button plus = Button.builder(Component.literal(">"), b -> stepNumeric(field, ARROW_STEP))
+        Button plus = Button.builder(Component.literal("+"), b -> stepNumeric(field, ARROW_STEP))
                 .bounds(boxX + ARROW_SIZE + 4 + barW + 4, y, ARROW_SIZE, h)
                 .build();
         addRenderableWidget(minus);
@@ -493,19 +606,32 @@ public class StatusScreen extends CharacterSheetScreen {
                 mana, manaMax, false);
         drawValue(graphics, manaBar, mana + " / " + manaMax, false);
 
-        // Atributos: apenas o numero, centralizado entre as duas setas.
+        // Atributos: apenas o numero, centralizado entre os dois botoes.
         // 0 em cinza (o padrao) e qualquer outro valor na cor normal, para o
         // mestre bater o olho em "quem foi ajustado" sem ler os 6 numeros.
         for (AttrRow row : attrRows) {
             int value = numericValue(row.attribute().field());
-            // Sem teto, o numero pode ficar largo demais e invadir o rotulo e a
-            // seta ">". Cortar pela largura da coluna mantem o layout intacto
-            // com 999999 sem ter de mentir sobre o valor guardado.
-            String text = this.font.plainSubstrByWidth(Integer.toString(value), row.w());
+            // A caixa foi dimensionada pelo teto (valueBoxWidth), entao "30" cabe
+            // inteiro. 27/09/2026: antes a largura era fixa e o texto era cortado
+            // com plainSubstrByWidth, o que ESCONDERA o segundo algarismo ao
+            // passar de 9.
+            // A guarda so volta a cortar no caso que o teto nao cobre: atributo
+            // nao tem piso (Integer.MIN_VALUE), e um payload forjado pode gravar
+            // "-2000000000", que com 62px de largura invadiria o rotulo e os dois
+            // botoes. O clique normal nunca chega nesse caso.
+            String text = Integer.toString(value);
+            if (this.font.width(text) > row.w()) {
+                text = this.font.plainSubstrByWidth(text, row.w());
+            }
             int tx = row.x() + (row.w() - this.font.width(text)) / 2;
             int ty = row.y() + (row.h() - 8) / 2;
             graphics.drawString(this.font, text, tx, ty,
                     value == 0 ? COL_MUTED : COL_BOX_TEXT, false);
+
+            // "+" desliga no teto: active = false desenha o botao cinza, que e o
+            // feedback pedido. O servidor tambem limita (SheetData.Attributes),
+            // entao isto e so a cara do limite, nao a sua unica garantia.
+            row.plusButton().active = canEdit && value < SheetData.Attributes.VALUE_MAX;
         }
 
         drawPericias(graphics);
@@ -515,8 +641,9 @@ public class StatusScreen extends CharacterSheetScreen {
      * Desenha as 20 linhas de pericia: nome, valor e a abreviacao do atributo.
      *
      * <p>O nome e cortado pela largura ({@code plainSubstrByWidth}) em vez de
-     * estourar a coluna: "perícia 15" cabe, mas um nome personalizado pelo
-     * sistema nao pode empurrar as setas para fora.
+     * estourar a coluna: o maior nome da lista e "Animal Handling" (15
+     * caracteres), que cabe, mas um nome novo ou maior nao pode empurrar os
+     * botoes para fora.
      *
      * <p>Se a ficha ainda nao chegou, ou vier com menos/mais de 20 pericias,
      * as linhas ficam vazias em vez de estourar a lista: a lista fixa e' uma
@@ -539,6 +666,12 @@ public class StatusScreen extends CharacterSheetScreen {
             graphics.drawString(this.font, valueText,
                     row.valueX() + (row.valueW() - this.font.width(valueText)) / 2, ty,
                     COL_BOX_TEXT, false);
+
+            // "+" desliga no teto (30) e "-" no piso (0), pelo mesmo motivo dos
+            // atributos: o botao cinza diz "voce chegou no limite".
+            int value = displayPericiaValue(pericia);
+            row.plusButton().active = canEdit && value < SheetData.Pericia.VALUE_MAX;
+            row.minusButton().active = canEdit && value > SheetData.Pericia.VALUE_MIN;
 
             // A abreviacao do atributo fica no botao, guardado direto no record
             // para nao depender de procurar o widget por coordenada.

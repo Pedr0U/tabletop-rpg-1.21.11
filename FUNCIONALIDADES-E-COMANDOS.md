@@ -83,7 +83,7 @@ Raiz única `/rpg`, **sem aliases**. Todos registrados em
 | `/rpg turn give <player>` | só o Mestre | Dá o turno ao jogador, fixa a âncora dele (é a origem da aura) e anuncia. O nome do jogador é completado pelo próprio Minecraft | `MasterCommands.java: onRegister` (handler `giveTurn: giveTurn`) |
 | `/rpg turn revoke` | só o Mestre | Cancela o turno ativo, limpa a âncora e anuncia | `MasterCommands.java: onRegister` (handler `revokeTurn: revokeTurn`) |
 | `/rpg turn finish` | **dono do turno ou o Mestre** | Encerra o turno. Quem não for o dono nem o Mestre recebe `§c[RPG] It is not your turn to finish!` | `MasterCommands.java: onRegister` (`MasterCommands.java: finishTurn`, incluindo a checagem de dono) |
-| `/rpg roll` | qualquer jogador | **Lista as 20 perícias** da ficha com valor + atributo de cada uma (não rola nada) | `MasterCommands.java: onRegister` (handler `listSkills: listSkills`) |
+| `/rpg roll` | qualquer jogador | **Lista as 18 perícias** da ficha com valor + atributo de cada uma (não rola nada) | `MasterCommands.java: onRegister` (handler `listSkills: listSkills`) |
 | `/rpg roll <perícia>` | qualquer jogador | Rola `1d20 + valor_da_perícia + atributo`, mostrando a conta (`d20 (12) + 2 + 3 = 17`) | `MasterCommands.java: onRegister` (handlers `rollOrSkill: rollOrSkill`, `rollSkill: rollSkill`) |
 | `/rpg roll <fórmula>` | qualquer jogador | Rola uma fórmula de dados (`d20`, `2d6+3`, `2d6+d4+3`) | `MasterCommands.java: onRegister` (handler `rollFormula: rollFormula`, parser `rollDice: setHoverDistance`) |
 | `/rpg openroll [fórmula]` | só o Mestre | Rolagem **pública** (todos veem). Sem argumento, rola `d20` | `MasterCommands.java: onRegister` (handler `openRoll: openRoll`) |
@@ -114,14 +114,36 @@ Raiz única `/rpg`, **sem aliases**. Todos registrados em
   ou `" §f- §b"` conforme o sinal, então aparece `d8 [5] - 1 = 4` (`appendRollTerm`, `: rollDice`).
   **Sinal duplo é recusado** (`d8--1`, `d8+-1`).
   Limites: 1 a 100 dados por termo e 1 a 1000 faces (`: rollDice`).
-- **`/rpg roll` sem argumento lista 20 perícias.** Elas vêm da lista fixa `PERICIAS_PADRAO`
-  (`SheetData.java: PERICIAS_PADRAO`): quatro nomeadas — `Melee` (2/FOR), `Acrobatics` (3/DES), `Diplomacy`
-  (1/CAR) e `Initiative` (2/DES) — e dezesseis de espaço reservado, `skill 0` a `skill 15`
-  (valor 0). O cabeçalho da lista no chat diz `Skills (/rpg roll <name>): 20`
-  (`MasterCommands.java: listSkills`), embora o conteúdo sejam as perícias.
+- **`/rpg roll` sem argumento lista 18 perícias.** Elas vêm da lista fixa `PERICIAS_PADRAO`
+  (`SheetData.java: PERICIAS_PADRAO`): **18 fixas**, exatamente as perícias básicas
+  de D&D 5e em inglês, cada uma com o atributo que o D&D 5e define para ela
+  (`Acrobatics`/DES, `Animal Handling`/SAB, `Arcana`/INT, `Athletics`/FOR, `Deception`/CAR,
+  `History`/INT, `Insight`/SAB, `Intimidation`/CAR, `Investigation`/INT, `Medicine`/SAB,
+  `Nature`/INT, `Perception`/SAB, `Performance`/CAR, `Persuasion`/CAR, `Religion`/INT,
+  `Stealth`/DES, `Survival`/SAB, `Thievery`/DES), todas com valor 0. `Initiative` e `Melee`,
+  que o sistema tinha desde o começo, **saíram da lista em 27/09/2026 por decisão do usuário** —
+  `Initiative` não era lida por nada no código e `Melee` só duplicava `Athletics`. Não há botão
+  de adicionar nem de remover: a lista é fixa no código. O cabeçalho da lista no chat mostra a
+  contagem por `sheet.pericias().size()` (`MasterCommands.java: listSkills`), então ele já diz 18.
+- **O valor de uma perícia vai de `0` a `30`** (`SheetData.java: Pericia`); o servidor recusa
+  qualquer coisa fora dessa faixa, e o `+` da tela desliga em 30 e o `-` em 0
+  (`StatusScreen.java: renderContent`).
 - **O nome da perícia é comparado sem acento e sem diferenciar maiúsculas**
-  (`MasterCommands.java: normalize`), então `pericia 0` funciona igual a `skill 0`. As fichas salvas
-  antes da tradução dos nomes ainda são reconhecidas pelo nome antigo (`SheetData.java: buildLegacyPericiaNames`).
+  (`MasterCommands.java: normalize`), então `acrobatics` funciona igual a `Acrobatics`. Fichas salvas
+  antes de 27/09/2026 migram na hora de carregar pelos apelidos de
+  `SheetData.java: LEGACY_PERICIA_NAMES`: `Acrobacia`→`Acrobatics`,
+  `Diplomacy`/`Diplomacia`→`Persuasion`. **Regra: qualquer renomeação futura em
+  `PERICIAS_PADRAO` precisa de apelido junto** — sem ele a troca zera a perícia silenciosamente,
+  já que `sanitizePericias` cai no padrão sem logar nada.
+- **A migração de 27/09/2026 tem perdas conhecidas, avisadas e não corrigíveis:**
+  - os antigos lugares reservados `perícia N` e `skill N` são **descartados sem log**. A tela
+    antiga mostrava as 20 linhas com `-`/`+` editáveis, então quem ajustou `skill 3` para 5
+    **perde os 5**: não existe linha nova que receba esse número;
+  - `Melee`/`Luta` e `Initiative`/`Iniciativa` **saíram do padrão**, então o valor que tinham
+    (2 por padrão) é descartado do mesmo jeito. Nenhum apelido resolve isso: resolveria
+    inventando uma 19ª e 20ª linha que o usuário não pediu.
+  **Regra: qualquer renomeação futura em `PERICIAS_PADRAO` precisa de apelido junto** — sem ele a
+  troca zera a perícia silenciosamente, já que `sanitizePericias` cai no padrão sem logar nada.
 - **A fórmula de perícia é `1d20 + valor_da_perícia + atributo`**, em aritmética `long` para não
   estourar com atributos grandes (`MasterCommands.java: rollSkill`).
 - **Visibilidade da rolagem:** o Mestre vê o resultado **só para si** (rolagem secreta); o jogador
@@ -185,7 +207,7 @@ O `V` também está disponível como botão `Camera Mode: ...` na tela de Settin
 | Menu ASCII da sessão (no chat) | `/rpg` ou `/rpg menu` (`MasterCommands.java: onRegister`) | Resumo em texto: papel, modo, turno ativo e botões clicáveis de comando |
 | `RpgMenuScreen` — menu principal no pergaminho | Tecla `R` (`TabletopRpgClient.java: onInitializeClient`) | Mostra `Role: MASTER/PLAYER`, `Mode` e `Turn` (`RpgMenuScreen.java: render`) e navega: **Mestre** vê `Players`, `Rolls`, `Settings`; **Jogador** vê `Status`, `Skills`, `Rolls`, `Settings` e `End Turn` quando é a vez dele (`: buildMenu`). **Não** existe botão de ficha própria para o Mestre |
 | `PlayerListScreen` — `Players` | Botão `Players` do menu, só para o Mestre (`RpgMenuScreen.java: buildMenu`, `: openPlayers`) | Lista os jogadores conectados; clicar em um abre a `Status` **dela**. O Mestre não entra na lista (`RpgNetworking.java: sendMenuToPlayer`) |
-| `StatusScreen` — `Status` | Jogador: botão `Status` do próprio menu. Mestre: clicando num jogador em `Players` (`RpgMenuScreen.java: buildMenu`, `: openStatus`; `PlayerListScreen.java: openSheet`) | Ficha do personagem: nome, raça, classe, HP/Mana, nível/XP, os 6 atributos e a lista fixa de perícias (valor 0-3 e atributo, pelas setas e pelo botão de atributo). Abre a `SkillsScreen` (`: buildFooterExtra (botao Skills)`) e a `AttributePickerScreen` (`: openPericiaAttribute`) |
+| `StatusScreen` — `Status` | Jogador: botão `Status` do próprio menu. Mestre: clicando num jogador em `Players` (`RpgMenuScreen.java: buildMenu`, `: openStatus`; `PlayerListScreen.java: openSheet`) | Ficha do personagem: nome, raça, classe, `Background`, HP/Mana, nível/XP, os 6 atributos e as 18 perícias fixas. Valores mexem por botões **`-` e `+`** (não mais setas `>` e `<`), e o `+` fica **cinza/desligado ao chegar no teto** (30 nos atributos e nas perícias) e o `-` no piso 0 das perícias. A coluna de perícias tem o cabeçalho **`Bonus`**, porque o número ao lado do nome é o bônus investido, não o resultado da rolagem — que ainda soma o atributo. A largura da caixa de número acompanha o teto, então dois dígitos aparecem (antes o texto era cortado e o `10` virava `1`). Abre a `SkillsScreen` (`: buildFooterExtra (botao Skills)`) e a `AttributePickerScreen` (`: openPericiaAttribute`) |
 | `SkillsScreen` — `Skills` | Botão `Skills` do menu ou o botão `Skills` dentro da `StatusScreen` (`RpgMenuScreen.java: buildMenu`, `: openSkills`; `StatusScreen.java: buildFooterExtra`) | Lista **livre** de skills (nome + descrição): adicionar, remover e reordenar com as setas. Máximo de 24 (`SheetData.java: MAX_SKILLS`). A skill não tem valor nem atributo — quem tem isso é a perícia |
 | `AttributePickerScreen` — `Attribute` | Botão de atributo de uma perícia, dentro da `StatusScreen` (`StatusScreen.java: openPericiaAttribute`) | Escolhe com qual dos 6 atributos a perícia soma |
 | `DiceRollScreen` — `Rolls` | Botão `Rolls` do menu (`RpgMenuScreen.java: buildMenu`) | Monta a rolagem clicando em dados (`d4 d6 d8 d10 d12 d20 d100`, `DiceRollScreen.java: buildUI`) e modificadores (`-10 -1 +1 +10`, `: buildUI`), mostra a expressão e envia `/rpg roll <expressão>` ao servidor (`: rollDice`) |
@@ -322,12 +344,17 @@ não "voltar" sozinho durante a transição (`SessionManager.java: playersCanPla
   temporários). O piso existe só para não estourar o protocolo; o que importa é que `hp <= 0` é
   deitado (`SheetData.java: MAX_RESOURCE`, `: composite`).
 - A Mana tem piso 0 e também pode passar do máximo (`SheetData.java: composite`).
-- Os **6 atributos não têm teto e podem ser negativos** — eles viraram modificadores somados às
-  rolagens de perícia (`SheetData.java: composite`).
-- O **valor da perícia é de 0 a 3** (`SheetData.java: composite`).
+- Os **6 atributos têm teto de 30 e podem ser negativos** — eles viraram modificadores somados às
+  rolagens de perícia (`SheetData.java: Attributes`). O `+` da tela desliga em 30
+  (`StatusScreen.java: renderContent`).
+- **O valor da perícia é de 0 a 30** (`SheetData.java: Pericia`).
 - A lista de perícias é **fixa em código**: rodando em todo construtor de `SheetData`, é impossível
   uma ficha ter uma perícia a mais, a menos, ou com um nome que o sistema não conhece
-  (`SheetData.java: sanitizePericias`).
+  (`SheetData.java: sanitizePericias`). Adicionar ou remover perícias é uma **ideia de fase futura**,
+  ainda não implementada.
+- **`Background` é um campo de texto livre da identidade** (`SheetData.java: Identity`), gravado no
+  mesmo lugar dos outros campos de texto e editável na `StatusScreen` (`StatusScreen.java: buildPanel`).
+  Não tem efeito mecânico: é só um rótulo descritivo que o Mestre consulta.
 - **Quem vê e quem edita:** o dono vê e edita a própria ficha; o Mestre vê e edita a de qualquer
   jogador; **ninguém mais** consegue abrir a ficha de outro jogador nem por pacote forjado
   (`RpgNetworking.java: resolveSheetTarget`). Toda alteração é reenviada ao dono e ao Mestre, então a tela

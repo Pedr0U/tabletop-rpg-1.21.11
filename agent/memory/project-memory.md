@@ -561,3 +561,121 @@ documentado?), nao formatacao. Isso e proposital.
 **HIPOTESE/limite:** o catalogo esta na raiz do repo, fora de `src/` e `agent/`, entao a
 task `scanEncoding` (77 arquivos) **nao o verifica**. Conferido a parte: 33.160 bytes, sem
 BOM, 0 U+FFFD. Se isso mudar, vale um `scan` explicito para o catalogo.
+---
+
+## 2026-09-27 — Background, pericias de D&D 5e e botoes -/+ (partes 1 e 2 da ficha)
+
+**FATO verificado (build):** `.\gradlew.bat build --no-daemon --console=plain` = `BUILD SUCCESSFUL`
+compilando **os dois** source sets. `scanEncoding` OK (77 arquivos, 0 mojibake). Detector de
+catalogo `EXITCODE=0`. **Nada disso valida a tela:** render e clique so existem no jogo.
+
+**FATO verificado (codigo):**
+- `SheetData.Pericia` tem teto 30 e piso 0. `SheetData.Attributes` tem teto 30 e **sem piso**
+  (`Integer.MIN_VALUE`), para o `-` nunca travar a volta de um valor muito negativo.
+- `StatusScreen.PER_COUNT` deriva de `SheetData.PERICIAS_PADRAO.size()` — nao ha mais numero
+  magico. A lista tem 20: `Initiative`, `Melee` e as 18 de D&D 5e.
+- `Background` entrou como 4o campo de `SheetData.Identity` (record, `STREAM_CODEC` posicional,
+  NBT opcional, `withField`, `labelOf`, `TEXT_FIELDS`). **Nao estourou o limite de 6 grupos do
+  codec de topo de `SheetData`**, que era o risco. E um rotulo sem efeito mecanico.
+- `StatusScreen.valueBoxWidth()` dimensiona a caixa pelo teto. **Corrigido bug real:** antes a
+  largura era fixa e `font.plainSubstrByWidth` cortava o texto, escondendo o segundo digito
+  (`10` aparecia como `1`). Nao voltar a cortar texto numerico nesta tela.
+- `StatusScreen.fieldLabelWidth()` mede o rotulo **realmente mais largo** em vez de `leftW/5`.
+  **Motivo:** `addField` desenha o rotulo sem cortar, e uma fracao fixa aceitava "Class" mas
+  nao "Background", que invadia a caixa em janela estreita.
+- Cabecalho `Bonus` em `addBonusHeader`, com `y = topY + perTitleH - 8`: a primeira linha de
+  pericia comeca em `topY + perTitleH` e o texto dela fica ~1px abaixo, entao o cabecalho
+  encosta em cima sem invadir.
+
+**FATO verificado (leitura, nao execucao) — armadilha de colisao em `sanitizePericias`:**
+`Diplomacy` e `Diplomacia` viram os dois `Persuasion`. Vence o **primeiro na lista salva**, nao
+o primeiro apelido. Na pratica favorece o ingles, porque a lista padrao de 26/09/2026 gravou
+`Diplomacy` antes de existir traducao. Perde o valor so quem editou `Diplomacy` em ingles E ainda
+tinha `Diplomacia` salvo com outro numero. **Aceito de proposito:** a alternativa seria somar dois
+numeros diferentes na mesma celula. Regra escrita em comentario no metodo.
+
+**ARMADILHA CONFIRMADA (tenta de novo custou passos):** nao da para exercitar `SheetData` numa
+JVM isolada. O `SheetData.<clinit>` monta `StreamCodec`, que precisa de
+`net.minecraft.network.codec.ByteBufCodecs`, e o **jar mapeado do Minecraft nao existe como
+arquivo** no cache do Gradle: em `.gradle/caches/fabric-loom/1.21.11` so ha
+`minecraft-common.jar` / `minecraft-server.jar` / `minecraft-client.jar` **crus, com nomes
+ofuscados**, e `ByteBufCodecs.class` nao foi achado em nenhum jar de `.gradle` nem de `build/`.
+Logo, **teste unitario de `SheetData` so roda dentro do jogo** (ou com classpath montado a mao).
+A alternativa de reescrever a logica num `main` isolado **testa uma copia, nao o codigo** — nao
+serve como prova.
+
+**DECISAO DO AGENTE, nao DO USUARIO:** manter `Melee` e `Initiative` alem das 18 de D&D
+(lista = 20). As duas primeiras fases de gameplay dependem delas, mas o usuario pediu "as 18".
+**Pendente de confirmacao.**
+
+**FORA DO ESCOPO PEDIDO, FEITO DE PROPÓSITO:** HP e Mana tambem trocaram `>`/`<` por `-`/`+`,
+por consistencia visual. O usuario pode rejeitar.
+
+**HIPOTESE (nao verificada):** o `-` de atributo nunca desliga (piso e `Integer.MIN_VALUE`), o
+que deixa o par de botoes assimetrico em atributo muito negativo. Foi escolha consciente para
+nao travar a volta de `-25`. Confirmar com o usuario se ele prefere um piso visivel.
+
+### CORRECOES do mesmo dia (revisao independente do diff)
+
+**FATO verificado:** a lista ficou so com as **18 basicas de D&D 5e**. `Initiative` e `Melee`
+**sairam**. Motivo conferido no codigo: `Initiative` nao e lida em **nenhum** lugar de `src/` (o
+modo combate nao consulta a ficha para ordenar turnos) e `Melee` so duplicava `Athletics` (FOR).
+**Decisao do usuario** entre "manter 20" e "so as 18": **so as 18**.
+
+**FATO verificado — armadilha de layout (a mais importante desta sessao):**
+espaco util da `Status` = `altura da tela - 86`; o total de linhas e `neededRows * rowH`; e
+`fitRowHeight` tem **piso duro** (`MIN_ROW_H = 12`, em `CharacterSheetScreen`). Com o piso
+ativo, **a coluna esquerda estoura o painel**. Em 480x270 (escala GUI automatica padrao em
+1080p) eram 18 x 12 = 216 para 184: estouro de 32px e as **duas ultimas linhas caiam em cima
+do botao `Back`**, que e desenhado depois. **Corrigido** removendo a "folga de 4" do
+`neededRows`: a folga **nao e desenhada**, e como o espaco e dividido pelo total de linhas ela
+so aumentava o total — que e exatamente o que estoura. Sem folga: 16 x 12 = 192, estouro de
+8px, dentro do painel. Em janela normal `rowH` bate em `MAX_ROW_H` nos dois casos, entao nada
+muda visualmente.
+**Em 426x240 (escala padrao em 720p) continua estourando: 192px para 154px disponiveis.**
+Decisao do usuario em 27/09/2026: **deixar como esta**. Ja estava quebrado antes (4px).
+**NAO FAZER:** nao mexer no piso de `MIN_ROW_H` sem o usuario pedir — ele awareu as opcoes
+(piso menor = linhas de 9px e botoes pequenos; ou rolar a coluna esquerda) e escolheu nao mexer.
+
+**FATO verificado — `Attributes` trunca em silencio:** atributo legado > 30 vira 30 na carga e o
+NBT e reescrito, sem log. Mesma doutrina de "mudar limite sem log e armadilha" que a memoria ja
+registra. Tratar como pendencia se algum dia incomodar.
+
+**FATO verificado:** `SheetData` **nao da para testar em JVM isolada.** O `<clinit>` monta
+`StreamCodec`, que precisa de `net.minecraft.network.codec.ByteBufCodecs`, e o **jar mapeado do
+Minecraft nao existe como arquivo**: em `.gradle/caches/fabric-loom/1.21.11` so ha
+`minecraft-common.jar` / `minecraft-server.jar` / `minecraft-client.jar` **crus (ofuscados)**, e
+`ByteBufCodecs.class` nao existe em nenhum jar de `.gradle` nem de `build/`. Logo **teste de
+`SheetData` so roda dentro do jogo**. Reescrever a logica num `main` isolado **testa uma copia**,
+nao serve de prova. Ja tentei e gastei passos com isso.
+
+**ARMADILHA CONFIRMADA (o proprio agente caiu nela):** `Get-Content` do PowerShell 5.1 le
+arquivo UTF-8 como ANSI e **mostra mojibake no terminal mesmo com o arquivo integro**. Use a
+ferramenta `read` para obter texto exato com acento antes de editar com `edit`; se usar
+`Get-Content` para conferir string, o `oldString` vai falhar.
+
+**ERRO PROPRIO, duas vezes, para nao repetir:** ao editar o catalogo, dois ideogramas chineses
+(U+8C03 e U+6574) entraram no meio de uma frase em portugues. O `scanEncoding` e o que pega —
+ele conta ideogramas e **falha o build**. Rodar `.\gradlew.bat scanEncoding --no-daemon` depois
+de editar markdown, nao so depois de codigo.
+**Armadilha do proprio registro:** ao documentar esse erro aqui, copiei os caracteres de novo e
+o build voltou a falhar. **Nao colar o caractere proibido em nenhum arquivo do repo**, nem
+como exemplo. Descrever com o nome do code point.
+
+**FATO verificado:** um subagente `tcc-validador` em modo somente leitura acha coisa que o
+agente principal nao acha, **desde que o pedido mande explicitamente**: nao editar, nao rodar
+build, nao escrever memoria, e pedir as 4 categorias com "se nao achou, diga". Ele achou a
+folga falsa do `neededRows`, um bloco de documentacao falsa em 4 arquivos, e checou a
+aritmetica de layout linha por linha. **Ele tambem errou** (supôs que `+` em 30 mostraria 31;
+nao mostra, porque o botao ja esta inativo) — entao revisar o relatorio dele tambem.
+
+**DOCUMENTACAO CORRIGIDA nesta sessao (todas as afirmacoes eram falsas depois da mudanca):**
+`SheetData` "atributos nao tem faixa", `MAX_STAT` "o clamp foi removido", "identity (3)",
+a justificativa de que `background` foi posto no fim "para nao quebrar cliente de versao
+anterior" (**nao ha negociacao de versao; um cliente de 3 campos leria a 4a string como
+`VAR_INT` de `Vitals` — o layout do pacote mudou de qualquer jeito, a posicao e indiferente**),
+`rollSkill` "le VALUE_MAX" (**nao le**), "Migration sem perda" (**pode perder: `skill N` tinha
+`-`/`+` editavel na tela antiga**), `MasterCommands` "atributo nao tem teto",
+`CharacterSheetScreen` "atributos nao tem teto", `StatusScreen` "setas `>` `<`" e "sem limite".
+Regra: **quando o comportamento muda, procurar o texto que descreve o comportamento antigo.**
+Vários desses textos eram Javadoc de 26/09, nao deste diff.

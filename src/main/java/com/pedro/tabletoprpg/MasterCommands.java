@@ -490,13 +490,12 @@ public class MasterCommands {
     /**
      * Rola a pericia: {@code 1d20 + valor + atributo}.
      *
-     * <p><b>Fórmula (pedido do usuario):</b> um d20, o valor da pericia (0-3) e
-     * o atributo que ela soma. Ex.: "Luta 2 + FOR 3" = 1d20 + 5. O resultado
+     * <p><b>Fórmula (pedido do usuario):</b> um d20, o valor da pericia (0-30) e
+     * o atributo que ela soma. Ex.: "Melee 2 + FOR 3" = 1d20 + 5. O resultado
      * e separado em "1d20 (12) + 2 + 3 = 17" para o jogador ver de onde saiu.
      *
      * <p>A aritmética e feita em {@code long} e convertida no fim: o atributo
-     * nao tem teto (decisao do usuario), e {@code int} estouraria com um
-     * atributo absurdo e mostraria um numero negativo na rolagem.
+     * tem teto 30 mas <b>sem piso</b> (e {@code long} evita que o conjunto estoure).
      *
      * <p>Visibilidade igual a {@code /rpg roll} normal: o mestre ve so para si,
      * o jogador ve para todos.

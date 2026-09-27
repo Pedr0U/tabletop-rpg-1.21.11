@@ -1,5 +1,8 @@
 {
   "key.tabletoprpg.menu": "Open RPG Menu",
   "key.tabletoprpg.camera_mode": "Cycle Camera Mode",
-  "key.category.tabletop-rpg.rpg": "Tabletop RPG"
+  "key.category.tabletop-rpg.rpg": "Tabletop RPG",
+  "item.tabletoprpg.sheet_editor": "Sheet Editor",
+  "item.tabletoprpg.sheet_editor.denied": "Only the Master can edit the character sheet model.",
+  "itemGroup.tabletoprpg.main": "Tabletop RPG"
 }

@@ -318,6 +318,18 @@ public class TabletopRpgClient implements ClientModInitializer {
             });
         });
 
+        // 27/09/2026, Sheet Editor (primeira fatia): o servidor manda este sinal
+        // e o cliente abre a tela. O pacote nao leva dado nenhum ainda — a tela
+        // le a lista de pericias do codigo. A checagem de Mestre fica no
+        // servidor, entao aqui nao ha (e nao deve haver) outra checagem.
+        ClientPlayNetworking.registerGlobalReceiver(RpgNetworking.OpenSheetEditorPayload.TYPE,
+                (payload, context) -> context.client().execute(() -> {
+                    if (context.client().player == null) {
+                        return;
+                    }
+                    context.client().setScreen(new SheetEditorScreen());
+                }));
+
         // Estado de "trava" do jogador e modo da sessao -> atualiza os campos.
         // O modo vem no mesmo payload porque a camera precisa dos dois: a trava
         // decide se a camara de espectador liga, e o modo decide se a camera

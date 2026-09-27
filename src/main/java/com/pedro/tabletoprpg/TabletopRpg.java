@@ -29,6 +29,10 @@ public class TabletopRpg implements ModInitializer {
 		// Registra os comandos do Mestre (/rpg ...)
 		MasterCommands.register();
 
+		// Registra o Sheet Editor e a aba criativa do mod. Antes dos payloads:
+		// o item usa o payload `open_sheet_editor` quando clicado.
+		com.pedro.tabletoprpg.item.ModItems.register();
+
 		// Registra os payloads de rede (comum) e os receptores do lado servidor
 		RpgNetworking.registerPayloads();
 		RpgNetworking.registerServerReceivers();

@@ -77,6 +77,31 @@ public final class RpgNetworking {
         }
     }
 
+    /**
+     * Servidor -> Cliente: abre a tela do Sheet Editor.
+     *
+     * <p>27/09/2026, primeira fatia do editor. Nao leva <b>nenhum dado</b>: e
+     * apenas o sinal de "abre a tela". A tela mostra a lista de pericias que ela
+     * le do codigo, entao ainda nao existe modelo em trafego.
+     *
+     * <p><b>Alem do que parece:</b> o servidor so envia isto depois de conferir
+     * {@code SessionManager.isMaster}. Sem isso, um cliente forjado abriria a tela
+     * do Mestre So apertando a tecla que o pacote representa. O cliente tambem
+     * pode chamar {@code setScreen} direto na mao, por isso o filtro <b>precisa
+     * ser no servidor</b>, e nao no clique.
+     */
+    public record OpenSheetEditorPayload() implements CustomPacketPayload {
+        public static final Type<OpenSheetEditorPayload> TYPE =
+                new Type<>(TabletopRpg.id("open_sheet_editor"));
+        public static final StreamCodec<FriendlyByteBuf, OpenSheetEditorPayload> STREAM_CODEC =
+                StreamCodec.unit(new OpenSheetEditorPayload());
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
     /** Servidor -> Cliente: dados da sessão usados para montar o menu. */
     public record MenuDataPayload(
             boolean isMaster,
@@ -620,6 +645,8 @@ public final class RpgNetworking {
     public static void registerPayloads() {
         PayloadTypeRegistry.playC2S().register(MenuRequestPayload.TYPE, MenuRequestPayload.STREAM_CODEC);
         PayloadTypeRegistry.playS2C().register(MenuDataPayload.TYPE, MenuDataPayload.STREAM_CODEC);
+        PayloadTypeRegistry.playS2C().register(OpenSheetEditorPayload.TYPE,
+                OpenSheetEditorPayload.STREAM_CODEC);
         PayloadTypeRegistry.playS2C().register(PlayerLockPayload.TYPE, PlayerLockPayload.STREAM_CODEC);
         PayloadTypeRegistry.playC2S().register(TimeSetPayload.TYPE, TimeSetPayload.STREAM_CODEC);
         PayloadTypeRegistry.playC2S().register(DayNightCycleSetPayload.TYPE, DayNightCycleSetPayload.STREAM_CODEC);
@@ -1128,6 +1155,27 @@ public final class RpgNetworking {
             boolean downed = otherSheet != null && otherSheet.isDowned();
             ServerPlayNetworking.send(viewer, new DownedStatePayload(other.getUUID(), downed));
         }
+    }
+
+    /**
+     * Manda o cliente abrir a tela do Sheet Editor.
+     *
+     * <p>Só o sinal de abrir: a tela ainda lê a lista de perícias do código, então
+     * não há dado nenhum para mandar. A próxima fatia troca isto por um payload com
+     * o modelo do mundo.
+     *
+     * <p>Confere o Mestre de novo aqui, mesmo que {@code ModItems} já tenha
+     * conferido: a checagem no clique é de UI, e o servidor não pode depender de
+     * quem chamou. Se amanhã outro lugar chamar este método, ele continua seguro.
+     */
+    public static void sendOpenSheetEditor(ServerPlayer player) {
+        if (player == null || player.connection == null) {
+            return;
+        }
+        if (!SessionManager.isMaster(player)) {
+            return;
+        }
+        ServerPlayNetworking.send(player, new OpenSheetEditorPayload());
     }
 
     /** Envia os dados da sessão + estado de trava, abrindo o menu no cliente (resposta ao apertar R). */

@@ -290,8 +290,8 @@ public abstract class CharacterSheetScreen extends Screen {
     /**
      * Soma que trava no limite do {@code int} em vez de dar a volta.
      *
-     * <p><b>Por que importa aqui:</b> os atributos nao tem teto (decisao do
-     * usuario). Com {@code base + delta} simples, um atributo em
+     * <p><b>Por que importa aqui:</b> os atributos tem teto 30 mas <b>sem
+     * piso</b>. Com {@code base + delta} simples, um atributo em
      * {@code Integer.MAX_VALUE} mais um clique viraria {@code MIN_VALUE} e esse
      * numero negativo seria gravado na ficha do servidor.
      */
