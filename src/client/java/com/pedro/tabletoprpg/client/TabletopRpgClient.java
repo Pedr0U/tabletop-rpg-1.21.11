@@ -2,6 +2,8 @@ package com.pedro.tabletoprpg.client;
 
 import com.mojang.blaze3d.platform.InputConstants;
 import com.pedro.tabletoprpg.RpgNetworking;
+import com.pedro.tabletoprpg.SheetModel;
+import com.pedro.tabletoprpg.SheetModelHolder;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
@@ -225,6 +227,11 @@ public class TabletopRpgClient implements ClientModInitializer {
             playersCanBreakBlocks = false;
             playersCanPlaceBlocks = false;
             weatherState = 0;
+            // O modelo da ficha tambem e estado do servidor anterior. Sem isto,
+            // quem sai de um mundo e entra em outro ve os rotulos, atributos e
+            // pericias do mundo anterior ate o payload do JOIN chegar -- e se o
+            // mundo novo nao tem Sheet Editor, o JOIN nao mandaria nada.
+            SheetModelHolder.set(SheetModel.defaults());
             SpectatorCameraController.reset();
         });
     }
@@ -328,6 +335,23 @@ public class TabletopRpgClient implements ClientModInitializer {
                         return;
                     }
                     context.client().setScreen(new SheetEditorScreen());
+                }));
+
+        // O MODELO global da ficha. Vem no JOIN e de novo depois de cada edicao
+        // do Mestre. Trocar o modelo muda quantos campos a ficha tem, entao
+        // qualquer tela de ficha que ja esteja aberta precisa ser remontada:
+        // sem isso ela ficaria mostrando a lista antiga (ou, pior, um
+        // NullPointerException em um indice que o modelo antigo nao tinha).
+        ClientPlayNetworking.registerGlobalReceiver(RpgNetworking.SheetModelPayload.TYPE,
+                (payload, context) -> context.client().execute(() -> {
+                    SheetModelHolder.set(payload.model());
+                    if (context.client().screen instanceof SheetEditorScreen editor) {
+                        editor.onModelChanged();
+                    } else if (context.client().screen instanceof StatusScreen status) {
+                        status.onModelChanged();
+                    } else if (context.client().screen instanceof CharacterSheetScreen sheet) {
+                        sheet.onModelChanged();
+                    }
                 }));
 
         // Estado de "trava" do jogador e modo da sessao -> atualiza os campos.

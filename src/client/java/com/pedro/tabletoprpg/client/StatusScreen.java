@@ -2,6 +2,8 @@ package com.pedro.tabletoprpg.client;
 
 import com.pedro.tabletoprpg.RpgNetworking;
 import com.pedro.tabletoprpg.SheetData;
+import com.pedro.tabletoprpg.SheetModel;
+import com.pedro.tabletoprpg.SheetModelHolder;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
@@ -49,15 +51,16 @@ public class StatusScreen extends CharacterSheetScreen {
     // ------------------------------------------------------------------
 
     /**
-     * Quantas pericias a coluna mostra.
+     * Quantas pericias a coluna mostra por padrao.
      *
-     * <p>27/09/2026: era a constante {@code 20}, duplicada a mao ao lado de
-     * {@code PERICIAS_PADRAO}. Essa duplicacao era um perigo real -- trocar a
-     * lista de pericias sem trocar este numero deixaria a ultima linha sem
-     * botao, ou criaria uma linha vazia. Agora o total vem da propria lista,
-     * entao as duas coisas nao podem sair de sincronia.
+     * <p><b>27/09/2026 (Sheet Editor):</b> era a constante {@code 20}, duplicada
+     * a mao, e depois {@code SheetData.PERICIAS_PADRAO.size()}, que deixou de
+     * existir. O total agora vem do <b>modelo</b>, em tempo de execucao, e pode
+     * ser qualquer valor de 1 a {@code MAX_PERICIAS} porque e o Mestre quem
+     * decide. Por isso a coluna tem scroll proprio: antes, com 18 fixas, a
+     * altura cabia e nao havia o que rolar.
      */
-    private static final int PER_COUNT = SheetData.PERICIAS_PADRAO.size();
+    private static final int PER_COUNT_DEFAULT = 18;
     /** Painel mais largo que o das outras telas, para caber a coluna. */
     private static final int MAX_PANEL_W_STATUS = 600;
     /**
@@ -98,7 +101,22 @@ public class StatusScreen extends CharacterSheetScreen {
     /** Valor otimista por pericia, para cliques rapidos nao se perderem. */
     private final Map<String, Integer> pendingPericiaValue = new HashMap<>();
     /** Atributo otimista por pericia, mesmo proposito de {@link #pendingPericiaValue}. */
-    private final Map<String, SheetData.Attribute> pendingPericiaAttribute = new HashMap<>();
+    private final Map<String, String> pendingPericiaAttribute = new HashMap<>();
+
+    /**
+     * Primeira pericia visivel na coluna (scroll da coluna de pericias).
+     *
+     * <p>27/09/2026 (Sheet Editor): antes a lista tinha 18 itens fixos que
+     * cabiam na tela, entao nao havia o que rolar. O Mestre pode por ate 30
+     * pericias, e a coluna rola sozinha com a roda do mouse -- <b>somente</b>
+     * quando o ponteiro esta sobre ela, para a rolagem nao conflicted com a da
+     * tela inteira.
+     */
+    private int perScroll;
+
+    /** Retangulo da coluna de pericias, guardado para o teste de "o mouse esta aqui". */
+    private int perPanelX;
+    private int perPanelW;
 
     /**
      * Geometria de uma linha de pericia: nome (x, w), valor e o botao de atributo.
@@ -126,9 +144,10 @@ public class StatusScreen extends CharacterSheetScreen {
      * Area onde o numero do atributo e centralizado.
      *
      * <p>Como {@link PericiaRow}, guarda os dois botoes de passo para o "+"
-     * poder escurecer no teto.
+     * poder escurecer no teto. O {@code attributeId} e o id do modelo (27/09/2026
+     * substituiu o enum {@code SheetData.Attribute}, que nao existe mais).
      */
-    private record AttrRow(int x, int y, int w, int h, SheetData.Attribute attribute,
+    private record AttrRow(int x, int y, int w, int h, String attributeId,
                            Button minusButton, Button plusButton) {
     }
 
@@ -155,6 +174,19 @@ public class StatusScreen extends CharacterSheetScreen {
         arrowButtons.clear();
         attrRows.clear();
         periciaRows.clear();
+        // Zera as barras antes de recriar. Sem isso, um modelo novo que DESLIGUE
+        // "mana" deixaria a Bar antiga apontando para a linha que passou a ser
+        // outra, e o desenho (que so ignora null) pintaria a barra por cima do
+        // campo vizinho.
+        hpBar = null;
+        manaBar = null;
+
+        // 27/09/2026 (Sheet Editor): o modelo vem do holder e e lido UMA vez
+        // aqui. Antes os rotulos, a quantidade de atributos e o que aparecia
+        // eram constantes no codigo; agora sao do modelo salvo pelo Mestre, e
+        // reler o holder a cada linha arriscaria ler dois modelos diferentes se
+        // um pacote chegasse no meio da montagem.
+        SheetModel model = model();
 
         // Respiro interno (feedback do usuario: "muito colado com os textos de
         // dentro do menu"): o conteudo comeca PANEL_PAD para dentro da moldura,
@@ -178,18 +210,29 @@ public class StatusScreen extends CharacterSheetScreen {
         int perW = Math.max(140, Math.min(PER_W_MAX, (int) (panelW * PER_W_RATIO)));
         int leftW = Math.max(120, panelW - perW - PER_GAP);
         int perX = x0 + leftW + PER_GAP;
+        perPanelX = perX;
+        perPanelW = perW;
 
-        // Altura de linha da coluna de pericias: e' ela que decide se as 20
+        // Altura de linha da coluna de pericias: e' ela que decide quantas
         // cabem sem scroll. Limitada para nunca passar da altura de uma linha
         // normal (senao a coluna ficaria igual ao resto e nao caberia).
+        //
+        // 27/09/2026 (Sheet Editor): o total vem do modelo, em tempo de
+        // execucao, e pode chegar a 30. A coluna tem scroll proprio, entao o que
+        // importa aqui e o espaco disponivel -- nao o total.
+        int perCount = periciaCount();
         int perTitleH = rowHOrDefault(topY, bottomY);
-        int perAvail = Math.max(MIN_PER_ROW_H * PER_COUNT, bottomY - topY - perTitleH);
-        perRowH = Math.max(MIN_PER_ROW_H, Math.min(perRowHCap(topY, bottomY), perAvail / PER_COUNT));
+        int perAvail = Math.max(MIN_PER_ROW_H, bottomY - topY - perTitleH);
+        perRowH = Math.max(MIN_PER_ROW_H,
+                Math.min(perRowHCap(topY, bottomY), perAvail / Math.max(1, perCount)));
 
         // Duas colunas de atributos so quando o painel e largo o bastante para
         // os rotulos (FOR/DES/...) nao se chocarem com os dois botoes.
         boolean twoColumns = leftW >= 260;
-        int attrRowCount = twoColumns ? 3 : 6;
+        // 27/09/2026: o numero de linhas de atributo vem do modelo (1 a 10), e
+        // nao mais das constantes 3/6. A altura reservada precisa acompanhar,
+        // senao os atributos de baixo caem em cima da secao seguinte.
+        int attrRowCount = twoColumns ? attrRowCount(2) : attrRowCount(1);
         // 4 titulos de secao (Identity, Vitals, Progress, Attributes) + 4 campos
         // de identidade (characterName, race, characterClass, background) + 2
         // vitais + 2 de progresso + as linhas de atributo. Sem folga no fim.
@@ -204,6 +247,14 @@ public class StatusScreen extends CharacterSheetScreen {
         // painel. Em janela normal a altura de linha bate em MAX_ROW_H nos dois
         // casos, entao nada muda visualmente la.
         int neededRows = 4 + 4 + 2 + 2 + attrRowCount;
+        // 27/09/2026 (Sheet Editor): o Mestre pode desligar a raca, a mana e o
+        // XP, e ai as linhas abaixo somem. Sem descontar, a altura de linha
+        // seria calculada para linhas que nao existem e sobraria espaco vazio
+        // no fim do painel.
+        int optionalRows = (model.isEnabled("race") ? 0 : 1)
+                + (model.isEnabled("mana") ? 0 : 1)
+                + (model.xp() == SheetModel.XpMode.HIDDEN ? 1 : 0);
+        neededRows -= optionalRows;
         rowH = fitRowHeight(neededRows, topY, bottomY);
 
         int labelW = fieldLabelWidth(leftW);
@@ -218,51 +269,69 @@ public class StatusScreen extends CharacterSheetScreen {
         int y = topY;
 
         // ---------------- Identity ----------------
-        y = addSection("Identity", x0, y);
+        // 27/09/2026 (Sheet Editor): os titulos vem do modelo e a raca pode ter
+        // sido desligada pelo Mestre. Titulo de secao e campo andam juntos, para
+        // nao sobrar um rotulo sem a caixa embaixo.
+        y = addSection(model.nameLabel(), x0, y);
         y = addField("characterName", x0, y, boxX, boxW, false);
-        y = addField("race", x0, y, boxX, boxW, false);
+        if (model.isEnabled("race")) {
+            y = addField("race", x0, y, boxX, boxW, false);
+        }
         y = addField("characterClass", x0, y, boxX, boxW, false);
         y = addField("background", x0, y, boxX, boxW, false);
 
         // ---------------- Vitals (barras) ----------------
         y = addSection("Vitals", x0, y);
-        hpBar = addResourceRow(x0, boxX, y, boxW, "HP", "hp", "hpMax", COL_HP, COL_HP_BG);
+        hpBar = addResourceRow(x0, boxX, y, boxW, model.hpLabel(), "hp", "hpMax", COL_HP, COL_HP_BG);
         y += rowH;
-        manaBar = addResourceRow(x0, boxX, y, boxW, "Mana", "mana", "manaMax", COL_MANA, COL_MANA_BG);
-        y += rowH;
+        if (model.isEnabled("mana")) {
+            manaBar = addResourceRow(x0, boxX, y, boxW, model.manaLabel(), "mana", "manaMax", COL_MANA, COL_MANA_BG);
+            y += rowH;
+        }
 
         // ---------------- Progress ----------------
         y = addSection("Progress", x0, y);
         y = addField("level", x0, y, boxX, boxW, true);
-        y = addField("xp", x0, y, boxX, boxW, true);
+        // XP em modo TEXT vira caixa de texto (o campo "xpText"); em NUMBER
+        // continua numerico; em HIDDEN a linha inteira nao existe.
+        if (model.xp() == SheetModel.XpMode.TEXT) {
+            y = addField("xptext", x0, y, boxX, boxW, false);
+        } else if (model.xp() != SheetModel.XpMode.HIDDEN) {
+            y = addField("xp", x0, y, boxX, boxW, true);
+        }
 
         // ---------------- Attributes ----------------
         // Decisao do usuario: atributos sao botoes -/+ (passo 1), sem caixa de
-        // texto e sem barra, começando em 0, com teto 30 e sem piso (podem ser
-        // negativos).
+        // texto e sem barra, começando em 0, com teto 30 e PISO -30 (podem ser
+        // negativos, decisao do usuario em 27/09/2026).
         y = addSection("Attributes", x0, y);
+        List<SheetModel.AttributeDef> attrs = model.attributes();
         if (twoColumns) {
             int colW = (leftW - 6) / 2;
-            for (int i = 0; i < SheetData.Attribute.VALUES.size(); i++) {
-                SheetData.Attribute attr = SheetData.Attribute.VALUES.get(i);
+            for (int i = 0; i < attrs.size(); i++) {
                 int cx = x0 + (i % 2) * colW;
                 int cy = y + (i / 2) * rowH;
-                addAttributeRow(cx, cy, colW - 4, attr);
+                addAttributeRow(cx, cy, colW - 4, attrs.get(i).id());
             }
-            y += 3 * rowH;
+            y += attrRowCount(2) * rowH;
         } else {
-            for (SheetData.Attribute attr : SheetData.Attribute.VALUES) {
-                addAttributeRow(x0, y, leftW - 6, attr);
+            for (SheetModel.AttributeDef attr : attrs) {
+                addAttributeRow(x0, y, leftW - 6, attr.id());
                 y += rowH;
             }
         }
 
         // ---------------- Pericias (coluna da direita) ----------------
-        // Lista FIXA definida em SheetData.PERICIAS_PADRAO: nao ha botao de
-        // adicionar nem de remover, so os botoes de valor e o botao de atributo.
+        // 27/09/2026 (Sheet Editor): a lista vem do modelo e tem scroll PROPRIO
+        // desta coluna, sem mexer no resto da ficha. Antes eram 18 fixas que
+        // cabiam; agora o Mestre pode por 30, e o que nao couber e alcancavel
+        // pela roda do mouse sobre a coluna. Nao ha botao de adicionar nem de
+        // remover aqui: quem cria e remove pericia e o editor do Mestre.
         textLines.add(new TextLine("Skill Checks", perX, topY + perLabelOffset(), COL_SECTION));
-        for (int i = 0; i < PER_COUNT; i++) {
-            addPericiaRow(perX, topY + perTitleH + i * perRowH, perW, i);
+        perScroll = clampPerScroll(perScroll);
+        int visible = perVisibleCount();
+        for (int i = 0; i < visible; i++) {
+            addPericiaRow(perX, topY + perTitleH + i * perRowH, perW, perScroll + i);
         }
         addBonusHeader(topY, perTitleH);
     }
@@ -328,7 +397,85 @@ public class StatusScreen extends CharacterSheetScreen {
 
     /** Teto da altura de linha das pericias: nunca maior que uma linha normal. */
     private int perRowHCap(int topY, int bottomY) {
-        return Math.min(MAX_ROW_H, (bottomY - topY) / (PER_COUNT + 1));
+        // 27/09/2026: usa o total que CABE na coluna, nao o total do modelo.
+        // Com 30 pericias e um total grande, esta divisao daria uma altura de
+        // linha minuscula; a coluna rola, entao o que decide a altura e o
+        // espaco disponivel, nao quantas linhas existem.
+        int visible = Math.max(1, perVisibleCountFor(topY, bottomY));
+        return Math.min(MAX_ROW_H, (bottomY - topY) / (visible + 1));
+    }
+
+    // ------------------------------------------------------------------
+    // MODELO GLOBAL (27/09/2026 - Sheet Editor)
+    // ------------------------------------------------------------------
+
+    /**
+     * O modelo em uso, lido do holder.
+     *
+     * <p>Antes desta mudanca nao havia holder nenhum: rotulo, quantidade e o
+     * ligar/desligar de um campo eram constantes no codigo. A tela agora le do
+     * modelo, que o servidor manda no login e o cliente guarda.
+     */
+    private SheetModel model() {
+        return SheetModelHolder.current();
+    }
+
+    /** Quantas linhas de atributo o modelo ocupa em {@code columns} colunas. */
+    private int attrRowCount(int columns) {
+        int n = Math.max(0, model().attributeCount());
+        return columns <= 1 ? n : (n + columns - 1) / columns;
+    }
+
+    /** Quantas pericias existem agora: as da ficha, ou o total do modelo. */
+    private int periciaCount() {
+        if (sheet != null) {
+            return sheet.pericias().size();
+        }
+        return model().periciaCount();
+    }
+
+    /**
+     * Quantas linhas de pericia cabem na coluna com a altura de linha atual.
+     *
+     * <p>E o que define o tamanho da janela de scroll. Se sobrar espaco, cabem
+     * todas e o scroll simplesmente nao aparece.
+     */
+    private int perVisibleCount() {
+        int total = periciaCount();
+        if (total <= 0) {
+            return 0;
+        }
+        int perTitleH = rowHOrDefault(contentTop, contentBottom);
+        int avail = Math.max(MIN_PER_ROW_H, contentBottom - contentTop - perTitleH);
+        return Math.max(1, Math.min(total, avail / Math.max(1, perRowH)));
+    }
+
+    /** Mesma conta de {@link #perVisibleCount}, sem usar {@link #perRowH}. */
+    private int perVisibleCountFor(int topY, int bottomY) {
+        int total = periciaCount();
+        if (total <= 0) {
+            return 1;
+        }
+        int perTitleH = rowHOrDefault(topY, bottomY);
+        int avail = Math.max(MIN_PER_ROW_H, bottomY - topY - perTitleH);
+        int rowH = Math.max(MIN_PER_ROW_H,
+                Math.min(MAX_ROW_H, (bottomY - topY) / (total + 1)));
+        return Math.max(1, Math.min(total, avail / Math.max(1, rowH)));
+    }
+
+    /** Maior scroll valido: o que sobra quando a ultima pericia chega no fim. */
+    private int maxPerScroll() {
+        return Math.max(0, periciaCount() - perVisibleCount());
+    }
+
+    private int clampPerScroll(int value) {
+        return Math.max(0, Math.min(value, maxPerScroll()));
+    }
+
+    /** O mouse esta sobre a coluna de pericias? So ai a roda rola esta coluna. */
+    private boolean isOverPericiaColumn(double mouseX, double mouseY) {
+        return mouseX >= perPanelX && mouseX < perPanelX + perPanelW
+                && mouseY >= contentTop && mouseY < contentBottom;
     }
 
     /** Centraliza o texto na linha compacta (fonte e 8px, linha pode ter 9). */
@@ -393,14 +540,14 @@ public class StatusScreen extends CharacterSheetScreen {
                 attr, minus, plus));
     }
 
-    /** Abre a lista suspensa dos 6 atributos para a pericia da linha. */
+    /** Abre a lista suspensa dos atributos do MODELO para a pericia da linha. */
     private void openPericiaAttribute(int index) {
         if (!canEdit || this.minecraft == null || sheet == null || index >= sheet.pericias().size()) {
             return;
         }
         SheetData.Pericia pericia = sheet.pericias().get(index);
         this.minecraft.setScreen(new AttributePickerScreen(
-                this, pericia.name(), pericia.attribute(), chosen -> {
+                this, pericia.name(), pericia.attributeId(), chosen -> {
                     pendingPericiaAttribute.put(pericia.name(), chosen);
                     ClientPlayNetworking.send(RpgNetworking.SheetPericiaPayload.setAttribute(
                             targetName, pericia.name(), chosen));
@@ -435,10 +582,10 @@ public class StatusScreen extends CharacterSheetScreen {
         return pending != null ? pending : pericia.value();
     }
 
-    /** Atributo a exibir: o otimista se houver, senao o do servidor. */
-    private SheetData.Attribute displayPericiaAttribute(SheetData.Pericia pericia) {
-        SheetData.Attribute pending = pendingPericiaAttribute.get(pericia.name());
-        return pending != null ? pending : pericia.attribute();
+    /** Id do atributo a exibir: o otimista se houver, senao o do servidor. */
+    private String displayPericiaAttributeId(SheetData.Pericia pericia) {
+        String pending = pendingPericiaAttribute.get(pericia.name());
+        return pending != null ? pending : pericia.attributeId();
     }
 
     /**
@@ -451,11 +598,18 @@ public class StatusScreen extends CharacterSheetScreen {
      *
      * <p>O rotulo abrevia (FOR, DES, ...) quando a coluna e estreita para
      * caber os dois botoes, e mostra o nome por extenso quando ha espaco.
+     *
+     * <p>27/09/2026 (Sheet Editor): recebe o <b>id</b> do atributo, nao um
+     * objeto. Os dois textos (sigla e nome por extenso) vem do modelo, e sao
+     * diferentes para cada atributo porque o Mestre pode renomear qualquer um.
      */
-    private void addAttributeRow(int x0, int y, int rowW, SheetData.Attribute attr) {
+    private void addAttributeRow(int x0, int y, int rowW, String attributeId) {
         int h = rowH - 2;
         boolean compact = rowW < 84;
-        String label = compact ? attr.shortName() : attr.fullName();
+        SheetModel.AttributeDef def = model().attribute(attributeId);
+        String shortLabel = def == null ? attributeId : def.label();
+        String fullLabel = def == null ? attributeId : def.name();
+        String label = compact ? shortLabel : fullLabel;
         int labelW = fixedAttributeLabelWidth(rowW, compact);
 
         textLines.add(new TextLine(label, x0, y + labelOffset(), COL_LABEL));
@@ -473,15 +627,15 @@ public class StatusScreen extends CharacterSheetScreen {
         int plusX = valueX + valueW + WIDGET_GAP;
 
         Button minus = Button.builder(Component.literal("-"),
-                b -> stepNumeric(attr.field(), -ARROW_STEP)).bounds(minusX, y, arrow, h).build();
+                b -> stepNumeric(attributeId, -ARROW_STEP)).bounds(minusX, y, arrow, h).build();
         Button plus = Button.builder(Component.literal("+"),
-                b -> stepNumeric(attr.field(), ARROW_STEP)).bounds(plusX, y, arrow, h).build();
+                b -> stepNumeric(attributeId, ARROW_STEP)).bounds(plusX, y, arrow, h).build();
         addRenderableWidget(minus);
         addRenderableWidget(plus);
         arrowButtons.add(minus);
         arrowButtons.add(plus);
 
-        attrRows.add(new AttrRow(valueX, y, valueW, h, attr, minus, plus));
+        attrRows.add(new AttrRow(valueX, y, valueW, h, attributeId, minus, plus));
     }
 
     /**
@@ -494,15 +648,21 @@ public class StatusScreen extends CharacterSheetScreen {
      * de "Constituição" (texto maior) avançava sobre a linha de cima, e as
      * colunas de setas não alinhavam entre si.
      *
-     * <p>A correção é usar sempre a largura do <b>rótulo mais largo</b> dos
-     * seis atributos, para que as setas fiquem na mesma coluna em todas as
+     * <p>A correção é usar sempre a largura do <b>rótulo mais largo</b> de todos
+     * os atributos do modelo, para que as setas fiquem na mesma coluna em todas as
      * linhas. O texto continua sendo o nome por extenso quando há espaço e a
      * sigla quando a coluna é estreita (o mesmo critério de antes).
+     *
+     * <p>27/09/2026 (Sheet Editor): o laço passou de {@code Attribute.VALUES}
+     * (seis constantes) para {@link SheetModelHolder#current()}, porque a lista
+     * agora e do Mestre e muda de tamanho. Com um rotulo muito largo, o
+     * {@code Math.min} abaixo limita pela largura disponivel, entao o texto
+     * pode invadir -- o mesmo comportamento de antes com rotulos enormes.
      */
     private int fixedAttributeLabelWidth(int rowW, boolean compact) {
         int widest = 0;
-        for (SheetData.Attribute attr : SheetData.Attribute.VALUES) {
-            widest = Math.max(widest, this.font.width(compact ? attr.shortName() : attr.fullName()));
+        for (SheetModel.AttributeDef def : model().attributes()) {
+            widest = Math.max(widest, this.font.width(compact ? def.label() : def.name()));
         }
         int arrow = Math.max(9, Math.min(13, rowH - 3));
         int valueW = valueBoxWidth();
@@ -610,7 +770,7 @@ public class StatusScreen extends CharacterSheetScreen {
         // 0 em cinza (o padrao) e qualquer outro valor na cor normal, para o
         // mestre bater o olho em "quem foi ajustado" sem ler os 6 numeros.
         for (AttrRow row : attrRows) {
-            int value = numericValue(row.attribute().field());
+            int value = numericValue(row.attributeId());
             // A caixa foi dimensionada pelo teto (valueBoxWidth), entao "30" cabe
             // inteiro. 27/09/2026: antes a largura era fixa e o texto era cortado
             // com plainSubstrByWidth, o que ESCONDERA o segundo algarismo ao
@@ -638,24 +798,31 @@ public class StatusScreen extends CharacterSheetScreen {
     }
 
     /**
-     * Desenha as 20 linhas de pericia: nome, valor e a abreviacao do atributo.
+     * Desenha as linhas de pericia visiveis: nome, valor e a sigla do atributo.
      *
      * <p>O nome e cortado pela largura ({@code plainSubstrByWidth}) em vez de
-     * estourar a coluna: o maior nome da lista e "Animal Handling" (15
+     * estourar a coluna: o maior nome da lista padrao e "Animal Handling" (15
      * caracteres), que cabe, mas um nome novo ou maior nao pode empurrar os
      * botoes para fora.
      *
-     * <p>Se a ficha ainda nao chegou, ou vier com menos/mais de 20 pericias,
-     * as linhas ficam vazias em vez de estourar a lista: a lista fixa e' uma
-     * invariante do servidor, entao a diferenca aqui seria um bug de protocolo.
+     * <p>27/09/2026 (Sheet Editor): {@code periciaRows} guarda so a JANELA
+     * visivel (o que cabe na coluna), nao a lista inteira. Por isso o indice da
+     * pericia e {@code perScroll + i}. Sem o {@code + perScroll}, a tela
+     * mostraria a pericia errada em cada linha apos rolar -- e compilaria
+     * normalmente, que e o motivo de o comentario existir.
      */
     private void drawPericias(GuiGraphics graphics) {
         if (sheet == null) {
             return;
         }
         List<SheetData.Pericia> pericias = sheet.pericias();
-        for (int i = 0; i < periciaRows.size() && i < pericias.size(); i++) {
-            SheetData.Pericia pericia = pericias.get(i);
+        int scroll = clampPerScroll(perScroll);
+        for (int i = 0; i < periciaRows.size(); i++) {
+            int index = scroll + i;
+            if (index >= pericias.size()) {
+                break;
+            }
+            SheetData.Pericia pericia = pericias.get(index);
             PericiaRow row = periciaRows.get(i);
             int ty = row.y() + Math.max(1, (row.h() - 8) / 2);
 
@@ -673,10 +840,35 @@ public class StatusScreen extends CharacterSheetScreen {
             row.plusButton().active = canEdit && value < SheetData.Pericia.VALUE_MAX;
             row.minusButton().active = canEdit && value > SheetData.Pericia.VALUE_MIN;
 
-            // A abreviacao do atributo fica no botao, guardado direto no record
-            // para nao depender de procurar o widget por coordenada.
-            row.attrButton().setMessage(Component.literal(displayPericiaAttribute(pericia).shortName()));
+            // A sigla do atributo fica no botao e vem do MODELO (27/09/2026):
+            // antes era o shortName() do enum, e o Mestre nao podia renomear.
+            row.attrButton().setMessage(
+                    Component.literal(model().attributeLabel(displayPericiaAttributeId(pericia))));
         }
+    }
+
+    /**
+     * Scroll da COLUNA de pericias, e so dela.
+     *
+     * <p>27/09/2026: o pedido foi "scroll so no painel de pericias", entao a
+     * roda so rola quando o ponteiro esta em cima desta coluna. Fora dela, o
+     * comportamento normal da tela continua valendo.
+     *
+     * <p>Rolar recria os widgets ({@code rebuildWidgets()} refaz o
+     * {@code init()}) porque as linhas da coluna sao botoes de verdade, e nao
+     * texto desenhado: e o unico jeito de mover o conjunto deles.
+     */
+    @Override
+    public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
+        if (isOverPericiaColumn(mouseX, mouseY)) {
+            int next = clampPerScroll(perScroll + (int) -Math.signum(scrollY));
+            if (next != perScroll) {
+                perScroll = next;
+                rebuildWidgets();
+            }
+            return true;
+        }
+        return super.mouseScrolled(mouseX, mouseY, scrollX, scrollY);
     }
 
     /**
