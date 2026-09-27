@@ -386,3 +386,178 @@ escada, andaime e a mensagem de recusa seguem como "codigo pronto para testar". 
 de videira e camada de neve nao implementadas. `AuraRenderer.java:101` segue com
 `getHeight(MOTION_BLOCKING, ...) + 1.05`, possivelmente ~1 bloco acima do mob apos a
 mudanca de Y.
+
+## FASE 3 parte 1 - resiliencia, aba de key binds e catalogo (27/09/2026) - FATO verificado por build + runClient
+
+- Relatorio: `agent/reports/2026-09-27_fase3-parte1-resiliencia-keybinds.md`. Partiu do checkpoint `5fad0f8` / tag `checkpoint-20260927-1220-antes-da-fase3-resiliencia` (C04, **local, sem push**). Diff de 4 arquivos + 1 novo, sem commit.
+- **NAO EXISTE lista de iniciativa/ordem de turno.** O turno e UM unico `SessionManager.activePlayerUuid` (`SessionManager.java:31`), sem fila e sem indice. "Preservar a ordem do turno" = preservar esse UUID. A iniciativa ordenada continua item de FASE 3 nao implementado.
+- **MUDANCA DE COMPORTAMENTO no DISCONNECT (decisao do usuario em 27/09/2026):** removido o bloco que fazia `clearActivePlayer()` + `clearPlayerAnchor()` quando o jogador ativo caia. A vez fica **RESERVADA** e o servidor avisa no chat publico. O Mestre pula com `/rpg turn revoke` e passa a outro com `/rpg turn give`.
+- **`/rpg turn revoke` e `/rpg turn finish` funcionam com o dono do turno OFFLINE:** leem `SessionManager.getActivePlayerUuid()` / `getActivePlayerName()` (`MasterCommands.java:232-237`, `:254-258`), nunca a entidade. Por isso "reservar a vez" nao prende a sessao: o Mestre sempre tem como destravar.
+- O Mestre que desconecta **continua** perdendo o cargo, indo para `FREE` e resetando o `CombatController`. Decisao do usuario, mantida.
+- **`RpgNetworking.sendAuraStateToPlayer(MinecraftServer, ServerPlayer)` (NOVO)**, chamado no JOIN. Antes a aura **nao** era reenviada e quem reconectava voltava sem a barreira azul ate o proximo `/rpg turn`.
+- **ARMADILHA que eu introduzi e corrigi no mesmo dia:** fazer `sendAuraStateToAll` DELEGAR ao metodo por jogador chamava `CombatController.getAuraData(server)` uma vez **por jogador** num broadcast. O certo e montar o payload uma vez e so trocar o `send` por jogador (helper privado `sendAuraState`).
+- **`gameModeOrdinal = -1` e sentinela de "sem sessao"** no DISCONNECT do cliente. `SpectatorCameraController.tick` compara `lastGameModeOrdinal != gameModeOrdinal` para distinguir "chegou meu turno" de "mestre trocou o modo da sessao"; **zerar faria o JOIN parecer troca de turno** e derrubaria a camera de quem so reconectou.
+- **`SpectatorCameraController.reset()` (NOVO)** zera `targetIndex`, `active`, `wasLocked`, `lastGameModeOrdinal`, `freeCamInitialized`, `thirdPersonLookInitialized`, `freeCamPos`; **PRESERVA** `mode`, `orbitalEnabled`, `topDownZoom`, `transitionSpeed` (sao preferencia do jogador). **Por que `targetIndex` precisa zerar:** e um INDICE e o `entityId` do jogador muda a cada login, entao o indice guardado apontava para outra pessoa ao reconectar. Nao chama `deactivate` (exige `Minecraft`); o `tick` ja desliga quando `client.player == null`.
+- **CORRECAO de fato antigo desta memoria:** **NAO existe `1024` em nenhum lugar de `src/`** (verificado com `Select-String`). As linhas "mestre 1024 blocos" das secoes "Aura (Fase 4)" e "Fluxo do mestre" estao **erradas**. O real: `sendHoverConfigToPlayer` (`RpgNetworking.java:1209`) manda `SessionManager.getHoverDistance()` **para todos, inclusive o Mestre**, e o padrao e **32** (`SessionManager.java:39`). O Javadoc em `RpgNetworking.java:234-238` e `MasterCommands.java:647-650` repete o "valor alto para o mestre" e segue desatualizado em relacao ao codigo.
+- **KeyMapping com categoria propria (1.21.11, verificado com `javap`):** `net.minecraft.client.KeyMapping.Category` e `record Category(Identifier id)` e **`public static Category register(Identifier)`** e a API que cria a aba em Controles. Ela **lanca `IllegalArgumentException` em duplicata** e monta a ordem das abas. `label()` deriva a chave de lang como **`key.category.<namespace>.<path>`** — entao `Identifier.fromNamespaceAndPath("tabletop-rpg","rpg")` exige `key.category.tabletop-rpg.rpg` no `en_us.json`, senao a aba aparece com a chave crua (o mesmo problema do lang criado em 26/09).
+- **Registre a categoria FORA do `try { } catch (Throwable)` que envolve as teclas:** esse catch mascararia a excecao e deixaria as duas teclas nulas.
+- **A translation key de um KeyMapping e a chave com que o vanilla persiste o binding em `options.txt`** (`key_key.<translationKey>`). Mexer na translation key (`key.tabletoprpg.*`) **perde o binding do usuario**; por isso a aba nova trocou apenas o `Category`.
+- `FUNCIONALIDADES-E-COMANDOS.md` na raiz do projeto: catalogo de referencia do estado atual (visao da sessao, 16 comandos, teclas, telas, regras, estado por conexao). **Nao e memoria nem relatorio**, por isso ficou fora de `agent/`.
+- **BUG encontrado, documentado e NAO corrigido:** os botoes `-10`/`-1` da tela de rolagem montam expressoes como `d8-2`, e o parser do servidor so aceita `^(\d*)[dD](\d+)$` e `^\d+$` — **nao aceita modificador negativo** (`MasterCommands.java:422`, `:679`, `:731-733`). Modificador positivo funciona. Alem disso `/rpg` e `/rpg menu` abrem um menu **ASCII no chat**; a tela grafica `RpgMenuScreen` so abre pela tecla `R`.
+- `/rpg roll` sem argumento mostra o cabecalho `Skills (...)` no chat, mas o conteudo sao as 20 **pericias** de `SheetData.PERICIAS_PADRAO`. Os 20 nomes no codigo sao em ingles (`Melee`, `Acrobatics`, `Diplomacy`, `Initiative`, `skill 0`...).
+- **VALIDACAO:** `gradlew build --no-daemon` VERDE (14s, `scanEncoding` OK) e `runClient` VERDE ("Sound engine started" em `run/logs/latest.log`, as 2 teclas registradas, 0 crash reports, 0 erro de mixin). **NADA foi validado em jogo por mim:** a aba "Tabletop RPG" em Controles, a barreira azul ao reconectar, o turno reservado e o aviso de chat dependem do teste do usuario. O cliente foi encerrado ao fim da validacao.
+
+### Catalogo: referencia por SIMBOLO, nao por linha (27/09/2026) - FATO
+
+**O usuario decidiu:** `FUNCIONALIDADES-E-COMANDOS.md` passa a citar `Arquivo.java: simbolo`
+(metodo, campo ou classe) e **nao** numero de linha. Medido antes da troca: **143 citacoes de
+linha em 27 arquivos, em 411 linhas** - uma a cada ~3 linhas. As **200** citacoes (143 com
+nome de arquivo + 57 soltas na forma `:NNN`) foram convertidas. **Zero numero de linha restou.**
+
+**Por que isso importa (a armadilha ja tinha comprado duas feridas):** linha de codigo e
+referencia que **decai sozinha** — qualquer edicao desloca a numeracao. No mesmo dia, (1) duas
+secoes do catalogo ficaram factualmente erradas porque o parser de rolagem mudou embaixo delas,
+e (2) as refs de `PlayerListScreen.java` apontavam para as linhas 290 e 448 num arquivo de
+**111 linhas**. Nome de metodo/campo sobrevive a refatoracao; numero de linha nao.
+
+**Armadilhas do gerador de simbolo (se isso for refeito):**
+- `Get-SymbolName` tem de conferir o `=` **antes** do primeiro `(`. Se nao, em
+  `private static final Pattern DICE_TERM = Pattern.compile(...)` devolve `compile` (o nome da
+  fabrica) em vez de `DICE_TERM`. Esse bug vazou para o arquivo final e so apareceu na
+  conferencia manual.
+- Um matcher frouxo de "construtor" casa `if (...) {` e devolve `if`. **Blacklist de palavras
+  chave** e obrigatorio. Produziu 5 artefatos `` , `if` `` que entraram no catalogo.
+- A citacao solta `:NNN` significa "o arquivo citado antes" e o rastreamento por posicao
+  **atribui ao arquivo errado** quando a celula cita dois arquivos. Exemplo real: na linha da
+  `StatusScreen`, o `:448-451` solto vem logo apos `PlayerListScreen.java:89-90` e pertence a
+  `StatusScreen.buildFooterExtra`. Onde isso atrapalha, escrever o nome do arquivo por extenso.
+- **Varias citacoes dentro do mesmo metodo colapsam no mesmo simbolo.** Onde o documento
+  distinguia pontos internos de um metodo, qualificar curto ("bloco do Mestre", "ainda em
+  `init`, bloco `if (!isMaster)`") e melhor que repetir o simbolo.
+
+**ERRO MEU QUE INVALIDA PARTE DESTA VALIDACAO:** eu **copiei o arquivo gerado sobre o
+catalogo-fonte antes de conferir**. `FUNCIONALIDADES-E-COMANDOS.md` e **untracked** (nunca
+commitado), entao o git nao restaurou a versao com numeros de linha. Depois disso o script leu
+um arquivo ja convertido e passou a reportar "200 referencias" quando nao havia nenhuma
+pendente — os diagnosticos seguintes estavam **falsos**. Um simbolo errado (`compile`) sobrou ate
+o fim por isso.
+**REGIAO:** ao gerar um arquivo **untracked** por script, escrever o resultado num **caminho
+novo** e so promover depois de conferir. Nunca `Copy-Item` por cima da fonte.
+
+**Verificacao automatica por regex NAO e confiavel neste documento:** duas tentativas deram 42 e
+96 "erros" que eram falso positivo (o `:palavra` casava com prosa em portugues; `Skills`, `Back`,
+`R`, `V` sao conteudo, nao citacao quebrada). **Conferencia de referencia aqui e tarefa de
+leitura humana.** O `scanEncoding` tambem nao cobre este arquivo, porque ele esta na raiz do
+projeto, fora de `src/` e `agent/`.
+
+## Rolagem com subtracao e o texto do "mestre 1024" (27/09/2026) - FATO verificado por build + teste isolado
+
+Relatorio: `agent/reports/2026-09-27_fase3-parte1-resiliencia-keybinds.md` (secao "CorrecoesZz depois do relatorio"). Decisoes do usuario em 27/09/2026: **manter** o comportamento do destaque (mesmo valor para todos) e corrigir **apenas o texto**; **corrigir no servidor** o bug do modificador negativo.
+
+### ARMADILHA PRINCIPAL: `String.split` NAO inclui grupos capturados no resultado
+
+- **FATO (verificado executando, nao de memoria):** `"d8-1".split("([+-])", -1)` devolve **`["d8", "1"]`**, e **nao** `["d8","-","1"]`. O `Pattern.split` **nao adiciona os grupos capturados ao array**. razonar o contrario e um erro natural, e a consequencia aqui seria silenciosa e grave: `d8-1` rolaria o dado e **descartaria o -1 sem dar erro nenhum** - resultado errado, que e pior que a recusa de hoje.
+- **A forma que preserva o sinal** e `split("(?=[+-])", -1)` (lookahead): o operador fica no **comeco** do termo seguinte. `"d8-1"` -> `["d8","-1"]`; `"2d6+d4"` -> `["2d6","+d4"]`; `"d8--1"` -> `["d8","-","-1"]`. Detalhe: o `Pattern.split` **ignora match de largura zero no indice 0**, entao `"-2"` fica `["-2"]` (sinal no primeiro termo), e nao `["","-2"]`. Tratar o sinal com `startsWith` no inicio de cada termo cobre os dois casos sem posicao especial.
+- **REGRA geral:** nunca assumir que o array devolvido por `split` contem os grupos capturados. Para conservar o operador, use lookahead (`(?=...)`), ou tokenize com `Matcher.find()`. **E valide a aritmetica com um programa isolado antes de confiar no diff** - foi exatamente assim que o bug apareceu.
+
+### Parser de dados aceita subtracao (MasterCommands.rollDice)
+
+- O `MODIFIER_TERM = "^\d+$"` (`:422`) e o `DICE_TERM` (`:421`) **nao mudaram**: o sinal e extraido antes de casar os padroes, entao so o `split` (`:683`) e o texto de exibicao mudaram.
+- **`appendRollTerm(joined, sign, text)`** (`:770-782`) monta o separador `" §f- §b"` / `" §f+ §b"`. **O `text` tem de vir SEM sinal**, porque o separador ja carrega ele - passar `sign*mod` exibia `d8 [5] - -1`. **Excecao: o primeiro termo nao tem separador antes**, entao o helper recoloca o sinal (`"-2"` sozinho aparece `-2`).
+- Sinal duplo e **recusado**: `d8--1`, `d8+-1` e `d8--` caem no erro de formula invalida, porque o termo fica vazio no meio da lista. `DICE_TERM`/`MODIFIER_TERM` seguem valendo `d0`, `101d6` e `d1001` como recusados.
+- **O bug do "atributo negativo" NAO existe:** `rollSkill` (`:511-513`) soma direto em `long` (`die + pericia.value() + sheet.getNumeric(atributo)`) e **nunca monta string de formula nem chama `rollDice`**. Atributo negativo funciona. So ha um detalhe cosmetico: a linha do resultado imprime sempre `" + "`, entao sai `... + STR -3 = 11` (sinal duplicado na tela, numero certo). **Nao mexer sem o usuario pedir.**
+- `rollDice` tem **2 chamadores** (`rollFormula:602` e `openRoll:621`) e nenhum outro uso no projeto. O resultado e devolvido por `return`; quem anuncia e o chamador, via `broadcast` (todos) ou `sendSystemMessage` (so o Mestre). **O mod nao tem payload de rolagem**, entao o cliente nao consegue ajustar o resultado - por isso "corrigir so na tela" era impossivel sem duplicar o RNG no cliente.
+
+### VALIDADO EM JOGO pelo usuario em 27/09/2026 - FATO (evidencia: mensagem do usuario)
+
+O usuario executou o teste e confirmou **"testei tudo e ta 100%"**. Portanto, a FASE 3
+parte 1 (aba de teclas + resiliencia de reconexao) e a correcao do parser de subtracao
+**estao funcionando de verdade**, nao so compilando:
+
+- aba "Tabletop RPG" em Controles, e **atalho customizado preservado** apos mover a
+  categoria - confirma na pratica a separacao "categoria mutavel / translation key
+  imutavel";
+- jogador desconecta no meio do turno: aviso de chat, **vez reservada** (outros ficam
+  bloqueados) e liberacao por `/rpg turn revoke` **com o jogador offline**;
+- **aura/barreira azul volta** quando o jogador reconecta - o bug original do JOIN;
+- Mestre desconecta: perde cargo, sessao `FREE`, combate reseta;
+- camera de espectador limpa o estado na reconexao;
+- `/rpg roll` com subtracao, incluindo `-2` e sinais alternados, e os botoes `-1`/`-10`
+  da `DiceRollScreen`; sinal duplo segue recusado.
+
+**Consequencia para a proxima sessao:** nao reprotestar nada desta lista. O que sobrou
+pendente de decisao do usuario sao **duis itens cosmeticos/arquiteturais** que ele nao
+respondeu: (a) `rollSkill` imprime sempre `" + "`, entao com atributo negativo o chat
+mostra `... + STR -3 = 11` (sinal duplicado, numero certo); (b) `rollDice` usa um
+`new Random()` estatico (`:709`) em vez de `player.getRandom()` como o `rollSkill`. Os
+dois foram registrados e **nao corrigidos**.
+
+### Destaque: o "1024" era fiction do codigo e da memoria
+
+- **Decisao do usuario: manter o comportamento** (todos, inclusive o Mestre, recebem `SessionManager.getHoverDistance()`, padrao 32) e **corrigir so o texto**. Os Javadocs de `RpgNetworking.HoverConfigPayload` (`:234-243`) e de `MasterCommands.setHoverDistance` (`:647-655`) foram reescritos e agora dizem que o valor vai para todos. A memoria ja tinha a correcao; aqui fica o registro de que os **comentarios do codigo tambem mentiam**.
+
+---
+
+## 2026-09-27 — CORRECAO de um registro anterior, e a skill `catalogo-sync`
+
+### CORRECAO: a afirmacao sobre `PlayerListScreen.java` neste arquivo estava errada
+
+Acima, na secao "Por que isso importa", este arquivo afirma que as refs de
+`PlayerListScreen.java` "apontavam para as linhas 290 e 448 num arquivo de 111 linhas".
+**Isso e falso.** O `:448-451` solto da tabela do catalogo pertence a `StatusScreen`, que era
+o assunto da secao, e o catalogo estava **correto**. O erro foi do meu script de verificacao:
+ele amarrou a citacao solta `:NNN` ao nome de arquivo anterior mais proximo
+(`PlayerListScreen.java`) e fabricou uma linha fora do arquivo. O texto logo acima deste
+bloco, na bullet "A citacao solta `:NNN` significa...", esta CORRETO e e a explicacao real.
+
+**FATO verificado:** a bullet sobre `:NNN` atribuir ao arquivo errado e verdadeira e ja
+explica o caso. O que estava errado era so a frase que apresentava isso como defeito do
+catalogo em vez de defeito da verificacao.
+
+**Licao duravel (vale mais que o erro):** regex que "confere" documentacao em prosa produz
+falso positivo com mais seguranca do que gente. Minhas duas tentativas acusaram 42 e depois
+96 itens inexistentes, e nearly-convenceu-me de apagar documentacao correta. **Nao apague
+conteudo do catalogo com base em relatorio de regex; confirme com leitura.**
+
+### Skill global `catalogo-sync` + detector
+
+O usuario pediu para a manutencao do catalogo nao depender de esquecimento. Decisoes:
+skill **global** (com as outras do TCC), e o detector **so avisa, nunca falha o build**.
+
+- `C:\Users\Danylo Henrique\.config\opencode\skills\agente-tcc\catalogo-sync\SKILL.md`
+- `C:\Users\Danylo Henrique\.config\opencode\skills\agente-tcc\catalogo-sync\check-catalogo.ps1`
+
+**FATO verificado (números reais do código, 27/09/2026):** `onRegister` tem **23
+`Commands.literal(`, 19 `.executes(` e apenas **17 caminhos executáveis distintos**. A
+diferença entre 19 e 17 é que `.executes()` tambem aparece em ramos de
+`Commands.argument(...)` (`/rpg time`, `/rpg hoverdistance`, `/rpg session set`).
+
+**Regra que o detector aplica, e por que:** um literal sem `.executes()` e literal-**pai**
+(`/rpg master`, `/rpg mode`, `/rpg turn`, `/rpg insert`, `/rpg remove`): serve so de
+agrupador, nao e digitavel. O catalogo os documenta de proposito como cabecalho de grupo.
+Portanto "comando obsoleto" = citado no catalogo e **ausente do codigo inteiro**; "nao
+documentado" = executavel no codigo e ausente do catalogo. Filtrar so por `.executes()`
+acusaria 4 falsos positivos; acusar so por `.executes()` acusaria 2 a mais.
+
+**FATO verificado:** o catalogo tem **19 linhas de tabela de comando** = 17 executaveis + 2
+literais-pai (`/rpg mode`, `/rpg turn`). Os numeros fecham.
+
+**Armadilhas do detector (corrigidas na propria implementacao, nao por sorte):**
+- O regex do literal precisa de `^\s*` senao falha no `register(` que quebra a linha, e a
+  raiz `/rpg` nunca entra na pilha - todos os caminhos perdem o prefixo.
+- Codigo produz caminho com `/` e o catalogo escreve com espaco; sem canonicalizar e
+  normalizar, daham 51 divergencias fantasma (22 + 27).
+- O catalogo esta em portugues e descreve a tecla pelo **efeito** ("Abre o menu grafico"),
+  nunca pelo rotulo em ingles nem pela translation key. Buscar `key.tabletoprpg.menu` da
+  falso positivo por natureza. O sinal confiavel de tecla e a **contagem** de linhas da
+  tabela contra o numero de `new KeyMapping(`, nao busca de texto.
+- Permissao nao e automatizavel: `MasterCommands.java` nao tem **nenhum** `.requires(`; a
+  checagem de Mestre esta dentro dos handlers.
+
+**Limitacao conhecida e aceita:** remover uma linha da tabela **nao** dispara alerta se o
+comando continuar citado na prosa. O detector mede **cobertura** (o comando esta
+documentado?), nao formatacao. Isso e proposital.
+
+**HIPOTESE/limite:** o catalogo esta na raiz do repo, fora de `src/` e `agent/`, entao a
+task `scanEncoding` (77 arquivos) **nao o verifica**. Conferido a parte: 33.160 bytes, sem
+BOM, 0 U+FFFD. Se isso mudar, vale um `scan` explicito para o catalogo.
