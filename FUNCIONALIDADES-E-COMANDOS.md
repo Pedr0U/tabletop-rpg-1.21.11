@@ -132,13 +132,14 @@ Raiz única `/rpg`, **sem aliases**. Todos registrados em
   recusa qualquer coisa fora dessa faixa, e na tela o `+` desliga em 30 e o `-` em 0
   (`StatusScreen.java: applyStepButtons`).
 - **O nome da perícia é comparado sem acento e sem diferenciar maiúsculas**
-  (`MasterCommands.java: normalize`), então `acrobatics` funciona igual a `Acrobatics`. Fichas salvas
-  antes de 27/09/2026 migram na hora de carregar pelos apelidos de
-  `SheetData.java: LEGACY_PERICIA_NAMES`: `Acrobacia`→`Acrobatics`,
-  `Diplomacy`/`Diplomacia`→`Persuasion`. **Regra: qualquer renomeação futura na lista padrão de
-  `SheetModel.java: defaults` precisa de apelido junto** — sem ele a troca zera a perícia silenciosamente,
-  já que o alinhamento casa por nome (`SheetModel.java: align`, que usa
-  `SheetData.java: periciaByNameOrLegacy`).
+  (`MasterCommands.java: normalize`), então `acrobatics` funciona igual a `Acrobatics`. O `/rpg roll`
+  aceita **nome**, não id — o comando é interface humana. **Cada perícia tem um id próprio**
+  (`pericia_1`, `pericia_2`, …), gerado uma vez (`SheetModel.java: PericiaDef`, `: freshPericiaId`):
+  o id é a identidade, o nome virou só rótulo (`SheetData.java: Pericia`). Renomear uma perícia
+  **preserva o valor e o atributo** dela, porque o alinhamento casa por id (`SheetModel.java: align`),
+  não por nome. Fichas salvas antes de 28/09/2026 não têm id: na leitura o id é preenchido **por
+  posição**, na ordem em que a perícia estava gravada — e o save antigo foi gravado na ordem do modelo,
+  então posição N continua sendo `pericia_N` (`SheetData.java: sanitizePericias`, `: freshPericiaId`).
 - **A migração de 27/09/2026 tem perdas conhecidas, avisadas e não corrigíveis:**
   - os antigos lugares reservados `perícia N` e `skill N` são **descartados sem log**. A tela
     antiga mostrava as 20 linhas com `-`/`+` editáveis, então quem ajustou `skill 3` para 5
@@ -146,9 +147,9 @@ Raiz única `/rpg`, **sem aliases**. Todos registrados em
   - `Melee`/`Luta` e `Initiative`/`Iniciativa` **saíram do padrão**, então o valor que tinham
     (2 por padrão) é descartado do mesmo jeito. Nenhum apelido resolve isso: resolveria
     inventando uma 19ª e 20ª linha que o usuário não pediu.
-  **Regra: qualquer renomeação futura na lista padrão de `SheetModel.java: defaults` precisa de apelido
-  junto** — sem ele a troca zera a perícia silenciosamente, já que `SheetData.java: periciaByNameOrLegacy`
-  cai no padrão sem logar nada.
+  **Renomear, hoje, não perde nada:** o alinhamento casa por id (`SheetModel.java: align`), então
+  trocar o nome de uma perícia preserva o valor e o atributo dela em todas as fichas — apelido não é
+  mais necessário.
 - **A fórmula de perícia é `1d20 + valor_da_perícia + atributo`**, em aritmética `long` para não
   estourar com atributos grandes (`MasterCommands.java: rollSkill`).
 - **Visibilidade da rolagem:** o Mestre vê o resultado **só para si** (rolagem secreta); o jogador
@@ -442,8 +443,8 @@ não "voltar" sozinho durante a transição (`SessionManager.java: playersCanPla
     (`SheetModelStore.java: get`, `update`, `SheetModelStore.java: TYPE`), então sobrevive a restart e a
     troca de Mestre. Ele é aplicado a **todas** as fichas: quando o Mestre salva, o servidor realinha as
     fichas já carregadas em memória (`SessionManager.java: realignAllSheets`, via `SheetModel.java: align`),
-    que dá as perícias novas, tira as removidas e **preserva o valor das que sobreviveram pelo nome**
-    (apelidos antigos inclusos). O modelo em uso dos dois lados fica em `SheetModelHolder.java: current` e é
+    que dá as perícias novas, tira as removidas e **preserva o valor das que sobreviveram pelo id**
+    (`SheetModel.java: align`). O modelo em uso dos dois lados fica em `SheetModelHolder.java: current` e é
     enviado no login e a cada edição (`RpgNetworking.java: sendSheetModel`, `broadcastSheetModel`).
   - `SheetData.java: sanitizePericias` **continua existindo como rede de segurança**, mas não prende mais a
     ficha a uma lista: ele só descarta nulo, nome vazio e nome repetido, e corta no teto do modelo. Quem
@@ -451,6 +452,32 @@ não "voltar" sozinho durante a transição (`SessionManager.java: playersCanPla
     ficha nova já nasce pelo modelo (`SheetData.java: defaultPericias`), a carga do NBT alinha na hora
     (`mixin/PlayerSheetPersistenceMixin.java: tabletopRpg$loadSheet`) e cada edição do modelo realinha as
     fichas em memória.
+- **Cada perícia tem um id próprio, gerado uma vez** (`pericia_1`, `pericia_2`, …,
+  `SheetModel.java: PericiaDef`, `: freshPericiaId`; na ficha, `SheetData.java: Pericia`). O id é a
+  identidade, o nome virou só rótulo. O que isso muda no uso:
+  - **Renomear uma perícia preserva o valor e o atributo dela** (e vice-versa) — era o bug principal
+    do alinhamento por nome. Trocar o atributo pelo dropdown também preserva o vínculo (ele já era por
+    id de atributo, agora é consistente). Vale para o Mestre renomeando no Sheet Editor e para o
+    jogador.
+  - **O editor continua recusando nome repetido**, por decisão do usuário: o id resolveu o problema do
+    rename, e a UX não mudou (`SheetModel.java: withPericiaText`).
+  - **A migração das fichas antigas funciona por posição, não por nome.** Fichas gravadas antes de
+    28/09/2026 não têm id; na leitura o id é preenchido por posição, antes de qualquer deduplicação
+    (`SheetData.java: sanitizePericias`, `: freshPericiaId`). É seguro por construção: o save antigo
+    foi gravado na ordem do modelo (o alinhamento antigo percorria a lista do modelo), então posição N
+    continua sendo `pericia_N`. O casamento por nome com os apelidos antigos
+    (`SheetData.java: periciaByNameOrLegacy`) **não é o que faz a migração funcionar hoje**: ele só
+    dispara com a lista de perícias vazia, caso em que não acha nada — fica no código por princípio de
+    defesa, inerte (`SheetModel.java: align`).
+  - **Limitação residual:** remover uma perícia do modelo com o jogador offline e depois adicionar uma
+    nova — a nova pega o menor número livre, que pode ser o da removida, e nasce **herdando o valor da
+    removida** em todas as fichas, porque o contador é reusado (`SheetModel.java: addPericia`). Remover
+    sem adicionar é seguro: os sobreviventes mantêm id e ordem, e o único valor perdido é o da
+    removida, que é o efeito desejado da remoção. **Contorno hoje:** renomear em vez de remover e
+    recriar — o rename preserva o id.
+  - **O mesmo defeito existe nos atributos, e está documentado:** se o Mestre remove um atributo e
+    adiciona outro, o novo pode nascer com o id do removido e herdar o valor dele nas fichas
+    (`SheetModel.java: addAttribute`).
 - **`Background` é um campo de texto livre da identidade** (`SheetData.java: Identity`), gravado no
   mesmo lugar dos outros campos de texto e editável na `StatusScreen` (`StatusScreen.java: buildPanel`).
   Não tem efeito mecânico: é só um rótulo descritivo que o Mestre consulta.

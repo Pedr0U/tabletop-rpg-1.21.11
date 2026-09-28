@@ -237,7 +237,26 @@ public record SheetData(
             Codec.STRING.optionalFieldOf("description", "").forGetter(Skill::description)
     ).apply(i, Skill::new));
 
+    /**
+     * Codec de NBT de UMA pericia: {@code {id, name, value, attribute}}.
+     *
+     * <p><b>28/09/2026 - por que o {@code id} e {@code optionalFieldOf} e nao
+     * {@code fieldOf} (e por que aqui e diferente do {@code id} do atributo):</b>
+     * o {@code fieldOf} obrigatorio existe em
+     * {@link Attributes.AttributeValue#CODEC} porque ele e a <b>chave de
+     * selecao</b> da migracao dos seis inteiros soltos: sem ele, um save antigo
+     * seria lido com sucesso e a migracao nunca rodaria (ver o
+     * {@link #ATTRIBUTES_CODEC} e o porque acima dele). Aqui nao existe migracao
+     * alternativa para a lista de pericias, e um {@code fieldOf} seria
+     * <b>pior</b>: uma lista antiga sem {@code id} derrubaria o
+     * {@code Codec.list} inteiro, o erro subiria para {@link #CODEC} e o
+     * jogador perderia a <b>ficha completa</b> - vida, mana, nivel, atributos e
+     * skills - e nao so as pericias. Como opcional, o id chega vazio e
+     * {@link #sanitizePericias} o preenche, que e o mesmo caminho do
+     * preenchimento por posicao usado por qualquer outra lista deste arquivo.
+     */
     private static final Codec<Pericia> PERICIA_CODEC = RecordCodecBuilder.create(i -> i.group(
+            Codec.STRING.optionalFieldOf("id", "").forGetter(Pericia::id),
             Codec.STRING.optionalFieldOf("name", "").forGetter(Pericia::name),
             Codec.INT.optionalFieldOf("value", 0).forGetter(Pericia::value),
             Codec.STRING.optionalFieldOf("attribute", "").forGetter(Pericia::attributeId)
@@ -691,21 +710,31 @@ public record SheetData(
     }
 
     /**
-     * Uma <b>perícia</b> da ficha: {@code name} + {@code value} + {@code attribute}.
+     * Uma <b>perícia</b> da ficha: {@code id} + {@code name} + {@code value} +
+     * {@code attribute}.
      *
-     * <p><b>Por que a lista é fixa:</b> o usuário decides (25/09/2026) que as
+     * <p><b>Por que a lista é fixa:</b> o usuário decide (25/09/2026) que as
      * perícias são definidas em código e personalizadas por sistema de RPG; o
      * jogador não pode criar nem apagar, só ajustar o <b>valor</b> e o
-     * <b>atributo</b> que a perícia soma. A lista que vale é
-     * {@link SheetModel} e {@link #sanitizePericias} garante que a ficha
-     * sempre tenha exatamente essa lista - nem a mais, nem a menos.
+     * <b>atributo</b> que a perícia soma. A lista que vale é a do
+     * {@link SheetModel}, e quem garante que a ficha tenha exatamente essa lista
+     * é {@link SheetModel#align} (chamado no login e a cada edição do modelo) -
+     * {@link #sanitizePericias} <b>não</b>: ele só normaliza, preenchendo o id
+     * que faltar e descartando entrada sem nome ou com id repetido.
+     *
+     * <p><b>28/09/2026: o {@code id} e a identidade, e o nome e o rotulo.</b>
+     * O id vem do {@link SheetModel.PericiaDef#id()} e e o que casa a ficha com
+     * o modelo no {@link SheetModel#align}: renomear a pericia preserva valor e
+     * atributo. Antes o NOME era a identidade, e o rename zerava o valor em
+     * silencio.
      *
      * <p>Sem descrição de propósito: o usuário não pediu descrição de perícia,
-     * e o nome já identifica a perícia. Se um dia quiser, é um campo a mais
-     * aqui e no codec.
+     * e o nome já identifica a perícia na tela. Se um dia quiser, é um campo a
+     * mais aqui e no codec.
      */
-    public record Pericia(String name, int value, String attributeId) {
+    public record Pericia(String id, String name, int value, String attributeId) {
         public static final StreamCodec<FriendlyByteBuf, Pericia> STREAM_CODEC = StreamCodec.composite(
+                ByteBufCodecs.stringUtf8(32), Pericia::id,
                 ByteBufCodecs.stringUtf8(SKILL_MAX), Pericia::name,
                 ByteBufCodecs.VAR_INT, Pericia::value,
                 ByteBufCodecs.stringUtf8(32), Pericia::attributeId,
@@ -732,16 +761,16 @@ public record SheetData(
         public static final int VALUE_MAX = 30;
 
         public Pericia {
+            // Mesmo teto de 32 e mesmo trim do id de um AttributeValue: e o
+            // mesmo papel, a chave com que a ficha liga esta pericia ao modelo.
+            id = cleanId(id);
             name = cleanSkill(name);
             value = clamp(value, VALUE_MIN, VALUE_MAX);
             // Cenario defensivo: um payload antigo, um save editado a mao ou um
             // cliente modificado poderiam mandar null. Sem isto, o NPE rebentaria
             // a ficha inteira. String vazia significa "ainda nao sabe com qual
             // atributo soma" e e resolvido por SheetModel.align.
-            attributeId = attributeId == null ? "" : attributeId.trim();
-            if (attributeId.length() > 32) {
-                attributeId = attributeId.substring(0, 32);
-            }
+            attributeId = cleanId(attributeId);
         }
 
         /** Total que esta pericia soma na rolagem: valor + atributo. */
@@ -772,31 +801,40 @@ public record SheetData(
         SheetModel model = SheetModelHolder.current();
         List<Pericia> out = new ArrayList<>(model.periciaCount());
         for (SheetModel.PericiaDef def : model.pericias()) {
-            out.add(new Pericia(def.name(), 0, def.attributeId()));
+            out.add(new Pericia(def.id(), def.name(), 0, def.attributeId()));
         }
         return List.copyOf(out);
     }
 
     /**
-     *apelidos ANTIGOS de cada pericia do padrao, indexados pelo nome ATUAL.
+     * apelidos ANTIGOS de cada pericia do padrao, indexados pelo nome ATUAL.
      * Um nome novo pode ter VARIOS apelidos velhos.
      *
-     * <p><b>Por que existe:</b> a identidade de uma pericia no NBT e o NOME
-     * (ver {@link #PERICIA_CODEC}) e {@link #sanitizePericias} casa o nome salvo
-     * com o nome do padrao. Sem este mapa toda ficha salva ANTES da mudanca
-     * perderia, <b>em silencio</b>, o valor e o atributo: o sanitize nao
-     * devolve erro, so substitui pelo padrao.
+     * <p><b>Por que existe:</b> ate 28/09/2026 a identidade de uma pericia no
+     * NBT era o NOME (ver {@link #PERICIA_CODEC}), entao o apelido antigo era o
+     * que segurava o valor de uma ficha salva antes da troca da lista.
+     *
+     * <p><b>Hoje este mapa nao e o que preserva valor nenhum</b>, e honesto
+     * dizer: ele so e alcancado por {@link #periciaByNameOrLegacy}, que o
+     * {@link SheetModel#align} chama apenas quando {@link #hasPericiaIds} e
+     * {@code false} - e isso so acontece com a lista de pericias <b>VAZIA</b>
+     * (ver o Javadoc de la), lista que nao tem nome para casar. O valor de uma
+     * ficha pre-migration sobrevive pelo <b>preenchimento posicional</b> do
+     * {@code sanitizePericias}, nao por este mapa. Ele fica porque sao
+     * utilitarios publicos e podem ser reativados; se algum dia o {@code align}
+     * voltar a precisar do apelido, ele esta aqui.
      *
      * <p><b>27/09/2026:</b> a lista trocou as 16 pericias de espaco reservado
-     * ("skill 0".."skill 15") pelas 18 basicas de D&D 5e. Duas situacoes
-     * diferentes acontecem aqui:
+     * ("skill 0".."skill 15") pelas 18 basicas de D&amp;D 5e. Duas situacoes
+     * diferentes acontecem aqui. <b>Atencao: o que cada apelido faz hoje e
+     * nenhum</b> (ver o paragrafo acima) - o texto abaixo descreve o que eles
+     * faziam quando o nome ainda era a identidade, e esta aqui por historico:
      * <ul>
      *   <li><b>Mesmo nome, apelido so em portugues.</b> "Luta" e "Acrobacia"
-     *       viraram "Melee" e "Acrobatics". O apelido antigo continua valendo,
-     *       para a ficha de quem jogou antes.</li>
+     *       viraram "Melee" e "Acrobatics".</li>
      *   <li><b>Nome mudado de verdade.</b> "Diplomacy"/"Diplomacia" nao existe
-     *       mais em D&D 5e: o equivalente e "Persuasion", mesmo atributo
-     *       (CHA). O valor antigo cai em "Persuasion" em vez de sumir.</li>
+     *       mais em D&amp;D 5e: o equivalente e "Persuasion", mesmo atributo
+     *       (CHA).</li>
      * </ul>
      *
      * <p>As 16 "skill N" <b>nao</b> aparecem aqui de proposito: elas eram
@@ -874,17 +912,15 @@ public record SheetData(
     /**
      * A pericia deste nome, aceitando tambem os apelidos antigos.
      *
-     * <p><b>27/09/2026:</b> existia mas nao era chamado por ninguem, e
-     * {@link #LEGACY_PERICIA_NAMES} so servia a ele — ou seja, a protecao contra a
-     * perda de valor de uma ficha salva ANTES da troca da lista de pericias
-     * estava escrita e desligada. O {@code align} do modelo casava o nome
-     * exato, nao achava "Acrobacia" para o padrao "Acrobatics", e o valor
-     * virava 0 <b>em silencio</b>, no proximo login ou na proxima edicao do
-     * Mestre.
-     *
-     * <p>E por isso que este metodo e o ponto de entrada do {@code align}: ele
-     * tenta o nome exato primeiro, e so depois cai nos apelidos, para nunca
-     * confundir uma pericia renomeada pelo Mestre com uma de um save antigo.
+     * <p><b>28/09/2026: so o fallback de save pre-migration chama isto - e ele
+     * hoje nao tem efeito.</b> O {@link SheetModel#align} chama este metodo
+     * <b>somente</b> quando {@link #hasPericiaIds} e {@code false}, e isso so
+     * acontece com a lista de pericias <b>VAZIA</b> (ver o Javadoc de la): com
+     * lista vazia este metodo devolve {@code null} para qualquer nome. Portanto
+     * <b>esta busca nao e o que preserva o valor de uma ficha salva ANTES da
+     * troca da lista</b>: isso e o preenchimento posicional do
+     * {@code sanitizePericias}. Fica como utilitario publico, pronto para o dia
+     * em que um alinhamento precisar dele.
      */
     public Pericia periciaByNameOrLegacy(String name) {
         Pericia exact = periciaByName(name);
@@ -1033,41 +1069,47 @@ public record SheetData(
     /**
      * Muda SÓ o valor de uma perícia (0-3), preservando o atributo.
      *
+     * <p><b>28/09/2026: o parametro e o {@code id} da pericia</b> (antes era o
+     * nome), porque e o id que o cliente recebe no
+     * {@code SheetPericiaPayload} e o que o modelo casa. O id e o nome fazem o
+     * papel inverso: o nome e o que a pessoa le.
+     *
      * <p>Usado pelas setas da lista de perícias na aba Status. Se a perícia não
      * existir na ficha, devolve a ficha intacta: a lista é fixa e não aceita
      * entrada nova.
      */
-    public SheetData withPericiaValue(String pericia, int value) {
-        return mutatePericia(pericia, existing ->
-                new Pericia(existing.name(), value, existing.attributeId()));
+    public SheetData withPericiaValue(String periciaId, int value) {
+        return mutatePericia(periciaId, existing ->
+                new Pericia(existing.id(), existing.name(), value, existing.attributeId()));
     }
 
     /**
      * Troca com qual atributo a pericia soma (botao de lista suspensa).
      *
-     * <p>27/09/2026: o parametro virou o <b>id</b> do atributo (String) em vez
-     * do enum {@code Attribute}, que nao existe mais. O id precisa existir no
-     * modelo: um id desconhecido e ignorado, e a pericia fica com o atributo que
-     * ela ja tinha.
+     * <p>27/09/2026: o parametro do atributo virou o <b>id</b> do atributo
+     * (String) em vez do enum {@code Attribute}, que nao existe mais. O id
+     * precisa existir no modelo: um id desconhecido e ignorado, e a pericia fica
+     * com o atributo que ela ja tinha. 28/09/2026: o primeiro parametro tambem
+     * passou a ser o <b>id da pericia</b>.
      */
-    public SheetData withPericiaAttribute(String pericia, String attributeId) {
+    public SheetData withPericiaAttribute(String periciaId, String attributeId) {
         if (attributeId == null || SheetModelHolder.current().attribute(attributeId) == null) {
             return this;
         }
-        return mutatePericia(pericia, existing ->
-                new Pericia(existing.name(), existing.value(), attributeId));
+        return mutatePericia(periciaId, existing ->
+                new Pericia(existing.id(), existing.name(), existing.value(), attributeId));
     }
 
     /** Altera UM campo de uma perícia existente; nunca cria nem remove. */
-    private SheetData mutatePericia(String pericia, java.util.function.UnaryOperator<Pericia> mutator) {
-        String clean = cleanSkill(pericia);
-        if (clean.isEmpty()) {
+    private SheetData mutatePericia(String periciaId, java.util.function.UnaryOperator<Pericia> mutator) {
+        Pericia target = periciaById(periciaId);
+        if (target == null) {
             return this;
         }
         List<Pericia> next = new ArrayList<>(pericias.size());
         boolean changed = false;
         for (Pericia existing : pericias) {
-            if (existing.name().equalsIgnoreCase(clean)) {
+            if (existing.id().equals(target.id())) {
                 Pericia updated = mutator.apply(existing);
                 next.add(updated);
                 changed = changed || !updated.equals(existing);
@@ -1197,7 +1239,62 @@ public record SheetData(
         return SheetModelHolder.current().align(this);
     }
 
-    /** A pericia deste nome, ou {@code null}. Busca ignora maiusculas. */
+    /**
+     * A pericia deste <b>id</b>, ou {@code null}. Busca exata, e id vazio
+     * devolvendo {@code null}.
+     *
+     * <p>E o espelho de {@link #periciaByName}: o id e a identidade (o que o
+     * {@link SheetModel#align} casa e o que o payload traz), o nome e o rotulo
+     * que o jogador le. Id desconhecido (payload forjado, pericia removida do
+     * modelo) tem de falhar, e nao casar com a linha que estiver no lugar.
+     */
+    public Pericia periciaById(String id) {
+        if (id == null || id.isEmpty()) {
+            return null;
+        }
+        for (Pericia pericia : pericias) {
+            if (pericia.id().equals(id)) {
+                return pericia;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Esta ficha ainda nao tem id de pericia.
+     *
+     * <p>Com pelo menos um id presente, a lista ja passou por
+     * {@link #sanitizePericias}, e uma pericia que nao casar por id e outra
+     * pericia (ou um bug), nao um save antigo: o {@link SheetModel#align} nao usa
+     * o nome nesse caso.
+     *
+     * <p><b>Na pratica, so a lista vazia devolve {@code false}.</b> O
+     * {@code sanitizePericias} preenche o id de toda entrada que ele retida, e
+     * nao ha como construir uma ficha com a lista mista (alguns com id, outros
+     * sem) passando pelo construtor. Por isso o fallback por nome do
+     * {@link SheetModel#align} <b>nao produz efeito hoje</b>: ele exige a lista
+     * vazia, e sobre uma lista vazia {@link #periciaByNameOrLegacy} devolve
+     * {@code null} para tudo. O que carrega o valor de um save pre-migration e o
+     * <b>preenchimento posicional</b> do {@code sanitizePericias} (ver o
+     * Javadoc de {@link SheetModel#align}).
+     */
+    public boolean hasPericiaIds() {
+        for (Pericia pericia : pericias) {
+            if (!pericia.id().isEmpty()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * A pericia deste nome, ou {@code null}. Busca ignora maiusculas.
+     *
+     * <p><b>28/09/2026: nao e mais a identidade</b> (ver
+     * {@link #periciaById}). Continua existindo para o {@code MasterCommands}
+     * ({@code /rpg roll <nome>}), para a tela mostrar o nome e para o editor
+     * recusar um nome ja usado.
+     */
     public Pericia periciaByName(String name) {
         if (name == null) {
             return null;
@@ -1261,6 +1358,20 @@ public record SheetData(
     }
 
     /**
+     * Limpa um <b>id</b> (de atributo ou de pericia): nunca {@code null}, {@code trim}
+     * e teto de 32 - o mesmo teto do {@code ByteBufCodecs.stringUtf8(32)} do codec
+     * de rede e do {@link Attributes.AttributeValue}. Id vazio significa "ainda
+     * nao tem id", e quem preenche e {@link #sanitizePericias}.
+     */
+    private static String cleanId(String text) {
+        if (text == null) {
+            return "";
+        }
+        String trimmed = text.trim();
+        return trimmed.length() > 32 ? trimmed.substring(0, 32) : trimmed;
+    }
+
+    /**
      * Descricao da skill. Descricao vazia e VALIDA (a skill aparece e apenas
      * nao abre tooltip). Respeita SKILL_DESC_MAX porque o
      * {@code ByteBufCodecs.stringUtf8(n)} lanca excecao acima desse tamanho.
@@ -1308,22 +1419,21 @@ public record SheetData(
     }
 
     /**
-     * Higiene estrutural da lista de pericias: descarta nulo, nome vazio e nome
-     * repetido, e corta no teto do modelo.
+     * Higiene estrutural da lista de pericias: o id primeiro, a deduplicacao
+     * depois.
      *
-     * <p><b>27/09/2026 (Sheet Editor) - regra mudou.</b> Este metodo JA NAO
-     * prende a ficha a lista do codigo. Antes ele reescrevia a lista inteira
-     * para casar com {@code PERICIAS_PADRAO}, o que tornava impossivel ao
-     * Mestre adicionar, renomear ou remover uma pericia em tempo de jogo.
-     *
-     * <p>Agora quem decide a lista e o {@link SheetModel}, e o metodo que
+     * <p><b>27/09/2026 (Sheet Editor) - a lista deixou de ser imposta.</b> Este
+     * metodo JA NAO prende a ficha a lista do codigo. Antes ele reescrevia a
+     * lista inteira para casar com {@code PERICIAS_PADRAO}, o que tornava
+     * impossivel ao Mestre adicionar, renomear ou remover uma pericia em tempo de
+     * jogo. Agora quem decide a lista e o {@link SheetModel}, e o metodo que
      * casa a ficha com ela e {@link SheetModel#align}. A separacao e
      * deliberada:
      * <ul>
      *   <li>Aqui: a ficha nao pode vir com lixo (nulo, vazio, duplicata) de
      *       nenhuma origem, inclusive um payload adulterado.</li>
      *   <li>Em {@code align}: a ficha ganha as pericias novas, perde as
-     *       removidas e mantem o valor das que sobreviveram pelo nome.</li>
+     *       removidas e mantem o valor das que sobreviveram pelo <b>id</b>.</li>
      * </ul>
      *
      * <p>Por que nao foi tudo deixado em {@code align}: {@code align} roda no
@@ -1332,6 +1442,20 @@ public record SheetData(
      * chamaria o align, que constroi uma ficha, que chama este metodo, que
      * chamaria o align outra vez. A limpeza fica estrutural para o loop
      * terminar.
+     *
+     * <p><b>28/09/2026 - a ordem das duas etapas e o que impede a perda da
+     * ficha inteira.</b> A deduplicacao e por {@code id}, e uma ficha gravada
+     * antes dos ids chega aqui com 18 pericias, todas sem id. Se a deduplicacao
+     * rodasse antes do preenchimento, as 18 teriam o mesmo id {@code ""}, uma
+     * venceria e a lista <b>colapsaria para 1</b>: silencioso, sem erro e sem
+     * log. Por isso o id e preenchido ANTES do {@code seen.add}, e um id vazio
+     * nunca entra no {@code seen}.
+     *
+     * <p>Se duas entradas disputarem o mesmo id - o que so acontece com um save
+     * editado a mao, porque {@link #freshPericiaId} nunca devolve um id que ja
+     * esta na lista -, quem entra primeiro vence e a outra e descartada por
+     * {@code id} repetido. O id gerado e sempre o primeiro {@code pericia_N}
+     * livre, o que torna o preenchimento deterministico e reproduzivel.
      */
     private static List<Pericia> sanitizePericias(List<Pericia> raw) {
         List<Pericia> out = new ArrayList<>();
@@ -1343,11 +1467,44 @@ public record SheetData(
             if (pericia == null || out.size() >= SheetModel.MAX_PERICIAS) {
                 continue;
             }
-            if (!pericia.name().isEmpty() && seen.add(pericia.name().toLowerCase(Locale.ROOT))) {
-                out.add(pericia);
+            if (pericia.name().isEmpty()) {
+                continue;
+            }
+            // Ver o Javadoc: preenche ANTES da deduplicacao, senao uma ficha
+            // antiga (18 pericias, todas sem id) colapsa para uma.
+            String id = pericia.id().isEmpty() ? freshPericiaId(out) : pericia.id();
+            if (seen.add(id.toLowerCase(Locale.ROOT))) {
+                out.add(new Pericia(id, pericia.name(), pericia.value(), pericia.attributeId()));
             }
         }
         return List.copyOf(out);
+    }
+
+    /**
+     * O primeiro {@code pericia_N} (N &gt;= 1) cujo id nao esta em uso na lista
+     * dada - o mesmo formato e a mesma regra do {@code SheetModel}, para que uma
+     * ficha e o modelo nunca inventem ids com a mesma cara.
+     *
+     * <p>Contador, e nao UUID, pelas mesmas duas razoes do {@code SheetModel}: o
+     * id gerado vai para o NBT e o mesmo save tem de produzir sempre o mesmo
+     * id, e um id reusado faria a pericia nova herdar, no {@link SheetModel#align},
+     * o valor da antiga. O {@code omitempty} do {@code Codec} do DataFixerUpper
+     * nao e a razao: com um id nao deterministico o campo seria sempre escrito e
+     * o arquivo fecharia igual.
+     */
+    private static String freshPericiaId(List<Pericia> current) {
+        Set<String> used = new LinkedHashSet<>();
+        for (Pericia pericia : current) {
+            if (pericia.id().isEmpty()) {
+                continue;
+            }
+            used.add(pericia.id().toLowerCase(Locale.ROOT));
+        }
+        int n = 1;
+        while (used.contains(("pericia_" + n).toLowerCase(Locale.ROOT))) {
+            n++;
+        }
+        return "pericia_" + n;
     }
 
     private static int clamp(int value, int min, int max) {
