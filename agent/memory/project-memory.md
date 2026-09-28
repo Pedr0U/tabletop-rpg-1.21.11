@@ -1236,3 +1236,14 @@ modelo real. Defeito pre-existente, nao desta migration.
 - `sanitizePericias` deduplica por id em minusculas, mas `periciaById` compara exato: um `.dat`
   editado a mao com `PERICIA_1` passaria pelo sanitize e nunca casaria (valor 0). Mesmo padrao ja
   existe nos atributos. Inconsistencia conhecida, nao bug no fluxo normal.
+
+### FATO verificado - 28/09/2026, validacao em jogo da migracao de id de pericia
+
+O usuario testou em jogo e confirmou: teste 2 (renomear preserva valor e atributo),
+teste 3 (dropdown de atributo preserva o vinculo) e teste 4 (nome repetido recusado)
+passaram; o teste 1 (ficha pre-migration) ficou para depois e, ao final, o usuario
+confirmou "deu tudo certo" - a migracao posicional esta VALIDADA empiricamente, nao
+so por teste unitario. O teste 5 (atributo customizado sobrevive ao reinicio do
+mundo) nao foi mencionado: opcional, so relevante com atributos customizados; o
+defeito pre-existente do PlayerSheetPersistenceMixin (carga antes do SERVER_STARTED)
+segue como pendencia documentada, nem confirmado nem descartado.

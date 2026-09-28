@@ -178,3 +178,23 @@ eram documentacao que mentia, e um deles (o fallback inerte) e o tipo de coisa
 que so se enxerga quando alguem tenta refazer o caminho de dados com a
 perspectiva de "e se eu quisesse quebrar isso?". A pergunta "quando exatamente
 esta condicao pode ser verdadeira?" e o que desenterra um ramo inalcancavel.
+
+## Atualizacao: validacao em jogo (28/09/2026, apos o commit 9d3d154)
+
+O usuario testou em jogo e confirmou:
+
+- **Teste 2** (renomear pericia preserva valor e atributo): passou.
+- **Teste 3** (trocar atributo pelo dropdown preserva o vinculo): passou.
+- **Teste 4** (nome repetido recusado): passou.
+- **Teste 1** (ficha pre-migration carrega com valores e atributos): o usuario
+  disse que faria depois e, ao final, confirmou "deu tudo certo" - interpretado
+  como validado junto.
+
+**A migracao posicional esta validada empiricamente**, nao so por teste
+unitario. A secao "NAO validado em jogo" acima fica superada por esta.
+
+**Teste 5** (atributo customizado sobrevive ao reinicio do mundo) nao foi
+mencionado pelo usuario - e opcional, so relevante em mundo com atributos
+customizados. O defeito pre-existente do `PlayerSheetPersistenceMixin` (carga
+antes do `SERVER_STARTED` em singleplayer) segue como pendencia documentada,
+nao confirmado nem descartado.
