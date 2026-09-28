@@ -554,10 +554,14 @@ public class StatusScreen extends CharacterSheetScreen {
         int valueX = plusX - 2 - valueW;
         int minusX = valueX - 2 - arrow;
 
-        Button minus = Button.builder(Component.literal("-"),
-                b -> stepPericiaValue(index, -1)).bounds(minusX, y, arrow, h).build();
-        Button plus = Button.builder(Component.literal("+"),
-                b -> stepPericiaValue(index, 1)).bounds(plusX, y, arrow, h).build();
+        // "-" e "+" com segurada (28/09/2026): segurar acelera. O canStep
+        // responde pelo valor OTIMISTA (pendingPericiaValue) e pelo limite, e
+        // nao pelo `active` do botao -- que so e reescrito no render, um frame
+        // atras, e deixaria a rajada estourar 1 ou 2 passos alem do teto.
+        HoldStepButton minus = new HoldStepButton(minusX, y, arrow, h, Component.literal("-"),
+                b -> stepPericiaValue(index, -1), () -> canStepPericia(index, -1));
+        HoldStepButton plus = new HoldStepButton(plusX, y, arrow, h, Component.literal("+"),
+                b -> stepPericiaValue(index, 1), () -> canStepPericia(index, 1));
         Button attr = Button.builder(Component.literal(""),
                 b -> openPericiaAttribute(index)).bounds(attrX, y, attrW, h).build();
         addRenderableWidget(minus);
@@ -607,6 +611,35 @@ public class StatusScreen extends CharacterSheetScreen {
         pendingPericiaValue.put(pericia.name(), next);
         ClientPlayNetworking.send(RpgNetworking.SheetPericiaPayload.setValue(
                 targetName, pericia.name(), next));
+    }
+
+    /**
+     * A seta ainda anda? Mesmo calculo de {@link #stepPericiaValue}, sem
+     * enviar nada.
+     *
+     * <p><b>Por que o loop de segurada nao pode usar o {@code active} do
+     * botao:</b> {@code applyStepButtons} escreve o {@code active} no render
+     * (e depois de {@code super.render()}), entao o cinza do limite so chega no
+     * frame seguinte. Confiar nele deixaria a rajada passar 1 ou 2 passos do
+     * teto; o servidor segura, e o numero piscaria enquanto o valor otimista
+     * estivesse a frente do eco ({@code keepPending}).
+     *
+     * <p>Por isso a resposta vem do valor <b>otimista</b>
+     * ({@link #displayPericiaValue}, que le {@code pendingPericiaValue}) e dos
+     * limites — igual ao clamp de {@code stepPericiaValue}, que e o mesmo
+     * {@code next != current}: os dois concordam, e nao ha overflow porque o
+     * valor gravado ja passa pelo clamp de 0 a 30. O {@code canEdit} vem junto,
+     * entao ficha somente-leitura nao envia nada.
+     */
+    private boolean canStepPericia(int index, int delta) {
+        if (!canEdit || sheet == null || index >= sheet.pericias().size()) {
+            return false;
+        }
+        SheetData.Pericia pericia = sheet.pericias().get(index);
+        int current = displayPericiaValue(pericia);
+        int next = Math.max(SheetData.Pericia.VALUE_MIN,
+                Math.min(SheetData.Pericia.VALUE_MAX, current + delta));
+        return next != current;
     }
 
     /** Valor a exibir: o otimista se houver, senao o do servidor. */
@@ -663,14 +696,51 @@ public class StatusScreen extends CharacterSheetScreen {
         int valueX = minusX + arrow + WIDGET_GAP;
         int plusX = valueX + valueW + WIDGET_GAP;
 
-        Button minus = Button.builder(Component.literal("-"),
-                b -> stepNumeric(attributeId, -ARROW_STEP)).bounds(minusX, y, arrow, h).build();
-        Button plus = Button.builder(Component.literal("+"),
-                b -> stepNumeric(attributeId, ARROW_STEP)).bounds(plusX, y, arrow, h).build();
+        // "-" e "+" com segurada (28/09/2026): segurar acelera. O canStep
+        // responde pelo valor OTIMISTA (numericValue -> pendingNumeric) e pelo
+        // piso/teto, e nao pelo `active` do botao -- que so e reescrito no
+        // render, um frame atras, e deixaria a rajada estourar o limite.
+        HoldStepButton minus = new HoldStepButton(minusX, y, arrow, h, Component.literal("-"),
+                b -> stepNumeric(attributeId, -ARROW_STEP),
+                () -> canStepAttribute(attributeId, -ARROW_STEP));
+        HoldStepButton plus = new HoldStepButton(plusX, y, arrow, h, Component.literal("+"),
+                b -> stepNumeric(attributeId, ARROW_STEP),
+                () -> canStepAttribute(attributeId, ARROW_STEP));
         addRenderableWidget(minus);
         addRenderableWidget(plus);
 
         attrRows.add(new AttrRow(valueX, y, valueW, h, attributeId, minus, plus));
+    }
+
+    /**
+     * A seta do atributo ainda anda? Mesmo piso/teto de {@link #applyStepButtons}
+     * ({@link SheetData.Attributes#VALUE_MIN}/{@code VALUE_MAX}), sem enviar nada.
+     *
+     * <p><b>Por que o loop de segurada nao pode usar o {@code active} do
+     * botao:</b> {@code applyStepButtons} escreve o {@code active} no render
+     * (e depois de {@code super.render()}), entao o cinza do limite so chega no
+     * frame seguinte. Confiar nele deixaria a rajada passar 1 ou 2 passos do
+     * teto; o servidor segura, e o numero piscaria enquanto o valor otimista
+     * estivesse a frente do eco ({@code keepPending}).
+     *
+     * <p>Por isso a resposta vem do valor <b>otimista</b>
+     * ({@link #numericValue}, que le {@code pendingNumeric}) e do
+     * {@code canEdit} — o mesmo par que {@code applyStepButtons} usa, so que
+     * sem o atraso de um frame. Ficha somente-leitura nao envia nada.
+     *
+     * <p>A soma e a <b>mesma</b> de {@link #stepNumeric}
+     * ({@link CharacterSheetScreen#saturatingAdd}), para os dois nunca
+     * discordarem sobre overflow; o clamp do teto e o daqui, igual ao de
+     * {@link #applyStepButtons}.
+     */
+    private boolean canStepAttribute(String attributeId, int delta) {
+        if (!canEdit || sheet == null) {
+            return false;
+        }
+        int current = numericValue(attributeId);
+        int next = Math.max(SheetData.Attributes.VALUE_MIN,
+                Math.min(SheetData.Attributes.VALUE_MAX, saturatingAdd(current, delta)));
+        return next != current;
     }
 
     /**
@@ -825,8 +895,8 @@ public class StatusScreen extends CharacterSheetScreen {
     }
 
     /**
-     * O servidor respondeu: o valor autoritativo substitui o otimista das
-     * setas e do dropdown de atributo.
+     * O servidor respondeu: o valor autoritativo substitui o otimista do
+     * dropdown de atributo, e o valor das pericias so quando o eco o alcança.
      *
      * <p>Fica em {@code onSheetReceived} e nao em {@code applyExtraState}
      * porque abrir o dropdown recria os widgets ({@code init()}) no mesmo
@@ -835,8 +905,38 @@ public class StatusScreen extends CharacterSheetScreen {
      */
     @Override
     protected void onSheetReceived() {
+        reconcilePericiaValues();
+        pendingPericiaAttribute.clear();
+    }
+
+    /**
+     * Regra do eco ({@code CharacterSheetScreen.keepPending}) aplicada ao valor
+     * das pericias: sai o que o servidor alcançou e o que estiver fora de
+     * [0, 30]. Uma pericia que saiu do modelo conta como descartada, porque a
+     * ficha nova nao tem valor autoritativo para alcancar.
+     */
+    private void reconcilePericiaValues() {
+        if (sheet == null) {
+            pendingPericiaValue.clear();
+            return;
+        }
+        pendingPericiaValue.entrySet().removeIf(entry -> {
+            SheetData.Pericia pericia = sheet.periciaByName(entry.getKey());
+            return pericia == null || !keepPending(entry.getValue(), pericia.value(),
+                    SheetData.Pericia.VALUE_MIN, SheetData.Pericia.VALUE_MAX);
+        });
+    }
+
+    /**
+     * O Mestre trocou o modelo: o valor otimista das pericias e do dropdown e
+     * do modelo ANTERIOR, entao sai inteiro (a regra do eco e para a rajada, que
+     * aqui ja morreu com os widgets recriados).
+     */
+    @Override
+    public void onModelChanged() {
         pendingPericiaValue.clear();
         pendingPericiaAttribute.clear();
+        super.onModelChanged();
     }
 
     @Override

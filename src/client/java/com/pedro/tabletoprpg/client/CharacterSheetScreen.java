@@ -7,6 +7,7 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.EditBox;
+import net.minecraft.client.gui.components.events.GuiEventListener;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.Style;
@@ -190,8 +191,11 @@ public abstract class CharacterSheetScreen extends Screen {
     protected final List<TextLine> textLines = new ArrayList<>();
 
     /**
-     * Valores otimistas das barras (HP/Mana). Clique rapido antes da resposta
-     * do servidor geraria o mesmo valor duas vezes sem isto.
+     * Valores otimistas das barras (HP/Mana) e dos atributos. Clique rapido
+     * antes da resposta do servidor geraria o mesmo valor duas vezes sem isto.
+     *
+     * <p>O eco do servidor <b>nao</b> apaga este mapa inteiro: ver
+     * {@link #reconcilePendingNumeric} e {@link #keepPending}.
      */
     private final Map<String, Integer> pendingNumeric = new HashMap<>();
 
@@ -256,8 +260,9 @@ public abstract class CharacterSheetScreen extends Screen {
         }
         this.sheet = payload.sheet();
         this.canEdit = payload.canEdit();
-        // O servidor falou: o valor autoritativo substitui o otimista.
-        pendingNumeric.clear();
+        // O servidor falou, e o autoritativo substitui o otimista -- mas so
+        // quando ele ALCANCA o que foi enviado (ver reconcilePendingNumeric).
+        reconcilePendingNumeric();
         onSheetReceived();
         applySheetToWidgets();
     }
@@ -266,11 +271,13 @@ public abstract class CharacterSheetScreen extends Screen {
      * Chamado <b>somente</b> quando uma ficha chega do servidor (e nao em cada
      * {@code init()}).
      *
-     * <p><b>Por que o gancho existe:</b> a tela limpa o estado otimista
-     * quando o servidor responde, para nao ficar um valor "fantasma" se a
-     * operacao for recusada. Mas {@code applyExtraState()} tambem roda no fim
-     * do {@code init()}, e abrir/fechar uma tela filha (o dropdown de atributo)
-     * provoca um {@code init()} <b>no mesmo instante</b> em que o otimismo foi
+     * <p><b>Por que o gancho existe:</b> a tela concilia o estado otimista
+     * quando o servidor responde, para nao ficar um valor "fantasma" quando o
+     * valor enviado e recusado ou corrigido pelo servidor (o que sobra e o que a
+     * rajada ainda nao alcancou — {@link #keepPending}). Mas
+     * {@code applyExtraState()} tambem roda no fim do {@code init()}, e
+     * abrir/fechar uma tela filha (o dropdown de atributo) provoca um
+     * {@code init()} <b>no mesmo instante</b> em que o otimismo foi
      * criado — o usuario veria o valor antigo ate a ficha voltar. Por isso o
      * "o servidor respondeu" e separado do "reconstrui os widgets".
      */
@@ -358,6 +365,69 @@ public abstract class CharacterSheetScreen extends Screen {
     }
 
     /**
+     * Regra do eco: um pendente so e descartado quando o autoritativo o
+     * <b>alcancou</b> (iguais) ou quando ele e invalido para o campo.
+     *
+     * <p><b>28/09/2026, rajada por segurada — por que isto NAO pode ser um
+     * {@code clear()}:</b> cada passo da rajada manda um payload, e cada payload
+     * faz o servidor chamar {@code broadcastSheet}. Com 25 passos/s e uns 50 ms
+     * de ida e volta, o eco do passo N chega quando o cliente ja esta no passo
+     * N+3. O {@code clear()} apagava aqui o valor otimista ainda em uso: o
+     * passo seguinte partia de um numero velho, reenviava um valor MENOR que o
+     * ja gravado, e o numero subia e voltava na tela. O servidor nunca
+     * corrompia (ele limita), mas a aceleracao prometida nao se materializava.
+     *
+     * <p><b>A regra:</b> pendente igual ao autoritativo = sincronizado, some.
+     * Diferente = a rajada esta a frente do servidor, o pendente e o passo mais
+     * recente e fica. Isso se auto-cura sem timeout e sem sinalizacao: o
+     * servidor aplica em ordem, entao o <b>ultimo</b> eco traz o valor do
+     * <b>ultimo</b> passo enviado -- que e exatamente o pendente -- e a
+     * igualdade acontece sozinha.
+     *
+     * <p><b>Rede de seguranca:</b> um pendente FORA de
+     * {@code [min, max]} e descartado mesmo sem igualdade. Sem isto, um eco que
+     * nunca alcancasse o pendente (o servidor corrigindo por uma regra que o
+     * cliente nao conhece) deixaria a tela mostrando um numero invalido
+     * indefinidamente. Descartar volta ao valor autoritativo, que e o pior
+     * caso aceitavel.
+     *
+     * @param pending       valor otimista guardado na tela
+     * @param authoritative valor que veio do servidor neste eco
+     * @param min           piso legal do campo
+     * @param max           teto legal do campo
+     * @return {@code true} se o pendente deve continuar valendo
+     */
+    protected static boolean keepPending(int pending, int authoritative, int min, int max) {
+        if (pending == authoritative) {
+            return false; // o servidor alcanco o ultimo passo enviado
+        }
+        return pending >= min && pending <= max;
+    }
+
+    /**
+     * Aplica {@link #keepPending} a cada pendente de {@link #pendingNumeric},
+     * campo a campo. E o eco do estado ({@link #onSheetState}); os resets
+     * legitimos (modelo novo, tela recriada) limpam o mapa inteiro na mao.
+     *
+     * <p>A faixa legal e a do atributo
+     * ({@link SheetData.Attributes#VALUE_MIN}/{@code VALUE_MAX}), que e o
+     * campo que a rajada escreve. Para os outros campos do mesmo mapa (HP e
+     * Mana, que nao tem teto na tela) um pendente fora dessa faixa e
+     * simplesmente descartado e o valor autoritativo aparece: e a direcao
+     * segura, e nao muda nada no uso normal, porque o eco do proprio clique traz
+     * o mesmo numero.
+     */
+    private void reconcilePendingNumeric() {
+        if (sheet == null) {
+            pendingNumeric.clear();
+            return;
+        }
+        pendingNumeric.entrySet().removeIf(entry -> !keepPending(entry.getValue(),
+                sheet.getNumeric(entry.getKey()),
+                SheetData.Attributes.VALUE_MIN, SheetData.Attributes.VALUE_MAX));
+    }
+
+    /**
      * Soma que trava no limite do {@code int} em vez de dar a volta.
      *
      * <p><b>Por que importa aqui:</b> os atributos tem teto 30 e piso -30
@@ -365,8 +435,14 @@ public abstract class CharacterSheetScreen extends Screen {
      * pericia tem piso 0. Com {@code base + delta} simples, um valor em
      * {@code Integer.MAX_VALUE} mais um clique viraria {@code MIN_VALUE} e esse
      * numero negativo seria gravado na ficha do servidor.
+     *
+     * <p><b>Por que e {@code protected}:</b> e a <b>unica</b> conta desta tela
+     * e {@code canStepAttribute} usa a mesma, para o botao e o passo nunca
+     * discordarem sobre overflow ({@code ARROW_STEP} maior que 1 faria
+     * {@code canStep} e {@code stepNumeric} divergirem). Nao ha duas politicas
+     * de soma para conferir.
      */
-    private static int saturatingAdd(int base, int delta) {
+    protected static int saturatingAdd(int base, int delta) {
         long sum = (long) base + delta;
         return (int) Math.max(Integer.MIN_VALUE, Math.min(Integer.MAX_VALUE, sum));
     }
@@ -382,8 +458,14 @@ public abstract class CharacterSheetScreen extends Screen {
      * de atributos e de pericias vem do modelo, entao os widgets velhos apontam
      * para linhas que podem nao existir mais. {@code rebuildWidgets()} limpa os
      * filhos e chama {@code init()}, que ja refaz o layout do zero.
+     *
+     * <p>Limpa o estado otimista inteiro, e nao so o que o eco alcancou
+     * ({@link #keepPending}): aqui o valor pendente e do modelo ANTERIOR, e nao
+     * de uma rajada em andamento. A rajada em si morre com os widgets
+     * recriados.
      */
     public void onModelChanged() {
+        pendingNumeric.clear();
         rebuildWidgets();
     }
 
@@ -425,6 +507,28 @@ public abstract class CharacterSheetScreen extends Screen {
 
         // Preenche com o estado atual, se ja tiver chegado do servidor.
         applySheetToWidgets();
+    }
+
+    /**
+     * Um tick da tela: e o que empurra o tempo para dentro dos
+     * {@link HoldStepButton}, porque {@code AbstractWidget} nao tem
+     * {@code tick()} (confirmado no jar do 1.21.11) e o estado de segurada mora
+     * no widget, nao aqui.
+     *
+     * <p>So e preciso percorrer {@code children()}: e a lista onde
+     * {@code addRenderableWidget} registra tudo, e o que o
+     * {@code rebuildWidgets()} limpa. Por isso uma rajada que estava segurando
+     * e cortada quando os widgets sao recriados (scroll da coluna de pericias,
+     * troca de modelo, resize) — em vez de a tela ficar repetindo para sempre
+     * sem ninguem para, que era o outro desfecho possivel.
+     */
+    @Override
+    public void tick() {
+        for (GuiEventListener child : children()) {
+            if (child instanceof HoldStepButton hold) {
+                hold.tick();
+            }
+        }
     }
 
     /**
