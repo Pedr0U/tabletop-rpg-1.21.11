@@ -33,5 +33,6 @@
   "screen.tabletoprpg.sheet_editor.reset": "Reset",
   "screen.tabletoprpg.sheet_editor.close": "Close",
   "screen.tabletoprpg.sheet_editor.unsaved": "unsaved changes",
+  "screen.tabletoprpg.sheet_editor.pericia_no_name": "pericia without a name",
   "screen.tabletoprpg.sheet_editor.scroll_hint": "scroll to see more"
 }

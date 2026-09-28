@@ -495,7 +495,8 @@ public class MasterCommands {
      * e separado em "1d20 (12) + 2 + 3 = 17" para o jogador ver de onde saiu.
      *
      * <p>A aritmética e feita em {@code long} e convertida no fim: o atributo
-     * tem teto 30 mas <b>sem piso</b> (e {@code long} evita que o conjunto estoure).
+     * tem teto 30 e <b>piso -30</b> (decisao do usuario, 27/09/2026), e o
+     * {@code long} evita que o conjunto estoure.
      *
      * <p>Visibilidade igual a {@code /rpg roll} normal: o mestre ve so para si,
      * o jogador ve para todos.

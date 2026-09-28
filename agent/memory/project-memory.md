@@ -734,3 +734,309 @@ Vários desses textos eram Javadoc de 26/09, nao deste diff.
   caracteres realmente corrompidos sao U+FFFD ou bytes soltos na faixa 0xD0-0xDD. Nesta
   sessao o texto estava SAO e quase apaguei acentos legitimos. Regra ja esta no AGENTS.md;
   aqui so o caso concreto.
+
+---
+
+## 2026-09-27 - Correcao dos 7 bugs de ficha/editor (commit 7777eb7 + esta rodada)
+
+Contexto: o usuario deu pull no commit `7777eb7` ("Item de Personalizacao da Ficha", 2902
+linhas, com `SheetModel` novo) e reportou 7 defeitos em teste no jogo. Corrigidos aqui.
+
+### FATO verificado - armadilhas de Java no Minecraft UI
+
+**Parametro de metodo capturado em lambda e CONGELADO por valor.** Foi a causa de 2 bugs com
+sintoma enganoso (o widget responde ao clique, entao "parece funcionar"):
+- `toggleField` usava `boolean next = !current;` com `current` como parametro -> todo clique
+  enviava o mesmo booleano. Sintoma: toggle "so muda 1 vez".
+- `periciaRow` usava `String originalName` capturado no `setResponder` -> apos a 1a tecla
+  `periciaByName(originalName)` devolvia `null`, o early-return revertia e o EditBox voltava ao
+  nome antigo. Sintoma: "so aparece a primeira letra".
+Padrao correto: holder mutavel (`boolean[] on = {current}`), igual ao `xpModeField` do mesmo
+arquivo, que ja ciclava certo. Contraste dentro do proprio arquivo foi a prova.
+
+**Valor de retorno de `addRenderableWidget` descartado = bug silencioso.** Sem campo para o
+widget, nao ha onde atualizar `active`. O botao Salvar ficava sempre ligado.
+
+### FATO verificado - `active` de widget e questao de ORDEM, nao so de logica
+
+`button.active` precisa ser decidido em **UM** lugar, e esse lugar tem de rodar **antes** de
+`super.render()`, que e quem desenha os widgets. Dois autores no mesmo campo, em frames
+diferentes, produz 1 frame de divergencia visivel (botao branco e depois cinza).
+
+Armadilha especifica deste projeto: a superclasse `CharacterSheetScreen` escreve `active` em
+`renderContent`, que roda **DEPOIS** de `super.render()`. A subclasse `SheetEditorScreen` nao
+extende ela (extende `Screen` direto) e sobrescreve `render`. Os dois pontos tem um frame de
+atraso diferente, e a ordem importa. `Screen.render` **nao e final** em 1.21.11.
+
+Piscar de botao era isto: eco do servidor -> `onSheetState` -> `applyExtraState` reativa tudo
+(inclusive o `-` travado em 0) -> frame seguinte o render desativa. Como qualquer campo editado
+dispara o eco, o usuario via piscar "ao interagir em qualquer lugar".
+
+### FATO verificado - largura de texto em pixel
+
+`valueBoxWidth()` media `Integer.toString(teto)` = `"30"` = 16px, e esqueca o sinal: `"-30"` =
+18px nao cabia. Atributo tinha guarda `plainSubstrByWidth` e cortava para `-3`; pericia nao
+tinha guarda e invadiria 1px. **Sempre medir o pior caso real com `font.width()`**, nunca
+assumir um literal. Font vanilla = 6px por char. As guardas de truncamento continuam obrigatorias
+porque o valor pode vir de payload forjado (o servidor recorta, mas o cliente precisa se
+defender visualmente). So da para conferir isso em jogo: `font.width` e runtime.
+
+### FATO verificado - `UseItemCallback` nesta versao
+
+Assinatura e `(Player, Level, InteractionHand)`: **3 params, NAO ha `ItemStack`**. O stack vem
+de `player.getItemInHand(hand)`. Assinatura com 3 params e `ItemStack` no lugar do `Level`
+produz `incompatible types: Level cannot be converted to InteractionHand`.
+
+### FATO verificado - `StreamCodec.composite` aceita 12 campos
+
+Corrige Javadoc antigo que dizia 6 (achado na pesquisa do `SheetModel`). Nao ha limite 6.
+
+### DECISAO do usuario (27/09/2026) - limites de valor
+
+- **Atributo: teto 30 e PISO -30.** O piso ja existia no `7777eb7` (`SheetData.Attributes.VALUE_MIN`),
+  mas o botao `-` nunca desligava, entao dava para pedir -31 e o servidor cortava, fazendo o
+  numero piscar. Agora os DOIS botoes desligam no limite.
+- **Pericia: 0 a 30.** Perguntado explicitamente; o usuario escolheu manter o piso 0.
+
+Lembrar: antes do `7777eb7` o atributo era "sem piso" (`Integer.MIN_VALUE`). Drift de doc
+corrigido nesta rodada em `SheetData.java`, `CharacterSheetScreen.java` (Javadoc de
+`saturatingAdd`) e `MasterCommands.java` (Javadoc de `rollSkill`).
+
+### FATO verificado - identidade de pericia: POSICAO, e o por que importa
+
+`SheetModel.PericiaDef` e `record PericiaDef(String name, String attributeId)`: **nao tem id**.
+O conserto do bug de rename usou **posicao na lista** (`periciaAt(pos)`) como identidade, e nao
+o nome. Posicao sobrevive a `withPericiaText`, `removePericia`, `removeAttribute` e reordenacao
+(verificado). Atributo tem id, poricia nao. Se um dia entrar id em `PericiaDef`, e schema + codec
++ compatibilidade de save: mudanca de alto impacto, precisa de aprovacao.
+
+### PENDENTE, nao resolvido - perda de valor ao renomear pericia (achado I3)
+
+`SheetModel.align` identifica a pericia por **NOME** (`periciaByNameOrLegacy`). Usado por
+`SheetData.aligned()` e por `PlayerSheetPersistenceMixin`. Ao salvar modelo com nome novo: nao
+casa -> `found == null` -> a pericia **perde o valor (vai a 0) e perde o atributo escolhido pelo
+Mestre**. Pre-existente, travado num teste que passa
+(`SheetModelCodecTest.renamingPericiaIsALossyIdentityChange`) e documentado como limitacao
+conhecida. Nao e regressao, mas o conserto do bug 3 deixa o rename mais confiavel, o que aumenta
+a chance de o Mestre renomear e salvar. **Aguardando decisao do usuario.**
+
+Tambem: `stepNumeric`/`saturatingAdd` na superclasse seguem **sem clamp**. O piso -30 e
+garantido so pela UI. Hoje nenhum `addField` aponta para atributo, entao esta fechado; outro
+caminho que escrevesse atributo reabriria o piscamento.
+
+### FATO verificado - o catalogo precisa entrar no mesmo commit da feature
+
+`FUNCIONALIDADES-E-COMANDOS.md` nao era FINDO por causa desta rodada: o `7777eb7` trouxe 2902
+linhas de codigo novo (item, `SheetEditorScreen`, `SheetModel`, `SavedData`) e **zero** linhas de
+catalogo. Busca confirmou zero ocorrencias de `SheetModel`, `sheet_editor`, `Sheet Editor`.
+
+Falsidades adicionais que a leitura do codigo revelou (alem das que a rodada já corrigia):
+- **`SheetData.PERICIAS_PADRAO` NAO EXISTE MAIS.** 4 citacoes do catalogo apontam para simbolo
+  removido. O padrao das 18 vive em `SheetModel.defaults()`.
+- O enum de 6 atributos foi removido; `AttributePickerScreen` agora usa os atributos do modelo
+  (1 a 10, com scroll).
+- "o unico bloco gravado em disco e a ficha" era falso: `SheetModelStore` (SavedData do
+  overworld) **sobrevive a restart**.
+- O detector `check-catalogo.ps1` so acusa comando, tela e tecla. Ele **nao acusa regra de jogo
+  nem feature nova**: os 4 itens acima passaram com `DIVERGENCIA: 0`. Regra e feature nova exigem
+  leitura.
+
+Regra da skill que evito erro: citar **simbolo**, nunca numero de linha. Os literais fixos
+`"Level"`/`"XP"` na lista de `fieldLabelWidth` ignoravam o rename do Mestre; agora vem de
+`SheetData.LABELLED_FIELDS` + `SheetModel.labelOf`.
+
+### PAPEL do validador nesta rodada
+
+Achou 0 bloqueadores e 4 importantes em 7 fixes. Dois que valem como metodo: ele refez uma
+afirmacao minha (disse que os testes nao cobriam nada; `SheetModelCodecTest` fixa os invariantes
+de modelo em que o bug 3 se apoia) e checou assinatura real com `javap` em vez de confiar no
+relato do implementador. Sempre delegar verificacao apos alterar.
+
+### Pendencia de rodape do editor
+
+Largura fixa de 418px (4 botoes de 100 + 3 folgas de 6) quebrava abaixo de 418px de largura GUI:
+1600x900 com escala 4 (width 400) dava `x = -9`; 1920x1080 escala 5 (width 384) dava `x = -17`.
+Corrigido com `span = min(colW(), width)`, encolhendo `bw` e `gap`. **Lembrar: usar `colW()`,
+nunca largura fixa em pixel, em widget de tela.**
+
+### PLANO APROVADO, NAO EXECUTADO - id estavel em PericiaDef (decisao do usuario 27/09/2026)
+
+O usuario APROVOU a correcao de perda de dado ao renomear pericia, mas pediu para executar
+**depois** do teste em jogo dos 7 bugs. Nao comecar sem novo pedido. Resumo do plano para
+retomar:
+
+Variante aprovada (a-prime): `String id` em `SheetModel.PericiaDef` **e** em
+`SheetData.Pericia`, espelhando o que `AttributeDef` ja faz. Derivar o id no construtor
+compacto **so quando vier vazio**, a partir do nome normalizado e limitado a 32 chars (como
+`attributeId` faz). A condicao "so quando vazio" e o que impede a recauda: `withPericiaText`
+passa a repassar `def.id()`, entao o rename nao re-deriva nada do nome novo.
+
+8 arquivos, ~30 pontos, uma rodada: `SheetModel.java`, `SheetData.java`, `RpgNetworking.java`,
+`StatusScreen.java`, `SheetEditorScreen.java`, `AttributePickerScreen.java`,
+`SheetModelCodecTest.java`, `FUNCIONALIDADES-E-COMANDOS.md`.
+
+Call sites a trocar de nome para id: `SheetData.withPericiaValue`, `SheetData.withPericiaAttribute`,
+`SheetModel.withPericiaText`, `SheetModel.removePericia`. **`MasterCommands.findPericia` fica por
+nome de proposito** (e o design de `/rpg roll <nome>`).
+
+Atalho que corta ~21 edicoes: como o id e derivado no construtor, as 18 linhas de
+`SheetModel.defaults()`, o `"Skill N"` e o reparo de atributo ficam intocadas.
+
+Riscos que sobraram (todos confirmados em leitura):
+- **`optionalFieldOf("id","")` e obrigatorio, NUNCA `fieldOf`.** `Attributes.AttributeValue.CODEC`
+  usa `fieldOf("id")` e, como o grupo tem alternativa legada com todos os campos opcionais, um
+  registro ruim **nao da erro**: vira zeros em silencio. Nao copiar aquele padrao.
+- Falha de parse do `SavedData` e engolida (`Failed to parse saved data for ...`) e cai no
+  factory, o que dispara `realignAllSheets` e reescreve todas as fichas. Pior resultado possivel.
+- **Id precisa ser deterministico entre boots**: nao ha `setDirty()` no `SheetModelStore.get()`,
+  entao o modelo antigo em disco nao e reescrito no upgrade. Geracao variavel entre boots zera as
+  fichas no proximo `align`.
+- Quebra de layout de pacote: aceitavel porque o projeto ja exige cliente e servidor na mesma
+  versao (codec posicional da identidade).
+- `LEGACY_PERICIA_NAMES` **fica**: 6 fichas reais em `run\saves\New World\playerdata` usam
+  `Diplomacia`/`Acrobacia`/`pericia N`.
+- Nao existe `tabletop_rpg_sheet_model.dat` em nenhum mundo, entao a migracao do modelo precisa
+  so de cobertura em teste, nao de plano de recuperacao de arquivo.
+- Nenhum mixin muda de assinatura; `PlayerSheetPersistenceMixin` so chama `model.align(sheet)`,
+  mas e mudanca de comportamento na carga e precisa de teste em jogo.
+
+`SheetModelCodecTest.renamingPericiaIsALossyIdentityChange` (hoje trava a perda) precisa ser
+**invertido** para verificar que valor e atributo sobrevivem ao rename. Adicionar 4 testes.
+
+Validacao em jogo, obrigatoria e nao substituivel por build: valor 5 + atributo nao padrao ->
+renomear no Sheet Editor -> Salvar -> conferir os dois -> **reiniciar o servidor e conferir de novo**
+(testa o determinismo) -> conferir que `Failed to parse saved data` nao aparece e que
+`N ficha(s) realinhada(s)` nao e o total de jogadores a cada boot -> `/rpg roll <nome novo>`
+ainda respondendo.
+
+### Estado da entrega em 27/09/2026
+
+7 bugs corrigidos, build verde, aguardando **teste em jogo do usuario**. Diff nao commitado:
+6 arquivos `.java` + `FUNCIONALIDADES-E-COMANDOS.md` + `agent/memory/project-memory.md` + relatorio
+novo `agent/reports/2026-09-27_correcoes-7-bugs-ficha.md`. Sem commit, sem push.
+
+## 2026-09-28 - Layout, validacao e rascunho do editor (rodada 2 de correcao de bug)
+
+O usuario **confirmou** que os 7 bugs da rodada anterior estao corrigidos. Reportou 6 defeitos
+novos, todos de layout/validacao. Achados pela revisao: 1 BLOQUEADOR + 3 IMPORTANTES, todos
+corrigidos. Relatorio: `agent/reports/2026-09-28_layout-validacao-rascunho-editor.md`.
+
+### FATO verificado - `removed()` e o hook de TODA saida de tela
+
+`onClose()` cobre **so** ESC e o botao de fechar. Abrir o inventario (tecla E) ou qualquer outra
+tela com um editor aberto e sujo passa por `Screen.removed()`, que `Minecraft.setScreen` chama em
+qualquer troca. Sem sobrescrever `removed()`, fechar o item por outra rota **jogava o rascunho
+fora**. `removed()` existe em 1.21.11 e **nao e final**.
+
+### FATO verificado - `static` de tela precisa entrar no cleanup de desconexao
+
+**Este foi o BLOQUEADOR da rodada.** `SheetEditorScreen.draft` e `pendingNames` sao `static`
+(precisam ser: `TabletopRpgClient.java` faz `new SheetEditorScreen()` a cada abertura, entao
+campo de instancia nao resolveria). Mas o cleanup de `ClientPlayConnectionEvents.DISCONNECT` em
+`TabletopRpgClient.registerConnectionCleanup()` so zerava `SheetModelHolder`.
+
+Cenario: edita no Mundo A, aperta ESC, desconecta, entra no Mundo B, abre o item -> `takeDraft()`
+devolve o modelo do **Mundo A** e o `SheetModelSavePayload` faz o **`SheetModelStore` do Mundo B
+passar a ser o modelo do Mundo A, persistido**. Sobrescrita de dados entre mundos.
+
+**Regra que decorre disso:** sempre que criar um `static` de tela, procurar o cleanup de
+desconexao existente e **se cadastrar nele**. Camada de estado nova nao entra sozinha. O
+`static` de tela e por JVM de cliente (um jogador local), nao por servidor.
+
+Correcao: `SheetEditorScreen.discardTransientState()` (publico, delega para `clearDraft()`, entao
+os dois nao divergem) chamado no `DISCONNECT`, logo apos zerar o `SheetModelHolder`.
+
+### FATO verificado - ordem entre `removed()` e DISCONNECT nao e garantida
+
+Se `removed()` rodar **depois** do handler de desconexao, recria o rascunho que o cleanup
+acabou de zerar, desfezendo a correcao acima. A API nao garante a ordem. Blindagem usada:
+`captureDraft()` so registra com `this.minecraft.getConnection() != null`. Nao ha perda de
+rascunho, porque ESC/Close/inventario acontecem com conexao viva.
+
+### FATO verificado - nao degradar texto cortando caractere
+
+`drawValue` ganhou guarda de truncamento e passou a **mentir**: com rotulo longo, `labelW`
+cresce -> `boxW` encolhe -> a barra encolhe, e `"9999 / 9999"` (~61px) saia como `"1234 /"`.
+Leitura plausivel e **errada** de um recurso. **Degradar o formato, nao cortar:**
+`"hp / hpMax"` -> so o valor atual -> corte (so valor forjado fora da faixa legal).
+Corte parcial de um formato e pior que corte: o usuario le numero plausivel e errado.
+
+**Corte silencioso tambem e pior que corte com reticencias.** Sem a marca, o usuario le um
+truncado como se fosse o nome completo. Usar `"..."` (3 pontos), que e o glifo mais barato da
+fonte (6px) e nao depende da fonte ter aquele caractere.
+
+### FATO verificado - API 1.21.11, corrigida por javap
+
+Correcoes em relacao ao que se assume por memoria:
+- **`FormattedCharSequence` esta em `net.minecraft.util`**, nao em `network.chat`.
+- Ela **nao tem `length()`**, **nao estende `FormattedText`**, e so se percorre com
+  `accept(FormattedCharSink)`. Por isso nao da para chamar `getString()` nela nem passar para
+  `Component.literal`.
+- `FormattedText` **tem** `getString()`.
+- `Font.split(FormattedText,int)` chama `getSplitter().splitLines(text, maxWidth, Style.EMPTY)`,
+  entao `getString()` da 1a linha do `splitLines` e um **prefixo real** do texto. E o jeito
+  correto de descobrir onde a 1a linha termina, sem `while` decrementando `text.length()`.
+- `Font.getSplitter()` e publico; `Font.width(FormattedCharSequence)` retorna `int`.
+
+Ferramentas nesta maquina: `javap` **nao esta no PATH**, esta em
+`C:\Program Files\Java\jdk-21.0.12\bin\javap.exe`. O jar mapped com as classes esta em
+`~/.gradle/caches/fabric-loom/minecraftMaven/net/minecraft/minecraft-common/1.21.11-loom.mappings.*/...jar`.
+`~/.gradle/caches/fabric-loom/1.21.11/minecraft-client-only.jar` **nao** contem essas classes, e
+dar `class not found` com ele engana (fiz o erro de concluir que a classe nao existia).
+
+### FATO verificado - `splitEnvironmentSourceSets()` e por que `static` de tela e seguro
+
+`build.gradle` usa `splitEnvironmentSourceSets()`, entao `src/client/java` **nao entra** no
+classpath do servidor dedicado, e a unica referencia a `SheetEditorScreen` e em
+`TabletopRpgClient`. Logo `static` de tela = por JVM de cliente = **um jogador local**. Nao ha
+compartilhamento entre jogadores nem no servidor dedicado. (A hipotese de que o servidor
+carregasse a classe e carregaria o `static` foi refutada.)
+
+### FATO verificado - janela estreita nao comporta 2 linhas, e isso e fisico
+
+O wrap de rotulo em 2 linhas depende de `rowH >= 17`. Com 18 linhas, `rowH = max(12, min(20,
+(altura-86)/neededRows))` chega a 12-13px em GUI 480x270 (escala 4), e duas linhas de tinta de
+8px **se sobrepoem**. Nao e bug de codigo: e impossibilidade geometrica. La o rotulo sai
+truncado com reticencias. Para ter wrap naquela resolucao, o caminho e reduzir linhas visiveis
+(scroll na coluna) ou subir o piso de `rowH` a custo de conteudo visivel. **Decisao do usuario,
+nao aplicada.**
+
+### FATO verificado - `EditBox` filtra texto inserido mas nao texto apagado
+
+`EditBox.insertText` aplica o `setFilter` e **retorna sem aplicar** quando o filtro recusa: a
+tecla e engolida **sem feedback** visivel. `deleteCharsToPos` **nao** aplica filtro, entao apagar
+funciona. Consequencia pratica: o filtro por teto e armadilha de UX (nada indica o porque), mas
+**nao** trava edicao — trocar "9999" por outro valor grande continua possivel.
+
+### FATO verificado - `sanitizePericias` e uma armadilha de identidade por posicao
+
+`SheetModel.sanitizePericias` **descarta** pericia de nome vazio e, se a lista toda ficar
+vazia, **restaura as 18 padrao**. Como a tela do editor identifica linha por **posicao**
+(`periciaAt(pos)`), deixar um nome vazio **entrar no modelo** deslocaria todas as linhas
+seguintes e o botao de atributo e o `X` passariam a operar na pericia errada. Por isso o
+requisito "deixar apagar o nome" foi implementado com **`pendingNames` na tela** (posicao ->
+texto), sem tocar no `SheetModel`. `SheetModel` deduplica por `name().toLowerCase()`, entao
+`removePericia` remove exatamente 1 elemento e o shift das pendencias e exato.
+
+### PAPEL do implementador: refutar premissa do briefing
+
+Dois casos nesta rodada em que o implementador **corrigiu o briefing** em vez de obedecer, e
+os dois estavam certos:
+1. Disse que `reset()` (Restaurar) deixa `isDirty()` verdadeiro e que isso e o comportamento
+   correto (o padrao nao esta no servidor e e o que o Mestre ve), em vez de "alinhar" o
+   `baseline` como eu sugiri.
+2. Encontrou que a ordem entre `removed()` e `DISCONNECT` nao e garantida e blindou com
+   `getConnection() != null`, o que desfez a hypothese de defeito #1 no proprio conserto.
+Sempre vale delegar com premissa explicita e pedir para confirmar lendo o codigo.
+
+### PENDENTE - catalogo nao foi atualizado com as regras desta rodada
+
+A tarefa de `FUNCIONALIDADES-E-COMANDOS.md` foi **cancelada pelo usuario** antes de comecar.
+O catalogo reflete a rodada anterior, mas nao registra: teto de 9999 no cliente em HP/Mana,
+degradacao de formato da barra, wrap + reticencias, nome de pericia vazio (Save desativado +
+aviso) e o rascunho do ESC. **Proxima tarefa ao retomar.**
+
+### PENDENTE - id estavel em PericiaDef (plano aprovado, nao executado)
+
+Continua aprovado por decisao do usuario, para **depois** do teste em jogo. O plano completo esta
+nesta memoria, na entrada de 27/09/2026. Nada foi implementado. Nao comecar sem novo pedido.
