@@ -193,8 +193,10 @@ O usuario testou em jogo e confirmou:
 **A migracao posicional esta validada empiricamente**, nao so por teste
 unitario. A secao "NAO validado em jogo" acima fica superada por esta.
 
-**Teste 5** (atributo customizado sobrevive ao reinicio do mundo) nao foi
-mencionado pelo usuario - e opcional, so relevante em mundo com atributos
-customizados. O defeito pre-existente do `PlayerSheetPersistenceMixin` (carga
-antes do `SERVER_STARTED` em singleplayer) segue como pendencia documentada,
-nao confirmado nem descartado.
+**Teste 5** (atributo customizado sobrevive ao reinicio do mundo): o usuario
+testou em singleplayer - fechou o mundo e abriu de novo com atributos
+customizados - e "tava tudo normal". O defeito pre-existente do
+`PlayerSheetPersistenceMixin` (carga antes do `SERVER_STARTED` em singleplayer)
+**nao reproduziu** nesse cenario. Segue documentado como risco dependente de
+timing, mas com evidencia de que nao se manifesta no fluxo normal de
+singleplayer.

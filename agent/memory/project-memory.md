@@ -1247,3 +1247,12 @@ so por teste unitario. O teste 5 (atributo customizado sobrevive ao reinicio do
 mundo) nao foi mencionado: opcional, so relevante com atributos customizados; o
 defeito pre-existente do PlayerSheetPersistenceMixin (carga antes do SERVER_STARTED)
 segue como pendencia documentada, nem confirmado nem descartado.
+
+### FATO verificado - 28/09/2026, teste 5 (atributo customizado apos reinicio do mundo)
+
+O usuario testou em singleplayer: fechou o mundo e abriu de novo com atributos
+customizados e "tava tudo normal" - o vinculo pericia->atributo customizado
+sobreviveu ao reinicio. O defeito pre-existente do PlayerSheetPersistenceMixin
+(carga antes do SERVER_STARTED) NAO reproduziu nesse cenario. Segue documentado
+como risco dependente de timing, mas com evidencia de que nao se manifesta no
+fluxo normal de singleplayer.
