@@ -1040,3 +1040,24 @@ aviso) e o rascunho do ESC. **Proxima tarefa ao retomar.**
 
 Continua aprovado por decisao do usuario, para **depois** do teste em jogo. O plano completo esta
 nesta memoria, na entrada de 27/09/2026. Nada foi implementado. Nao comecar sem novo pedido.
+
+### FATO verificado - checkpoint 28/09/2026
+
+Commit `988335cfcef46e642a23a8532459ea73f27dd6d7` na branch `main`, tag anotada
+`checkpoint-20260928-0635-layout-validacao-rascunho` (objeto de tag
+`dfa3fe974b7a4cb35a86ff541c199fa65f9670a0`). 13 arquivos, +1872/-153. **Sem push.**
+
+Este commit versiona **as duas** rodadas de correcao de uma vez, porque a rodada de 27/09/2026
+nunca tinha sido commitada. Estado de partida anterior: `7777eb7`.
+
+Incluidos: `CharacterSheetScreen.java`, `SheetEditorScreen.java`, `StatusScreen.java`,
+`TabletopRpgClient.java`, `MasterCommands.java`, `SheetData.java`, `SheetModel.java`,
+`en_us.json`, `sheet_editor.json`, `FUNCIONALIDADES-E-COMANDOS.md`, `project-memory.md` e os
+dois relatorios novos.
+
+`logs/latest.log` e `build/` ficaram de fora (sem alteracao). Sem segredo no diff: o unico match
+do scanner de padroes foi a palavra "segredo" no catalogo, significando **rolagem secreta** do
+jogo, nao credencial.
+
+Estado da entrega no commit: validacao automatica verde, **13 defeitos aguardando teste em jogo**,
+catalogo da rodada 2 pendente e id estavel em `PericiaDef` pendente.
