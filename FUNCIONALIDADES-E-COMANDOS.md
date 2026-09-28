@@ -83,7 +83,7 @@ Raiz única `/rpg`, **sem aliases**. Todos registrados em
 | `/rpg turn give <player>` | só o Mestre | Dá o turno ao jogador, fixa a âncora dele (é a origem da aura) e anuncia. O nome do jogador é completado pelo próprio Minecraft | `MasterCommands.java: onRegister` (handler `giveTurn: giveTurn`) |
 | `/rpg turn revoke` | só o Mestre | Cancela o turno ativo, limpa a âncora e anuncia | `MasterCommands.java: onRegister` (handler `revokeTurn: revokeTurn`) |
 | `/rpg turn finish` | **dono do turno ou o Mestre** | Encerra o turno. Quem não for o dono nem o Mestre recebe `§c[RPG] It is not your turn to finish!` | `MasterCommands.java: onRegister` (`MasterCommands.java: finishTurn`, incluindo a checagem de dono) |
-| `/rpg roll` | qualquer jogador | **Lista as 18 perícias** da ficha com valor + atributo de cada uma (não rola nada) | `MasterCommands.java: onRegister` (handler `listSkills: listSkills`) |
+| `/rpg roll` | qualquer jogador | **Lista as perícias da ficha** com valor + atributo de cada uma (não rola nada). São as do modelo em uso: 18 no padrão, quantas o Mestre deixar | `MasterCommands.java: onRegister` (handler `listSkills: listSkills`) |
 | `/rpg roll <perícia>` | qualquer jogador | Rola `1d20 + valor_da_perícia + atributo`, mostrando a conta (`d20 (12) + 2 + 3 = 17`) | `MasterCommands.java: onRegister` (handlers `rollOrSkill: rollOrSkill`, `rollSkill: rollSkill`) |
 | `/rpg roll <fórmula>` | qualquer jogador | Rola uma fórmula de dados (`d20`, `2d6+3`, `2d6+d4+3`) | `MasterCommands.java: onRegister` (handler `rollFormula: rollFormula`, parser `rollDice: setHoverDistance`) |
 | `/rpg openroll [fórmula]` | só o Mestre | Rolagem **pública** (todos veem). Sem argumento, rola `d20` | `MasterCommands.java: onRegister` (handler `openRoll: openRoll`) |
@@ -114,27 +114,30 @@ Raiz única `/rpg`, **sem aliases**. Todos registrados em
   ou `" §f- §b"` conforme o sinal, então aparece `d8 [5] - 1 = 4` (`appendRollTerm`, `: rollDice`).
   **Sinal duplo é recusado** (`d8--1`, `d8+-1`).
   Limites: 1 a 100 dados por termo e 1 a 1000 faces (`: rollDice`).
-- **`/rpg roll` sem argumento lista 18 perícias.** Elas vêm da lista fixa `PERICIAS_PADRAO`
-  (`SheetData.java: PERICIAS_PADRAO`): **18 fixas**, exatamente as perícias básicas
-  de D&D 5e em inglês, cada uma com o atributo que o D&D 5e define para ela
-  (`Acrobatics`/DES, `Animal Handling`/SAB, `Arcana`/INT, `Athletics`/FOR, `Deception`/CAR,
+- **`/rpg roll` sem argumento lista as perícias da ficha, que já não são uma lista fixa em código.**
+  O que sai no chat é `sheet.pericias()` do jogador que executou (`MasterCommands.java: listSkills`), e o
+  cabeçalho mostra a contagem por `sheet.pericias().size()` — então ele já acompanha o modelo. Num mundo sem
+  modelo salvo (ou antes do primeiro sync) vale o **padrão: 18 perícias**, exatamente as básicas de D&D 5e em
+  inglês, cada uma com o atributo que o 5e define (`SheetModel.java: defaults`):
+  `Acrobatics`/DES, `Animal Handling`/SAB, `Arcana`/INT, `Athletics`/FOR, `Deception`/CAR,
   `History`/INT, `Insight`/SAB, `Intimidation`/CAR, `Investigation`/INT, `Medicine`/SAB,
   `Nature`/INT, `Perception`/SAB, `Performance`/CAR, `Persuasion`/CAR, `Religion`/INT,
   `Stealth`/DES, `Survival`/SAB, `Thievery`/DES), todas com valor 0. `Initiative` e `Melee`,
   que o sistema tinha desde o começo, **saíram da lista em 27/09/2026 por decisão do usuário** —
-  `Initiative` não era lida por nada no código e `Melee` só duplicava `Athletics`. Não há botão
-  de adicionar nem de remover: a lista é fixa no código. O cabeçalho da lista no chat mostra a
-  contagem por `sheet.pericias().size()` (`MasterCommands.java: listSkills`), então ele já diz 18.
-- **O valor de uma perícia vai de `0` a `30`** (`SheetData.java: Pericia`); o servidor recusa
-  qualquer coisa fora dessa faixa, e o `+` da tela desliga em 30 e o `-` em 0
-  (`StatusScreen.java: renderContent`).
+  `Initiative` não era lida por nada no código e `Melee` só duplicava `Athletics`. **Quem cria,
+  renomeia e remove perícias é o Mestre**, pelo item `sheet_editor` (ver
+  [seção 4](#4-telas-menus) e a regra em [seção 5](#ficha-do-personagem)).
+- **O valor de uma perícia vai de `0` a `30`** (`SheetData.java: Pericia`, `VALUE_MIN`/`VALUE_MAX`); o servidor
+  recusa qualquer coisa fora dessa faixa, e na tela o `+` desliga em 30 e o `-` em 0
+  (`StatusScreen.java: applyStepButtons`).
 - **O nome da perícia é comparado sem acento e sem diferenciar maiúsculas**
   (`MasterCommands.java: normalize`), então `acrobatics` funciona igual a `Acrobatics`. Fichas salvas
   antes de 27/09/2026 migram na hora de carregar pelos apelidos de
   `SheetData.java: LEGACY_PERICIA_NAMES`: `Acrobacia`→`Acrobatics`,
-  `Diplomacy`/`Diplomacia`→`Persuasion`. **Regra: qualquer renomeação futura em
-  `PERICIAS_PADRAO` precisa de apelido junto** — sem ele a troca zera a perícia silenciosamente,
-  já que `sanitizePericias` cai no padrão sem logar nada.
+  `Diplomacy`/`Diplomacia`→`Persuasion`. **Regra: qualquer renomeação futura na lista padrão de
+  `SheetModel.java: defaults` precisa de apelido junto** — sem ele a troca zera a perícia silenciosamente,
+  já que o alinhamento casa por nome (`SheetModel.java: align`, que usa
+  `SheetData.java: periciaByNameOrLegacy`).
 - **A migração de 27/09/2026 tem perdas conhecidas, avisadas e não corrigíveis:**
   - os antigos lugares reservados `perícia N` e `skill N` são **descartados sem log**. A tela
     antiga mostrava as 20 linhas com `-`/`+` editáveis, então quem ajustou `skill 3` para 5
@@ -142,8 +145,9 @@ Raiz única `/rpg`, **sem aliases**. Todos registrados em
   - `Melee`/`Luta` e `Initiative`/`Iniciativa` **saíram do padrão**, então o valor que tinham
     (2 por padrão) é descartado do mesmo jeito. Nenhum apelido resolve isso: resolveria
     inventando uma 19ª e 20ª linha que o usuário não pediu.
-  **Regra: qualquer renomeação futura em `PERICIAS_PADRAO` precisa de apelido junto** — sem ele a
-  troca zera a perícia silenciosamente, já que `sanitizePericias` cai no padrão sem logar nada.
+  **Regra: qualquer renomeação futura na lista padrão de `SheetModel.java: defaults` precisa de apelido
+  junto** — sem ele a troca zera a perícia silenciosamente, já que `SheetData.java: periciaByNameOrLegacy`
+  cai no padrão sem logar nada.
 - **A fórmula de perícia é `1d20 + valor_da_perícia + atributo`**, em aritmética `long` para não
   estourar com atributos grandes (`MasterCommands.java: rollSkill`).
 - **Visibilidade da rolagem:** o Mestre vê o resultado **só para si** (rolagem secreta); o jogador
@@ -207,9 +211,10 @@ O `V` também está disponível como botão `Camera Mode: ...` na tela de Settin
 | Menu ASCII da sessão (no chat) | `/rpg` ou `/rpg menu` (`MasterCommands.java: onRegister`) | Resumo em texto: papel, modo, turno ativo e botões clicáveis de comando |
 | `RpgMenuScreen` — menu principal no pergaminho | Tecla `R` (`TabletopRpgClient.java: onInitializeClient`) | Mostra `Role: MASTER/PLAYER`, `Mode` e `Turn` (`RpgMenuScreen.java: render`) e navega: **Mestre** vê `Players`, `Rolls`, `Settings`; **Jogador** vê `Status`, `Skills`, `Rolls`, `Settings` e `End Turn` quando é a vez dele (`: buildMenu`). **Não** existe botão de ficha própria para o Mestre |
 | `PlayerListScreen` — `Players` | Botão `Players` do menu, só para o Mestre (`RpgMenuScreen.java: buildMenu`, `: openPlayers`) | Lista os jogadores conectados; clicar em um abre a `Status` **dela**. O Mestre não entra na lista (`RpgNetworking.java: sendMenuToPlayer`) |
-| `StatusScreen` — `Status` | Jogador: botão `Status` do próprio menu. Mestre: clicando num jogador em `Players` (`RpgMenuScreen.java: buildMenu`, `: openStatus`; `PlayerListScreen.java: openSheet`) | Ficha do personagem: nome, raça, classe, `Background`, HP/Mana, nível/XP, os 6 atributos e as 18 perícias fixas. Valores mexem por botões **`-` e `+`** (não mais setas `>` e `<`), e o `+` fica **cinza/desligado ao chegar no teto** (30 nos atributos e nas perícias) e o `-` no piso 0 das perícias. A coluna de perícias tem o cabeçalho **`Bonus`**, porque o número ao lado do nome é o bônus investido, não o resultado da rolagem — que ainda soma o atributo. A largura da caixa de número acompanha o teto, então dois dígitos aparecem (antes o texto era cortado e o `10` virava `1`). Abre a `SkillsScreen` (`: buildFooterExtra (botao Skills)`) e a `AttributePickerScreen` (`: openPericiaAttribute`) |
+| `StatusScreen` — `Status` | Jogador: botão `Status` do próprio menu. Mestre: clicando num jogador em `Players` (`RpgMenuScreen.java: buildMenu`, `: openStatus`; `PlayerListScreen.java: openSheet`) | Ficha do personagem: nome, raça, classe, `Background`, HP/Mana, nível/XP, os atributos e as perícias do **modelo** (por padrão 6 e 18; o Mestre decide, ver `SheetEditorScreen`). Valores mexem por botões **`-` e `+`** (não mais setas `>` e `<`), e o botão que chega no limite fica **cinza/desligado**: o `+` no teto 30 e o `-` no piso, que é **-30 nos atributos** e **0 nas perícias**. Quem escreve esse estado é `StatusScreen.java: applyStepButtons`, chamado tanto por `applyExtraState` quanto pelo render, para o botão no limite não piscar. A coluna de perícias tem o cabeçalho **`Bonus`**, porque o número ao lado do nome é o bônus investido, não o resultado da rolagem — que ainda soma o atributo. A largura da caixa de número mede o pior caso de verdade, agora de **três caracteres** (`StatusScreen.java: valueBoxWidth`): antes media só a string do teto (`"30"`, 16px) e cortava o sinal, então `-30` aparecia como `-3`; as guardas de truncamento continuam existindo, agora só para proteger contra valor forjado muito grande. **O teto digitável é por campo, não genérico** (27/09/2026): o filtro das caixas numéricas era o mesmo para todos (`-?\d{0,9}`, até 9 dígitos), e agora o teto vem no parâmetro `ceiling` de `CharacterSheetScreen.java: createFieldBox`. As linhas de HP e Mana passam `SheetData.MAX_RESOURCE` (**9999**), que é o teto que o servidor já usava — e ele é conferido por **valor**, em `CharacterSheetScreen.java: withinCeiling`, não por contagem de caracteres (o sinal não conta para o teto: `-999` é o número 999). Na prática o que tem caixa é a caixa do `Max` de cada recurso (`StatusScreen.java: addResourceRow`); o valor atual de HP e Mana muda só pelos botões `-`/`+`, que são sem teto. `level` e `xp` seguem **sem teto no cliente** (`NO_CEILING`, o limite antigo de 9 dígitos), porque o usuário pediu para não mexer neles; 99 e 999999 continuam valendo no servidor (`SheetData.java: MAX_LEVEL`, `MAX_XP`). **O texto dentro da barra degrada o formato, nunca o número** (`StatusScreen.java: drawValue`): primeiro o par inteiro `hp / hpMax`; se não couber, **só o valor atual**; e o corte de algarismos é o último caso, alcançável só por valor forjado fora da faixa legal. Nenhum nível mostra metade de um formato — exibir `1234 /` é pior do que exibir `1234`, porque é uma leitura plausível e **errada** de um recurso. **Rótulo longo quebra em 2 linhas centralizadas, ou sai truncado com reticências** (`CharacterSheetScreen.java: addWrappedLabel`, `: truncateWithEllipsis`): a largura reservada é medida pelo rótulo real, e o texto é quebrado ou cortado **dentro dela**, então um nome grande não invade mais o `-`, a barra nem a caixa de valor. O detalhe e o limite em janela baixa estão em [Rótulos e texto nas telas](#rótulos-e-texto-nas-telas). Abre a `SkillsScreen` (`StatusScreen.java: buildFooterExtra (botao Skills)`) e a `AttributePickerScreen` (`StatusScreen.java: openPericiaAttribute`) |
 | `SkillsScreen` — `Skills` | Botão `Skills` do menu ou o botão `Skills` dentro da `StatusScreen` (`RpgMenuScreen.java: buildMenu`, `: openSkills`; `StatusScreen.java: buildFooterExtra`) | Lista **livre** de skills (nome + descrição): adicionar, remover e reordenar com as setas. Máximo de 24 (`SheetData.java: MAX_SKILLS`). A skill não tem valor nem atributo — quem tem isso é a perícia |
-| `AttributePickerScreen` — `Attribute` | Botão de atributo de uma perícia, dentro da `StatusScreen` (`StatusScreen.java: openPericiaAttribute`) | Escolhe com qual dos 6 atributos a perícia soma |
+| `AttributePickerScreen` — `Attribute` | Botão de atributo de uma perícia, dentro da `StatusScreen` (`StatusScreen.java: openPericiaAttribute`) | Escolhe com qual atributo a perícia soma. A lista vem do **modelo**, não de um enum: são os atributos que o Mestre deixou (1 a 10), com o atual marcado por `>` (`AttributePickerScreen.java: init`, `: options`; `SheetModelHolder.java: current`) |
+| `SheetEditorScreen` — `Sheet Editor` | **Só o Mestre**, pelo botão direito no item `sheet_editor` (`ModItems.java: SHEET_EDITOR`, uso em `ModItems.java: onUseItem`, que confere `SessionManager.isMaster` e chama `RpgNetworking.java: sendOpenSheetEditor`; o servidor reconfere o Mestre em `sendOpenSheetEditor`). O item usa a textura **placeholder** `minecraft:item/writable_book` (livro com pena), a pedido do usuário (`models/item/sheet_editor.json`). **Não** há botão para isso no `RpgMenuScreen` | Edita o **modelo** da ficha (o formato, não os valores de ninguém): rótulo de cada campo de texto, `Race` e `Mana` on/off, o **modo do XP** (`SheetModel.java: XpMode`: `Number`, `Free text`, `Hidden`), e as listas de **atributos** (sigla + nome, com `+ Attribute` e `X`) e de **perícias** (nome, atributo padrão, com `+ Pericia` e `X`) (`SheetEditorScreen.java: buildContent`, `: attributeRow`, `: periciaRow`). Uma coluna só, rolando junto (`SheetEditorScreen.java: applyScroll`). A edição é **em memória** e só grava no `Save` (`SheetEditorScreen.java: save`, que envia `RpgNetworking.java: SheetModelSavePayload`); `Discard` volta ao último salvo, `Reset` volta ao modelo padrão e `Close` fecha (`SheetEditorScreen.java: buildFooter`). **Fechar sem salvar não é cancelar** (decisão do usuário em 27/09/2026): fechar com `ESC` e reabrir o item mostra de novo o que estava na tela, mas **não aplicado** — o modelo do servidor continua sendo o de `baseline` e nada é enviado (`SheetEditorScreen.java: captureDraft`, que registra a saída da tela, e `: takeDraft`, que a consome na abertura seguinte). Só o `Discard` volta ao salvo e só o `Save` aplica; os dois apagam o rascunho (`: clearDraft`). O rascunho vive **na tela, não em disco**: não vai para o `SheetModel`, nem para o `SheetData`, nem para pacote, e é descartado ao desconectar (`TabletopRpgClient.java: registerConnectionCleanup`, que chama `SheetEditorScreen.java: discardTransientState`) — sem isso, entrar no mundo B abriria o editor com o rascunho do mundo A e o `Save` gravaria A no `SavedData` de B. **Nome de perícia vazio não entra no modelo:** a caixa **fica** com o que foi digitado, o modelo continua com o último nome válido, e a tela rastreia a pendência por **posição** na lista (`SheetEditorScreen.java: pendingNames`, `: hasPendingName`, `: captureDraft`). Enquanto houver pendência o `Save` fica **desabilitado** e aparece o aviso `screen.tabletoprpg.sheet_editor.pericia_no_name` (`pericia without a name`), que tem prioridade sobre o aviso de `unsaved changes` (`: render`). O botão `X` de remover **continua funcionando**, porque remove por posição e não pelo nome: é o único caminho para sair de um nome inválido (`: periciaRow`). O cliente **não** é autoridade: o servidor reconstrói o `SheetModel` ao desserializar o payload, o que dispara o construtor compacto e saneia rótulos, duplicatas e os tetos de 10/30 (`SheetModel.java: SheetModel`) |
 | `DiceRollScreen` — `Rolls` | Botão `Rolls` do menu (`RpgMenuScreen.java: buildMenu`) | Monta a rolagem clicando em dados (`d4 d6 d8 d10 d12 d20 d100`, `DiceRollScreen.java: buildUI`) e modificadores (`-10 -1 +1 +10`, `: buildUI`), mostra a expressão e envia `/rpg roll <expressão>` ao servidor (`: rollDice`) |
 | `RpgSettingsScreen` — `Settings` | Botão `Settings` do menu (`RpgMenuScreen.java: buildMenu`) | **Mestre:** slider de horário, botão `Day/Night Cycle: On/Paused`, `Players break blocks: Yes/No`, `Players place blocks: Yes/No`, `Weather: Clear/Rain/Thunderstorm` e `Back` (`RpgSettingsScreen.java: init`, bloco do Mestre). **Jogador:** `Orbital Camera: Yes/No`, `Camera Mode: ...`, `Zoom TopDown` e `Transition Speed`, mais `Back` (`: init`) |
 | `CharacterSheetScreen` | — | Classe base de `StatusScreen` e `SkillsScreen`; não é aberta sozinha (`CharacterSheetScreen.java: CharacterSheetScreen`) |
@@ -344,14 +349,56 @@ não "voltar" sozinho durante a transição (`SessionManager.java: playersCanPla
   temporários). O piso existe só para não estourar o protocolo; o que importa é que `hp <= 0` é
   deitado (`SheetData.java: MAX_RESOURCE`, `: composite`).
 - A Mana tem piso 0 e também pode passar do máximo (`SheetData.java: composite`).
-- Os **6 atributos têm teto de 30 e podem ser negativos** — eles viraram modificadores somados às
-  rolagens de perícia (`SheetData.java: Attributes`). O `+` da tela desliga em 30
-  (`StatusScreen.java: renderContent`).
-- **O valor da perícia é de 0 a 30** (`SheetData.java: Pericia`).
-- A lista de perícias é **fixa em código**: rodando em todo construtor de `SheetData`, é impossível
-  uma ficha ter uma perícia a mais, a menos, ou com um nome que o sistema não conhece
-  (`SheetData.java: sanitizePericias`). Adicionar ou remover perícias é uma **ideia de fase futura**,
-  ainda não implementada.
+- **HP e Mana têm teto de 9999** (`SheetData.java: MAX_RESOURCE`), e o teto é do **valor absoluto**,
+  não do `hpMax`/`manaMax` — é por isso que `12/10` é legal. O servidor recusa em silêncio o que
+  passar disso, então a **caixa da tela recusa o dígito antes**, para o valor digitado ser o que vai
+  ser gravado. O teto é **por campo** (`CharacterSheetScreen.java: withinCeiling`, recebido de
+  `StatusScreen.java: addResourceRow`), e `level` e `xp` continuam **sem teto no cliente**: 99 e
+  999999 valem no servidor (`SheetData.java: MAX_LEVEL`, `MAX_XP`). O cliente continua **não** sendo
+  autoridade — ele só evita a digitação que seria descartada.
+- Os **atributos têm teto de 30 e piso -30** (`SheetData.java: Attributes`, `VALUE_MAX`/`VALUE_MIN`) — eles
+  viraram modificadores somados às rolagens de perícia. Quem escreve o `active` dos botões é
+  `StatusScreen.java: applyStepButtons`, chamado tanto por `applyExtraState` quanto pelo render, para o
+  botão no limite não piscar branco por um frame a cada eco do servidor: **os dois botões desligam no
+  limite**, o `+` em 30 e o `-` em -30. Quantos atributos existem é decisão do modelo (6 no padrão).
+- **O valor da perícia é de 0 a 30** (`SheetData.java: Pericia`, `VALUE_MIN`/`VALUE_MAX`).
+- **A lista de perícias não é mais fixa em código**: quem decide é o **Mestre**, pelo item `sheet_editor`
+  (`ModItems.java: SHEET_EDITOR`, uso em `ModItems.java: onUseItem`), na `SheetEditorScreen`. Por padrão
+  uma ficha nasce com as 18 perícias básicas de D&D 5e (`SheetModel.java: defaults`) e 6 atributos, e o
+  Mestre pode **criar, renomear e remover** perícias, trocar o atributo padrão de cada uma, **criar e
+  renomear** atributos (sigla e nome por extenso), renomear os campos de texto, ligar/desligar `Race` e
+  `Mana` e escolher o **modo de exibição do XP** — `Number` (botões `-`/`+`), `Free text` (caixa de texto) ou
+  `Hidden` (a linha some) (`SheetModel.java: XpMode`).
+  - **Limites do modelo:** de **1 a 10 atributos** (`SheetModel.java: MAX_ATTRIBUTES`, `MIN_ATTRIBUTES`) e
+    de **1 a 30 perícias** (`SheetModel.java: MAX_PERICIAS`, `MIN_PERICIAS`); rótulo e nome com no máximo
+    32 caracteres (`SheetModel.java: LABEL_MAX`). **Nome de perícia repetido** é recusado e a caixa
+    volta ao texto anterior (`SheetModel.java: withPericiaText`). **Nome vazio, não** (decisão do
+    usuário em 27/09/2026): a caixa **fica** com o que foi digitado, o modelo continua com o último
+    nome válido, o `Save` fica desabilitado e o aviso `pericia without a name` aparece até o nome
+    voltar a ser válido (`SheetEditorScreen.java: pendingNames`, `: hasPendingName`). Só espaços
+    contam como vazio, porque o modelo faz `trim()`. O motivo de um caso ficar pendurado e o outro
+    não: duas linhas repetidas penduradas não têm ordem de resolução, então o modelo recusa por
+    identidade; o vazio não desloca as linhas seguintes e sai pelo `X`.
+  - **O `id` do atributo não é editável, o rótulo é.** Ele é a chave com que a ficha do jogador guarda o
+    valor, então renomear a sigla não perde nada; atributo criado pelo Mestre nasce com id gerado
+    (`attr_1`, `attr_2`, …) que nunca é reciclado, para o atributo novo não herdar o valor do que saiu
+    (`SheetModel.java: addAttribute`, `nextFreshAttributeIndex`).
+  - **Quem remove um atributo** faz as perícias que somavam com ele passarem a somar com o primeiro da
+    lista, em vez de ficarem apontando para um atributo que não existe mais
+    (`SheetModel.java: removeAttribute`).
+  - **Onde o modelo vive:** é do **mundo**, não de uma ficha — um `SavedData` do overworld
+    (`SheetModelStore.java: get`, `update`, `SheetModelStore.java: TYPE`), então sobrevive a restart e a
+    troca de Mestre. Ele é aplicado a **todas** as fichas: quando o Mestre salva, o servidor realinha as
+    fichas já carregadas em memória (`SessionManager.java: realignAllSheets`, via `SheetModel.java: align`),
+    que dá as perícias novas, tira as removidas e **preserva o valor das que sobreviveram pelo nome**
+    (apelidos antigos inclusos). O modelo em uso dos dois lados fica em `SheetModelHolder.java: current` e é
+    enviado no login e a cada edição (`RpgNetworking.java: sendSheetModel`, `broadcastSheetModel`).
+  - `SheetData.java: sanitizePericias` **continua existindo como rede de segurança**, mas não prende mais a
+    ficha a uma lista: ele só descarta nulo, nome vazio e nome repetido, e corta no teto do modelo. Quem
+    casa a ficha com a lista do Mestre é `SheetModel.java: align`, exposto por `SheetData.java: aligned`: a
+    ficha nova já nasce pelo modelo (`SheetData.java: defaultPericias`), a carga do NBT alinha na hora
+    (`mixin/PlayerSheetPersistenceMixin.java: tabletopRpg$loadSheet`) e cada edição do modelo realinha as
+    fichas em memória.
 - **`Background` é um campo de texto livre da identidade** (`SheetData.java: Identity`), gravado no
   mesmo lugar dos outros campos de texto e editável na `StatusScreen` (`StatusScreen.java: buildPanel`).
   Não tem efeito mecânico: é só um rótulo descritivo que o Mestre consulta.
@@ -359,6 +406,42 @@ não "voltar" sozinho durante a transição (`SessionManager.java: playersCanPla
   jogador; **ninguém mais** consegue abrir a ficha de outro jogador nem por pacote forjado
   (`RpgNetworking.java: resolveSheetTarget`). Toda alteração é reenviada ao dono e ao Mestre, então a tela
   atualiza ao vivo dos dois lados (`: sendSheetTo`).
+
+### Rótulos e texto nas telas
+
+Os rótulos das telas de ficha são escritos pelo **Mestre** (`SheetEditorScreen`), então nome grande é
+caso normal, não exceção. Antes o rótulo era desenhado **sem nenhum corte**: com
+`Pontos de Determinação (PD)` no rótulo de Mana o texto media 140px numa coluna reservada de 124px e
+invadia o botão `-` em 16px. O caminho agora é `CharacterSheetScreen.java: addWrappedLabel`, e ele
+nunca deixa o texto passar da largura reservada ao rótulo:
+
+- **Cabe na largura?** Desenha como sempre, alinhado à esquerda e na linha de sempre — o layout
+  aprovado não muda.
+- **Não cabe?** Quebra em **2 linhas centralizadas** com `Font.split`, dentro da largura reservada, e
+  o bloco de 2 linhas é centralizado na altura da linha. A caixa de valor **não se move**: ela já
+  ocupa a linha inteira, então os centros batem e as colunas continuam alinhadas pixel a pixel.
+- **Ainda não cabe em 2 linhas?** A 2ª linha vira o **resto** do texto, cortado na largura reservada.
+- **Não cabe nem em 2 linhas?** Volta a **uma linha só, agora cortado com reticências** (`...`,
+  `CharacterSheetScreen.java: truncateWithEllipsis`), que é três pontos em vez de reticências
+  tipográfico: o ponto é o glifo mais barato da fonte padrão, a marca gasta 6px e sobra mais texto
+  visível. A marca é paga **antes** de cortar o texto, para o resultado inteiro caber.
+
+A marca de corte é o ponto, não um detalhe: **um rótulo cortado em silêncio é indistinguível de um
+rótulo completo**, e no editor de modelo isso é o pior dos dois — o Mestre lê um nome de perícia
+truncado como se fosse o nome inteiro. As reticências mostram a perda. O mesmo vale para o nome da
+perícia na coluna da direita, que é justamente onde o Mestre confere o que escreveu
+(`StatusScreen.java: drawPericias`, com `: truncateWithEllipsis`) — mas ali ele **nunca** quebra em 2
+linhas como os outros rótulos: a coluna é compacta e a altura da linha pode chegar a 9px, onde a 2ª
+linha cairia em cima da seguinte, então cortar é o único jeito de não invadir os botões.
+
+**Limitação conhecida: o wrap de 2 linhas depende de janela alta.** O passo entre as duas linhas
+encolhe junto com a altura da linha (`CharacterSheetScreen.java: labelBlockAdvance`), mas nunca abaixo
+de `MIN_LABEL_ADVANCE`, porque duas linhas de tinta de 8px com passo menor se **sobrepõem** e viram
+uma mancha — nenhum ganho de espaço justifica isso. Na resolução de referência do projeto (480x270,
+**escala de GUI 4**) a linha da ficha fica com `rowH` 13, e duas linhas de 8px **não cabem fisicamente**
+em 13px. Nessas alturas (**escala de GUI 3 ou 4**) o wrap **não acontece** e o rótulo **sai truncado
+com reticências** — nunca invadindo a coluna da frente. É uma escolha deliberada: um rótulo truncado
+e honesto vale mais do que um rótulo sobreposto ou ilegível.
 
 ### Câmera de espectador
 
@@ -385,11 +468,15 @@ Enquanto o jogador está travado, a câmera assume o controle (`SpectatorCameraC
 
 ### O que **persiste** (sobrevive a sair e voltar, e até a recarregar o mundo)
 
-- **A ficha do personagem por completo** — identidade, HP, Mana, nível/XP, os 6 atributos, as 20
-  perícias e as skills. É gravada no **NBT do próprio jogador**, que o vanilla já salva no logout e
+- **A ficha do personagem por completo** — identidade, HP, Mana, nível/XP, os atributos, as perícias e as
+  skills. É gravada no **NBT do próprio jogador**, que o vanilla já salva no logout e
   no autosave (`mixin/PlayerSheetPersistenceMixin.java: KEY`, chave `tabletoprpg_sheet`). Há ainda
   uma gravação explícita no encerramento do servidor, para o `Ctrl+C` não perder a última alteração
   (`SheetPersistenceEvents.java: register`).
+- **O modelo da ficha** (rótulos, atributos e perícias que o Mestre configurou) — é do mundo, não de uma
+  ficha: vive num `SavedData` do overworld (`SheetModelStore.java: get`, `SheetModelStore.java: TYPE`), então
+  sobrevive a restart e à troca de Mestre. Quem entra recebe o modelo atual no login
+  (`SheetModelStore.java: register`, que chama `RpgNetworking.java: sendSheetModel`).
 - **A aura (barreira azul)** é reenviada quando o jogador entra, então quem reconecta volta com a
   barreira. Antes disso ela só voltaria no próximo `/rpg turn` (`RpgNetworking.java: registerServerReceivers`).
 - **A lista de alvos do carrossel** é reconstruída na entrada, incluindo os mobs com câmera que
@@ -412,6 +499,11 @@ Enquanto o jogador está travado, a câmera assume o controle (`SpectatorCameraC
   destaque, ciclo dia/noite, permissões de quebra e colocação, clima e o índice do carrossel de
   câmera. As preferências de câmera do jogador (modo, órbita, zoom, velocidade de transição) são
   preservadas de propósito (`TabletopRpgClient.java: hoverMaxDistance`, `SpectatorCameraController.java: SpectatorCameraController`).
+- **O rascunho do editor de modelo também é descartado ao desconectar** (`TabletopRpgClient.java:
+  registerConnectionCleanup`, que chama `SheetEditorScreen.java: discardTransientState`). Ele é
+  estado da sessão de mundo, não da tela: sem o reset, entrar no mundo B abriria o editor com o
+  rascunho do mundo A e o `Save` gravaria o modelo de A no `SavedData` de B — e as marcas de
+  "perícia sem nome", que são chaveadas por posição, cairiam em linhas que talvez nem existam em B.
 - Na entrada, o servidor reenvia o estado de trava, o estado de deitado de todos os jogadores, a
   distância do destaque, o carrossel, o jogador ativo e a aura
   (`RpgNetworking.java: registerServerReceivers`).
@@ -434,8 +526,10 @@ reiniciar**, o seguinte é perdido e precisa ser refeito:
 | Clima alvo | botão `Weather` em `Settings` (padrão: sol) |
 | Estado de combate: seleção de monstro, âncoras, monstros controlados, destinos | o Mestre precisa selecionar o mob de novo com o botão direito |
 
-O único bloco de estado que **é** gravado em disco é a **ficha do personagem**, no NBT do jogador. E
-vale lembrar: **não existe lista de iniciativa nem ordem de turno** — o turno é um único jogador
+Os **dois** blocos de estado que **são** gravados em disco são a **ficha do personagem**, no NBT do jogador,
+e o **modelo da ficha** (rótulos, atributos e perícias decidedos pelo Mestre), num `SavedData` do overworld
+(`SheetModelStore.java: get`) — então o modelo **sobrevive ao restart** e não entra nesta lista. E vale
+lembrar: **não existe lista de iniciativa nem ordem de turno** — o turno é um único jogador
 ativo, então não há fila para se perder.
 
 ### Quem pode ver e editar a ficha de quem

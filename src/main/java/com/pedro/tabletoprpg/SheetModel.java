@@ -321,6 +321,11 @@ public record SheetModel(
             case "mana" -> manaLabel;
             case "level" -> levelLabel;
             case "xp" -> xpLabel;
+            // XP em modo TEXT e o MESMO campo de XP (numero ou texto sao modos
+            // de exibicao, nao campos diferentes), entao usa o mesmo rotulo.
+            // Sem este caso o `default` devolvia a chave crua e a ficha
+            // desenhava "xptext" no lugar do rotulo.
+            case "xptext" -> xpLabel;
             default -> field;
         };
     }

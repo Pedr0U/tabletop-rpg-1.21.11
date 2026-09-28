@@ -232,6 +232,15 @@ public class TabletopRpgClient implements ClientModInitializer {
             // pericias do mundo anterior ate o payload do JOIN chegar -- e se o
             // mundo novo nao tem Sheet Editor, o JOIN nao mandaria nada.
             SheetModelHolder.set(SheetModel.defaults());
+            // O rascunho e as marcas de nome pendente do Sheet Editor sao estado
+            // do MESMO mundo, e sao estaticos (a tela e remontada a cada
+            // abertura do item, e o texto digitado precisa sobreviver a uma
+            // troca de tela). Zerar so o holder deixava o rascunho do mundo que
+            // esta saindo vivo: no mundo B o takeDraft() devolveria o modelo de A
+            // com o baseline de B, a tela abriria com "unsaved changes" e
+            // rotulos de A, e um Salvar gravaria o modelo de A no
+            // SheetModelStore de B. O par e apagado junto, e junto com o holder.
+            SheetEditorScreen.discardTransientState();
             SpectatorCameraController.reset();
         });
     }

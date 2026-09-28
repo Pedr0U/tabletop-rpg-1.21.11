@@ -39,10 +39,11 @@ import java.util.Map;
  * subir e descer -- e um numero solto nao limitava mais. Nao ha barra nem
  * caixa: apenas {@code rotulo  [-]  numero  [+]}. 27/09/2026: os glifos
  * {@code <} e {@code >} viraram {@code -} e {@code +}, para o par de botoes
- * da tela inteira falar a mesma coisa. O {@code +} desliga em
- * {@link SheetData.Attributes#VALUE_MAX} (30). Como o atributo <b>nao tem
- * piso</b>, o {@code -} nunca desliga: e o que permite voltar de um valor
- * muito negativo, que a ficha aceita.
+ * da tela inteira falar a mesma coisa. O atributo tem teto
+ * {@link SheetData.Attributes#VALUE_MAX} (30) e piso
+ * {@link SheetData.Attributes#VALUE_MIN} (-30) -- decisao do usuario em
+ * 27/09/2026 -- entao <b>os dois</b> botoes desligam no limite, e o cinza e o
+ * feedback de "voce chegou aqui" dos dois lados.
  */
 public class StatusScreen extends CharacterSheetScreen {
 
@@ -134,7 +135,15 @@ public class StatusScreen extends CharacterSheetScreen {
     private Bar hpBar;
     private Bar manaBar;
 
-    /** Setas: ficam cinzas quando a ficha e somente leitura. */
+    /**
+     * Setas <b>sem limite de valor</b>: as de HP/Mana e o botao de atributo da
+     * pericia. Ficam cinzas quando a ficha e somente leitura.
+     *
+     * <p>27/09/2026: as setas de atributo e de pericia <b>nao</b> entram aqui,
+     * porque dependem tambem do valor (piso/teto). Elas sao escritas por
+     * {@link #applyStepButtons}, o mesmo caminho do render, para
+     * {@code applyExtraState} nao religar um botao travado no limite.
+     */
     private final List<Button> arrowButtons = new ArrayList<>();
 
     /** Onde o numero de cada atributo e desenhado (o widget e' o valor). */
@@ -272,16 +281,16 @@ public class StatusScreen extends CharacterSheetScreen {
         // 27/09/2026 (Sheet Editor): os titulos vem do modelo e a raca pode ter
         // sido desligada pelo Mestre. Titulo de secao e campo andam juntos, para
         // nao sobrar um rotulo sem a caixa embaixo.
-        y = addSection(model.nameLabel(), x0, y);
-        y = addField("characterName", x0, y, boxX, boxW, false);
+        y = addSection(model.nameLabel(), x0, y, leftW);
+        y = addField("characterName", x0, y, boxX, boxW, labelW, false);
         if (model.isEnabled("race")) {
-            y = addField("race", x0, y, boxX, boxW, false);
+            y = addField("race", x0, y, boxX, boxW, labelW, false);
         }
-        y = addField("characterClass", x0, y, boxX, boxW, false);
-        y = addField("background", x0, y, boxX, boxW, false);
+        y = addField("characterClass", x0, y, boxX, boxW, labelW, false);
+        y = addField("background", x0, y, boxX, boxW, labelW, false);
 
         // ---------------- Vitals (barras) ----------------
-        y = addSection("Vitals", x0, y);
+        y = addSection("Vitals", x0, y, leftW);
         hpBar = addResourceRow(x0, boxX, y, boxW, model.hpLabel(), "hp", "hpMax", COL_HP, COL_HP_BG);
         y += rowH;
         if (model.isEnabled("mana")) {
@@ -290,21 +299,21 @@ public class StatusScreen extends CharacterSheetScreen {
         }
 
         // ---------------- Progress ----------------
-        y = addSection("Progress", x0, y);
-        y = addField("level", x0, y, boxX, boxW, true);
+        y = addSection("Progress", x0, y, leftW);
+        y = addField("level", x0, y, boxX, boxW, labelW, true);
         // XP em modo TEXT vira caixa de texto (o campo "xpText"); em NUMBER
         // continua numerico; em HIDDEN a linha inteira nao existe.
         if (model.xp() == SheetModel.XpMode.TEXT) {
-            y = addField("xptext", x0, y, boxX, boxW, false);
+            y = addField("xptext", x0, y, boxX, boxW, labelW, false);
         } else if (model.xp() != SheetModel.XpMode.HIDDEN) {
-            y = addField("xp", x0, y, boxX, boxW, true);
+            y = addField("xp", x0, y, boxX, boxW, labelW, true);
         }
 
         // ---------------- Attributes ----------------
         // Decisao do usuario: atributos sao botoes -/+ (passo 1), sem caixa de
         // texto e sem barra, começando em 0, com teto 30 e PISO -30 (podem ser
         // negativos, decisao do usuario em 27/09/2026).
-        y = addSection("Attributes", x0, y);
+        y = addSection("Attributes", x0, y, leftW);
         List<SheetModel.AttributeDef> attrs = model.attributes();
         if (twoColumns) {
             int colW = (leftW - 6) / 2;
@@ -374,16 +383,28 @@ public class StatusScreen extends CharacterSheetScreen {
      * <p>Agora a largura vem do rotulo <b>realmente mais largo</b> entre os
      * campos que a tela usa, e nao de uma fracao chutada. O teto de um terco da
      * coluna existe para a caixa nao sumir quando o rotulo for enorme demais:
-     * nesse caso o rotulo invade de novo, que e o mesmo comportamento de antes
-     * e continua sendo melhor do que um campo sem espaco para digitar.
+     * nesse caso o rotulo quebra em 2 linhas ({@code addWrappedLabel}), e e
+     * <b>melhor</b> do que um rotulo invadindo a caixa ou um campo sem espaco
+     * para digitar.
+     *
+     * <p>27/09/2026 (bug do usuario): com "Pontos de Determinacao (PD)" no
+     * rotulo de Mana, o rotulo media 140px e a coluna reservava 124px, e o texto
+     * atravessava o botao "-" e a caixa de valor.
+     *
+     * <p>27/09/2026: a lista veio para {@link SheetData#LABELLED_FIELDS}, que
+     * e a lista completa do que tem rotulo desenhado na ficha -- antes o laco
+     * usava {@code TEXT_FIELDS}, que nao tem "level" nem "xp", e o rotulo mais
+     * largo vinha de uma lista fixa de literais ("Level", "XP"). Como "Level" e
+     * "XP" ja vem do modelo por {@code labelOf}, so sobraram os literais que
+     * nao sao campo: "Max" (o das caixas de teto).
      */
     private int fieldLabelWidth(int leftW) {
         int widest = 0;
-        for (String field : SheetData.TEXT_FIELDS) {
+        for (String field : SheetData.LABELLED_FIELDS) {
             widest = Math.max(widest, this.font.width(SheetData.labelOf(field)));
         }
         // "Max" e o rotulo das caixas de teto, e "HP"/"Mana" os das barras.
-        for (String label : List.of("Max", "HP", "Mana", "Level", "XP")) {
+        for (String label : List.of("Max", "HP", "Mana")) {
             widest = Math.max(widest, this.font.width(label));
         }
         return Math.max(52, Math.min(widest + 6, leftW / 3));
@@ -484,21 +505,33 @@ public class StatusScreen extends CharacterSheetScreen {
     }
 
     /**
-     * Largura da caixa do NUMERO, calculada a partir do teto do valor.
+     * Largura da caixa do NUMERO, calculada a partir dos limites do valor.
      *
      * <p><b>27/09/2026, bug relatado:</b> a largura era fixa em 10px e o
      * numero era cortado com {@code plainSubstrByWidth}, entao ao passar de um
-     * algarismo o segundo era <b>oculto</b> -- "1" + "0" virava "1". A caixa
-     * agora e dimensionada pelo maior valor que pode aparecer, em vez de um
-     * numero chutado: os dois tetos sao 30, entao "30" e o texto mais largo que
-     * precisa caber.
+     * algarismo o segundo era <b>oculto</b> -- "1" + "0" virava "1". Depois a
+     * largura passou a ser medida, mas so do <b>teto</b> ({@code "30"}, 12px),
+     * o que nao comportava o sinal: o atributo tem piso -30 e a fonte da 6px por
+     * caractere, entao {@code "-30"} mede 18px e nao cabia em 16px. O atributo
+     * virava "-3" (o segundo algarismo sumia) e a pericia, que nao tem
+     * nenhuma guarda de truncamento, invadiria 1px de cada lado.
      *
-     * <p>Usar {@code font.width} (e nao um chute de pixels) e o que faz a
-     * caixa acompanhar a fonte: se a fonte mudar, a caixa acompanha.
+     * <p>Agora e o <b>maior texto que pode aparecer de verdade</b>: os dois
+     * extremos do atributo (o piso negativo e o teto) e o teto da pericia,
+     * medidos com {@code font.width} -- e nao um pixels chutado, entao a caixa
+     * acompanha a fonte. O piso e o teto vem do modelo
+     * ({@link SheetData.Attributes#VALUE_MIN}/{@code VALUE_MAX}); a pericia tem
+     * piso 0, entao o texto mais largo dela e o teto, ja coberto aqui.
+     *
+     * <p>Guarde de truncamento: a caixa cobre o valor <b>legitimo</b>. Um
+     * payload forjado pode gravar um numero muito maior, e nesse caso quem corta
+     * e o desenho (veja {@code renderContent} e {@code drawPericias}).
      */
     private int valueBoxWidth() {
-        int teto = Math.max(SheetData.Attributes.VALUE_MAX, SheetData.Pericia.VALUE_MAX);
-        return this.font.width(Integer.toString(teto)) + 4;
+        int attr = Math.max(this.font.width(Integer.toString(SheetData.Attributes.VALUE_MIN)),
+                this.font.width(Integer.toString(SheetData.Attributes.VALUE_MAX)));
+        int per = this.font.width(Integer.toString(SheetData.Pericia.VALUE_MAX));
+        return Math.max(attr, per) + 4;
     }
 
     /**
@@ -530,8 +563,8 @@ public class StatusScreen extends CharacterSheetScreen {
         addRenderableWidget(minus);
         addRenderableWidget(plus);
         addRenderableWidget(attr);
-        arrowButtons.add(minus);
-        arrowButtons.add(plus);
+        // So o botao de atributo entra na lista: o "-" e o "+" da pericia tem
+        // limite de valor e vao por applyStepButtons (ver applyExtraState).
         arrowButtons.add(attr);
 
         // 4px de folga entre o nome e o botao esquerdo: o usuario apontou que
@@ -612,7 +645,11 @@ public class StatusScreen extends CharacterSheetScreen {
         String label = compact ? shortLabel : fullLabel;
         int labelW = fixedAttributeLabelWidth(rowW, compact);
 
-        textLines.add(new TextLine(label, x0, y + labelOffset(), COL_LABEL));
+        // 27/09/2026 (bug do usuario): o rotulo quebrava o botao "-" quando o
+        // Mestre dava um nome longo ao atributo, porque o teto de
+        // fixedAttributeLabelWidth era menor que o texto. Agora o rotulo quebra
+        // em 2 linhas centralizadas na largura da coluna dos botoes.
+        addWrappedLabel(label, x0, y, labelW - WIDGET_GAP, COL_LABEL);
 
         int minusX = x0 + labelW;
         // Mesma geometria da linha de pericia (addPericiaRow): botao dimensionado
@@ -632,8 +669,6 @@ public class StatusScreen extends CharacterSheetScreen {
                 b -> stepNumeric(attributeId, ARROW_STEP)).bounds(plusX, y, arrow, h).build();
         addRenderableWidget(minus);
         addRenderableWidget(plus);
-        arrowButtons.add(minus);
-        arrowButtons.add(plus);
 
         attrRows.add(new AttrRow(valueX, y, valueW, h, attributeId, minus, plus));
     }
@@ -656,8 +691,16 @@ public class StatusScreen extends CharacterSheetScreen {
      * <p>27/09/2026 (Sheet Editor): o laço passou de {@code Attribute.VALUES}
      * (seis constantes) para {@link SheetModelHolder#current()}, porque a lista
      * agora e do Mestre e muda de tamanho. Com um rotulo muito largo, o
-     * {@code Math.min} abaixo limita pela largura disponivel, entao o texto
-     * pode invadir -- o mesmo comportamento de antes com rotulos enormes.
+     * {@code Math.min} abaixo limita pela largura disponivel, e o rotulo quebra
+     * em 2 linhas dentro dela (ver {@link #addAttributeRow}) em vez de invadir
+     * o botao.
+     *
+     * <p>27/09/2026: {@code valueBoxWidth} passou a medir o sinal e foi de 16px
+     * para 22px, e e subtraido aqui -- esta coluna perde os mesmos 6px. Com
+     * rotulo normal nada muda, porque quem manda e o {@code widest + 8}: o
+     * limite {@code rowW - ...} so aperta quando o rotulo e largo de verdade ou
+     * a coluna e estreita, e o piso de 24px continua valendo. O rotulo so e
+     * cortado no ultimo recurso, quando nem em 2 linhas cabe.
      */
     private int fixedAttributeLabelWidth(int rowW, boolean compact) {
         int widest = 0;
@@ -679,7 +722,10 @@ public class StatusScreen extends CharacterSheetScreen {
      */
     private Bar addResourceRow(int x0, int boxX, int y, int boxW, String label,
                                String field, String maxField, int fillColor, int bgColor) {
-        textLines.add(new TextLine(label, x0, y + labelOffset(), COL_LABEL));
+        // 27/09/2026: o rotulo vem do modelo (o Mestre escreve), entao quebra em
+        // 2 linhas como os outros. A largura e a vao ate o primeiro botao, que e
+        // o mesmo inicio da caixa dos campos.
+        addWrappedLabel(label, x0, y, boxX - x0 - WIDGET_GAP, COL_LABEL);
 
         int h = rowH - 2;
         int maxLabelW = 30;
@@ -700,7 +746,11 @@ public class StatusScreen extends CharacterSheetScreen {
         int barX = boxX + ARROW_SIZE + 4;
         int maxLabelX = boxX + ARROW_SIZE + 4 + barW + 4 + ARROW_SIZE + 4;
         textLines.add(new TextLine("Max", maxLabelX, y + labelOffset(), COL_MUTED));
-        fieldBoxes.put(maxField, createFieldBox(maxField, maxLabelX + maxLabelW, y, maxBoxW, true));
+        // O teto do recurso e MAX_RESOURCE (9999) no servidor (Vitals); aqui o
+        // filtro recusa o digito que passaria dele, para o valor digitado ser o
+        // que o servidor vai gravar em vez de um 9999 silencioso.
+        fieldBoxes.put(maxField, createFieldBox(maxField, maxLabelX + maxLabelW, y, maxBoxW,
+                true, SheetData.MAX_RESOURCE));
 
         return new Bar(barX, y + 2, barW, rowH - 6);
     }
@@ -726,10 +776,51 @@ public class StatusScreen extends CharacterSheetScreen {
         }).bounds(x + w - bw, y, bw, h).build();
     }
 
+    /**
+     * Escreve o {@code active} dos dois botoes de passo de uma linha, ja com o
+     * limite do valor: o {@code -} desliga no piso e o {@code +} no teto.
+     *
+     * <p><b>Por que um metodo so (27/09/2026):</b> o limite era escrito
+     * <b>somente</b> no render ({@code renderContent} e {@code drawPericias}), e
+     * o {@code applyExtraState} fazia {@code active = canEdit} em TODOS os
+     * botoes. Como o desenho do widget acontece em {@code super.render()}, que
+     * roda <b>antes</b> do {@code renderContent}, cada eco do servidor religava o
+     * botao travado no limite (o {@code -} da pericia em 0, o {@code -} do
+     * atributo em -30) e o frame seguinte o escurecia de novo: o botao piscava
+     * branco por 1 frame. Passando pelo mesmo metodo nos dois lugares, os dois
+     * sempre concordam com o que o proximo render vai desenhar.
+     *
+     * @param minus botao de menos
+     * @param plus  botao de mais
+     * @param value valor a exibir (ja otimista)
+     * @param min   piso do valor
+     * @param max   teto do valor
+     */
+    private void applyStepButtons(Button minus, Button plus, int value, int min, int max) {
+        minus.active = canEdit && value > min;
+        plus.active = canEdit && value < max;
+    }
+
     @Override
     protected void applyExtraState() {
+        // Setas sem limite de valor (HP, Mana e o botao de atributo): so canEdit.
         for (Button arrow : arrowButtons) {
             arrow.active = canEdit;
+        }
+        // Atributo e pericia tem limite, entao vao pelo MESMO metodo do render.
+        for (AttrRow row : attrRows) {
+            applyStepButtons(row.minusButton(), row.plusButton(),
+                    numericValue(row.attributeId()),
+                    SheetData.Attributes.VALUE_MIN, SheetData.Attributes.VALUE_MAX);
+        }
+        if (sheet != null) {
+            List<SheetData.Pericia> pericias = sheet.pericias();
+            int scroll = clampPerScroll(perScroll);
+            for (int i = 0; i < periciaRows.size() && scroll + i < pericias.size(); i++) {
+                applyStepButtons(periciaRows.get(i).minusButton(), periciaRows.get(i).plusButton(),
+                        displayPericiaValue(pericias.get(scroll + i)),
+                        SheetData.Pericia.VALUE_MIN, SheetData.Pericia.VALUE_MAX);
+            }
         }
     }
 
@@ -757,28 +848,28 @@ public class StatusScreen extends CharacterSheetScreen {
         int hpMax = numericValue("hpMax");
         boolean downed = hp <= 0;
         drawResourceBar(graphics, hpBar, COL_HP, COL_HP_OVER, COL_HP_BG, hp, hpMax, downed);
-        drawValue(graphics, hpBar, hp + " / " + hpMax, downed);
+        drawValue(graphics, hpBar, hp, hpMax, downed);
 
         // Mana: piso 0, sem regra especial, tambem pode passar do maximo.
         int mana = numericValue("mana");
         int manaMax = numericValue("manaMax");
         drawResourceBar(graphics, manaBar, COL_MANA, COL_MANA_OVER, COL_MANA_BG,
                 mana, manaMax, false);
-        drawValue(graphics, manaBar, mana + " / " + manaMax, false);
+        drawValue(graphics, manaBar, mana, manaMax, false);
 
         // Atributos: apenas o numero, centralizado entre os dois botoes.
         // 0 em cinza (o padrao) e qualquer outro valor na cor normal, para o
         // mestre bater o olho em "quem foi ajustado" sem ler os 6 numeros.
         for (AttrRow row : attrRows) {
             int value = numericValue(row.attributeId());
-            // A caixa foi dimensionada pelo teto (valueBoxWidth), entao "30" cabe
-            // inteiro. 27/09/2026: antes a largura era fixa e o texto era cortado
-            // com plainSubstrByWidth, o que ESCONDERA o segundo algarismo ao
-            // passar de 9.
-            // A guarda so volta a cortar no caso que o teto nao cobre: atributo
-            // nao tem piso (Integer.MIN_VALUE), e um payload forjado pode gravar
-            // "-2000000000", que com 62px de largura invadiria o rotulo e os dois
-            // botoes. O clique normal nunca chega nesse caso.
+            // A caixa foi dimensionada pelos extremos (valueBoxWidth), entao
+            // "-30" e "30" cabem inteiros -- inclusive o sinal do piso -30, que
+            // antes nao cabia e virava "-3" (o segundo algarismo sumia) porque a
+            // largura media so o teto.
+            // A guarda so volta a cortar no caso que os limites nao cobrem: um
+            // payload forjado pode gravar "-2000000000", que com 62px de
+            // largura invadiria o rotulo e os dois botoes. O clique normal nunca
+            // chega nesse caso, porque o botao ja desliga no piso.
             String text = Integer.toString(value);
             if (this.font.width(text) > row.w()) {
                 text = this.font.plainSubstrByWidth(text, row.w());
@@ -788,10 +879,13 @@ public class StatusScreen extends CharacterSheetScreen {
             graphics.drawString(this.font, text, tx, ty,
                     value == 0 ? COL_MUTED : COL_BOX_TEXT, false);
 
-            // "+" desliga no teto: active = false desenha o botao cinza, que e o
-            // feedback pedido. O servidor tambem limita (SheetData.Attributes),
-            // entao isto e so a cara do limite, nao a sua unica garantia.
-            row.plusButton().active = canEdit && value < SheetData.Attributes.VALUE_MAX;
+            // "+" desliga no teto (30) e "-" no piso (-30): active = false desenha
+            // o botao cinza, que e o feedback pedido. O servidor tambem limita
+            // (SheetData.Attributes), entao isto e so a cara do limite, nao a sua
+            // unica garantia. E o MESMO metodo que applyExtraState usa, para os
+            // dois concordarem (ver applyStepButtons).
+            applyStepButtons(row.minusButton(), row.plusButton(), value,
+                    SheetData.Attributes.VALUE_MIN, SheetData.Attributes.VALUE_MAX);
         }
 
         drawPericias(graphics);
@@ -800,10 +894,20 @@ public class StatusScreen extends CharacterSheetScreen {
     /**
      * Desenha as linhas de pericia visiveis: nome, valor e a sigla do atributo.
      *
-     * <p>O nome e cortado pela largura ({@code plainSubstrByWidth}) em vez de
+     * <p>O nome e cortado pela largura ({@code truncateWithEllipsis}) em vez de
      * estourar a coluna: o maior nome da lista padrao e "Animal Handling" (15
      * caracteres), que cabe, mas um nome novo ou maior nao pode empurrar os
-     * botoes para fora.
+     * botoes para fora. O corte leva <b>reticencias</b> (27/09/2026) pelo mesmo
+     * motivo do rotulo quebrado: um nome cortado em silencio e indistinguivel de
+     * um nome inteiro, e nesta coluna -- que e onde o Mestre confere o que
+     * escreveu -- ler "Resistenci" como nome completo e pior do que perder o fim
+     * do texto.
+     *
+     * <p>27/09/2026: aqui o nome <b>nao</b> quebra em 2 linhas como os outros
+     * rotulos da ficha. A coluna e compacta e a altura da linha pode chegar a
+     * 9px ({@link #MIN_PER_ROW_H}), onde duas linhas de 8px nao cabem e a 2a
+     * cairia em cima da linha seguinte. Cortar e o unico jeito de nao invadir os
+     * botoes nessa coluna.
      *
      * <p>27/09/2026 (Sheet Editor): {@code periciaRows} guarda so a JANELA
      * visivel (o que cabe na coluna), nao a lista inteira. Por isso o indice da
@@ -826,19 +930,28 @@ public class StatusScreen extends CharacterSheetScreen {
             PericiaRow row = periciaRows.get(i);
             int ty = row.y() + Math.max(1, (row.h() - 8) / 2);
 
-            String name = this.font.plainSubstrByWidth(pericia.name(), row.nameW());
+            String name = truncateWithEllipsis(pericia.name(), row.nameW());
             graphics.drawString(this.font, name, row.nameX(), ty, COL_LABEL, false);
 
-            String valueText = Integer.toString(displayPericiaValue(pericia));
+            int value = displayPericiaValue(pericia);
+            // Mesma guarda do atributo: o valor legitimo cabe (valueBoxWidth mede
+            // o pior caso, sinal incluido), mas um numero forjado e maior do que a
+            // caixa e cortado, em vez de invadir o "-" e o "+". Nao depende do
+            // piso 0 da pericia para o numero caber.
+            String valueText = Integer.toString(value);
+            if (this.font.width(valueText) > row.valueW()) {
+                valueText = this.font.plainSubstrByWidth(valueText, row.valueW());
+            }
             graphics.drawString(this.font, valueText,
                     row.valueX() + (row.valueW() - this.font.width(valueText)) / 2, ty,
                     COL_BOX_TEXT, false);
 
             // "+" desliga no teto (30) e "-" no piso (0), pelo mesmo motivo dos
-            // atributos: o botao cinza diz "voce chegou no limite".
-            int value = displayPericiaValue(pericia);
-            row.plusButton().active = canEdit && value < SheetData.Pericia.VALUE_MAX;
-            row.minusButton().active = canEdit && value > SheetData.Pericia.VALUE_MIN;
+            // atributos: o botao cinza diz "voce chegou no limite". Pelo mesmo
+            // metodo do applyExtraState, para nao haver frame de divergencia
+            // (ver applyStepButtons).
+            applyStepButtons(row.minusButton(), row.plusButton(), value,
+                    SheetData.Pericia.VALUE_MIN, SheetData.Pericia.VALUE_MAX);
 
             // A sigla do atributo fica no botao e vem do MODELO (27/09/2026):
             // antes era o shortName() do enum, e o Mestre nao podia renomear.
@@ -915,10 +1028,42 @@ public class StatusScreen extends CharacterSheetScreen {
         graphics.drawString(this.font, "DOWNED (HP <= 0)", panelX + 4, 24, COL_DOWNED, false);
     }
 
-    /** Escreve "atual / max" no centro da barra. */
-    private void drawValue(GuiGraphics graphics, Bar bar, String text, boolean downed) {
+    /**
+     * Escreve o recurso dentro da barra, degradando o <b>formato</b> e nunca o
+     * numero.
+     *
+     * <p><b>27/09/2026 (bug do usuario):</b> a barra e estreita e depende do
+     * rotulo de um jeito perverso: com o rotulo longo de Mana o
+     * {@code labelW} cresce, o {@code boxW} encolhe (ele faz {@code min} da
+     * area disponivel), e a barra herda o encolhimento -- cai para ~39px. Como
+     * {@code drawValue} roda DEPOIS de {@code super.render()}, um texto maior
+     * que a barra ficava por cima do "-", do "+" e do rotulo "Max", e o
+     * conserto de nao invadir foi {@code plainSubstrByWidth}. Mas cortar o
+     * <b>texto</b> <b>mente</b>: "9999 / 9999" (~61px) virava algo como
+     * "1234 /", que e uma leitura plausivel e errada de um recurso --
+     * justamente nos valores de 4 digitos que o filtro de teto
+     * ({@link SheetData#MAX_RESOURCE}) passou a legalizar.
+     *
+     * <p>Por isso a degradacao e de <b>formato</b>, nesta ordem: o par inteiro
+     * ("9999 / 9999"), depois so o valor atual ("9999"), e so no ultimo caso o
+     * numero perde os algarismos que nao cabem. Nenhum nivel mostra metade de um
+     * formato, e nenhum nivel passa da barra. O ultimo caso so e alcancavel por
+     * valor fora do intervalo legal (um payload forjado), que e a mesma coisa
+     * que o guarda do atributo e da pericia ja aceitam cortar.
+     */
+    private void drawValue(GuiGraphics graphics, Bar bar, int value, int max, boolean downed) {
         if (bar == null) {
             return;
+        }
+        String current = Integer.toString(value);
+        String full = current + " / " + max;
+        String text;
+        if (this.font.width(full) <= bar.w()) {
+            text = full;
+        } else if (this.font.width(current) <= bar.w()) {
+            text = current;
+        } else {
+            text = this.font.plainSubstrByWidth(current, bar.w());
         }
         int x = bar.x() + (bar.w() - this.font.width(text)) / 2;
         int y = bar.y() + (bar.h() - 8) / 2;

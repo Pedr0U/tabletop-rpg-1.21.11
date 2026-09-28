@@ -30,12 +30,14 @@ import java.util.Set;
  * chega por payload e é convertida com {@link #withField}), mas mesmo um cliente
  * malicioso não consegue gravar um valor fora de faixa.
  *
- * <p><b>Atributos: teto 30, sem piso</b> (27/09/2026). Eles viraram modificadores
- * somados às rolagens e podem ser negativos, então o piso é
- * {@link Integer#MIN_VALUE} - ver {@link Attributes}. O teto 30 entrou depois,
- * quando a ficha ganhou botões {@code -}/{@code +} de dois dígitos: sem teto, o
- * número cresce até invadir o rótulo e os botões. A aritmética das rolagens usa
- * {@code long} para não estourar.
+ * <p><b>Atributos: teto 30 e piso -30</b> (decisao do usuario, 27/09/2026).
+ * Eles viraram modificadores somados as rolagens e podem ser negativos, entao
+ * o piso e {@link Attributes#VALUE_MIN} (-30) - ver {@link Attributes}. O teto
+ * 30 entrou depois, quando a ficha ganhou botoes {@code -}/{@code +} de dois
+ * digitos: sem teto, o numero cresce ate invadir o rotulo e os botoes. O valor
+ * de uma <b>pericia</b> e diferente: tem piso 0, porque representa o
+ * investimento do jogador (0-3). A aritmetica das rolagens usa {@code long}
+ * para nao estourar.
  *
  * <p><b>HP pode ser negativo</b> (decisão do usuário): o piso é
  * {@link #MAX_HP_FLOOR} e {@code hp <= 0} significa personagem deitado
@@ -101,8 +103,36 @@ public record SheetData(
     /** Teto de XP. */
     public static final int MAX_XP = 999_999;
 
-    /** Campos de texto livre (editáveis). */
-    public static final List<String> TEXT_FIELDS = List.of("characterName", "race", "characterClass", "background");
+    /**
+     * Campos de texto livre (editaveis), mais o XP quando o modelo esta em modo
+     * TEXT.
+     *
+     * <p><b>27/09/2026:</b> "xptext" entrou aqui porque e assim que a ficha
+     * decide ler um campo por {@link #getText} em vez de {@link #getNumeric}
+     * (ver {@code CharacterSheetScreen.applySheetToWidgets}). Sem ele, a caixa
+     * do XP em modo TEXT recebia {@code getNumeric("xptext")}, que caia no
+     * ramo de atributo e devolvia {@code 0}: o Mestre via a caixa vazia depois
+     * de digitar. Esta lista <b>nao</b> e usada em NBT, codec nem migracao - o
+     * texto do XP ja e gravado em {@code Progress.xpText}, e a edicao dele ja
+     * tinha caso proprio em {@link #withField}.
+     */
+    public static final List<String> TEXT_FIELDS =
+            List.of("characterName", "race", "characterClass", "background", "xptext");
+    /**
+     * Campos com rotulo <b>desenhado na ficha</b>: os de texto, os numericos
+     * com rotulo proprio e o XP em modo TEXT.
+     *
+     * <p><b>27/09/2026:</b> e a lista que a tela de Status usa para reservar a
+     * largura do rotulo ({@code StatusScreen.fieldLabelWidth}). Antes ela
+     * aceitava {@link #TEXT_FIELDS} e uma lista fixa de rotulos literais, o
+     * que deixava de fora o {@code "xptext"} e qualquer rotulo que o Mestre
+     * tivesse renomeado no editor. {@code LABELLED_NUMERIC_FIELDS} do
+     * {@link SheetModel} e a lista dos numericos com rotulo; aqui estao todos.
+     */
+    public static final List<String> LABELLED_FIELDS = List.of(
+            "characterName", "race", "characterClass", "background",
+            "hp", "mana", "level", "xp", "xptext"
+    );
     /**
      * Campos numericos que NAO sao atributos: vida, mana e progressao.
      *

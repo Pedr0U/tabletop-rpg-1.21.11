@@ -9,6 +9,8 @@ import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
+import net.minecraft.network.chat.Style;
+import net.minecraft.util.FormattedCharSequence;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -62,6 +64,60 @@ public abstract class CharacterSheetScreen extends Screen {
      * constante existe para ser trocada num so lugar.
      */
     public static final int ARROW_STEP = 1;
+    /**
+     * Altura da tinta de um glifo da fonte padrao (ascendente 7, 1 linha de
+     * folga). E o que o bloco de 2 linhas gasta por linha de rotulo.
+     */
+    protected static final int LABEL_GLYPH_H = 8;
+    /**
+     * Passo entre as duas linhas de um rotulo quebrado (fonte de 8px + 1).
+     *
+     * <p>27/09/2026: passou a ser o <b>maior</b> passo, e nao um fixo. Com ele
+     * fixo, o bloco so fechava com {@code rowH >= 18}, e {@code fitRowHeight}
+     * chega ao piso de {@link #MIN_ROW_H} (12) em janela baixa -- a resolucao
+     * de referencia do projeto (480x270, escala 4) fica em 13, e o wrap que o
+     * usuario pediu simplesmente nao acontecia ali. Ver
+     * {@link #labelBlockAdvance()}.
+     */
+    protected static final int LABEL_LINE_ADVANCE = 9;
+    /**
+     * Menor passo entre as duas linhas de um rotulo quebrado.
+     *
+     * <p>27/09/2026: 8px e a altura da tinta, entao com passo 8 a linha de baixo
+     * comeca logo abaixo da de cima, sem compartilhar nenhum pixel. Abaixo
+     * disso as duas linhas se sobrepoem e o rotulo vira uma mancha -- e nenhum
+     * ganho de espaco justifica isso. Quando a linha da ficha e baixa demais ate
+     * para este passo, o wrap <b>nao</b> e forcado: o rotulo volta a uma linha
+     * so, agora cortado <b>com reticencias</b> ({@link #truncateWithEllipsis}).
+     */
+    protected static final int MIN_LABEL_ADVANCE = 8;
+    /**
+     * Altura do bloco de 2 linhas do rotulo com o passo cheio: o passo mais a
+     * altura da fonte.
+     *
+     * <p>27/09/2026: e o pior caso do bloco. Com o passo apertado
+     * ({@link #labelBlockAdvance()}) o bloco e menor que este, e o que decide
+     * se o rotulo cabe na linha e o bloco <b>calculado</b>, mais 1px de folga
+     * antes da linha de baixo (e nao a caixa de valor, que esta na horizontal).
+     */
+    protected static final int LABEL_BLOCK_H = LABEL_LINE_ADVANCE + LABEL_GLYPH_H;
+    /**
+     * Marca de texto cortado.
+     *
+     * <p>27/09/2026: tres pontos em vez de reticencias tipografico, porque o
+     * ponto e o glifo mais barato da fonte padrao (2px): a marca gasta 6px e
+     * sobra mais texto visivel do que um glifo unico largo -- e nao depende de
+     * a fonte em uso ter aquele caractere.
+     */
+    protected static final String TRUNCATION_MARK = "...";
+    /**
+     * Sem teto de valor no filtro numerico da caixa (0).
+     *
+     * <p>27/09/2026: e o que mantem o limite antigo de 9 digitos em quem nao
+     * recebe teto por campo ({@code level} e {@code xp}), que o usuario pediu
+     * para NAO mexer.
+     */
+    protected static final int NO_CEILING = 0;
 
     // ------------------------------------------------------------------
     // CORES (painel escuro simples, feedback do usuario)
@@ -92,12 +148,26 @@ public abstract class CharacterSheetScreen extends Screen {
     protected static final int COL_BAR_EDGE = 0xFF55555F;
     protected static final int COL_DOWNED = 0xFFFF6060;
 
-    /** Um texto a desenhar no proximo {@code render} (montado em init). */
-    protected record TextLine(String text, int x, int y, int color) {
+    /**
+     * Um texto a desenhar no proximo {@code render} (montado em init).
+     *
+     * <p>27/09/2026: o texto e um {@link FormattedCharSequence} porque e ele que
+     * {@code Font.split} devolve ao quebrar um rotulo em 2 linhas. Em 1.21.11
+     * {@code FormattedText} <b>nao</b> estende {@code FormattedCharSequence}
+     * (confirmado no jar), entao {@code Component} nao serve aqui: o texto
+     * simples entra pelo construtor de {@link String}, que faz a conversao com
+     * {@code FormattedCharSequence.forward}.
+     */
+    protected record TextLine(FormattedCharSequence text, int x, int y, int color) {
+        /** Atalho para o texto simples, que e o caso comum. */
+        TextLine(String text, int x, int y, int color) {
+            this(FormattedCharSequence.forward(text, Style.EMPTY), x, y, color);
+        }
     }
 
     /** Geometria de uma barra, calculada em init() e desenhada em render(). */
     protected record Bar(int x, int y, int w, int h) {
+
     }
 
     // ------------------------------------------------------------------
@@ -290,8 +360,9 @@ public abstract class CharacterSheetScreen extends Screen {
     /**
      * Soma que trava no limite do {@code int} em vez de dar a volta.
      *
-     * <p><b>Por que importa aqui:</b> os atributos tem teto 30 mas <b>sem
-     * piso</b>. Com {@code base + delta} simples, um atributo em
+     * <p><b>Por que importa aqui:</b> os atributos tem teto 30 e piso -30
+     * ({@code SheetData.Attributes.VALUE_MAX/VALUE_MIN}), e o valor de uma
+     * pericia tem piso 0. Com {@code base + delta} simples, um valor em
      * {@code Integer.MAX_VALUE} mais um clique viraria {@code MIN_VALUE} e esse
      * numero negativo seria gravado na ficha do servidor.
      */
@@ -397,15 +468,164 @@ public abstract class CharacterSheetScreen extends Screen {
 
     /** Registra um titulo de secao e devolve o proximo Y. */
     protected int addSection(String title, int x0, int y) {
-        textLines.add(new TextLine(title, x0, y + labelOffset(), COL_SECTION));
+        // Sem largura reservada, o titulo pode ocupar a linha inteira da tela.
+        return addSection(title, x0, y, this.width - x0);
+    }
+
+    /**
+     * Titulo de secao limitado a {@code labelW}: o que for maior quebra em 2
+     * linhas em vez de invadir o que esta a direita (a coluna de pericias, no
+     * caso do Status).
+     *
+     * @see #addWrappedLabel
+     */
+    protected int addSection(String title, int x0, int y, int labelW) {
+        addWrappedLabel(title, x0, y, labelW, COL_SECTION);
         return y + rowH;
     }
 
     /** Registra o rotulo de um campo, cria a caixa e devolve o proximo Y. */
-    protected int addField(String field, int x0, int y, int boxX, int boxW, boolean numeric) {
-        textLines.add(new TextLine(SheetData.labelOf(field), x0, y + labelOffset(), COL_LABEL));
-        fieldBoxes.put(field, createFieldBox(field, boxX, y, boxW, numeric));
+    protected int addField(String field, int x0, int y, int boxX, int boxW,
+                            int labelW, boolean numeric) {
+        addWrappedLabel(SheetData.labelOf(field), x0, y,
+                Math.min(labelW, Math.max(12, boxX - x0 - 4)), COL_LABEL);
+        // A caixa NAO se move quando o rotulo quebra: ela ja ocupa a linha
+        // inteira (rowH - 2) e o bloco de 2 linhas e centralizado nela, entao os
+        // centros batem (ver addWrappedLabel) e a coluna de caixas continua
+        // alinhada pixel a pixel -- mexer na Y aqui desalinharia as 4 caixas de
+        // identidade quando so um rotulo quebra.
+        fieldBoxes.put(field, createFieldBox(field, boxX, y, boxW, numeric, NO_CEILING));
         return y + rowH;
+    }
+
+    /**
+     * Registra um rotulo e devolve quantas linhas ele ocupou (1 ou 2).
+     *
+     * <p><b>27/09/2026, bug do usuario:</b> "quando o nome de algo e muito
+     * grande, ele atravessa os botoes/caixa de texto". Com "Pontos de
+     * Determinacao (PD)" no rotulo de Mana, o texto media 140px numa coluna
+     * reservada de 124px e invadia o botao "-" em 16px, porque o rotulo era
+     * desenhado sem nenhum corte.
+     *
+     * <p><b>O que o usuario pediu:</b> quebrar para a linha de baixo e
+     * <b>centralizar</b> conforme a caixa de texto a frente. Entao o caminho e:
+     * <ol>
+     *   <li>cabe na largura? desenha como antes, alinhado a esquerda e na
+     *       mesma linha de sempre (layout aprovado, nao muda nada);</li>
+     *   <li>quebra com {@code font.split}, que devolve
+     *       {@link FormattedCharSequence} (String crua nao serve), e centraliza
+     *       cada linha na largura reservada;</li>
+     *   <li>ainda nao coube em 2 linhas? a 2a vira o <b>resto</b> do texto,
+     *       cortado na largura reservada: e o ultimo recurso, e existe porque
+     *       invadir o botao e pior do que cortar.</li>
+     * </ol>
+     *
+     * <p><b>Altura do bloco:</b> as duas linhas sao centralizadas na linha
+     * ({@code y + (rowH - blockH) / 2}), e nao ancoradas na caixa: com
+     * {@code rowH} no maximo (20) e o passo cheio (9) o bloco ocupa de
+     * {@code y+1} a {@code y+17}, o centro dele ({@code y+9,5}) e o mesmo do
+     * texto da caixa (que o vanilla desenha em {@code y+6} numa caixa de 18px,
+     * tambem com centro {@code y+9,5}), e a 2a linha para 3px antes da linha de
+     * baixo. Ancorar a 1a linha no texto da caixa e correcto, mas a 2a vazava
+     * para a linha seguinte.
+     *
+     * <p><b>27/09/2026, o wrap que o usuario pediu so funcionava em janela
+     * alta:</b> o passo fixo de 9 com bloco de 17 so fechava com
+     * {@code rowH >= 18}, e {@link #fitRowHeight} chega ao piso de
+     * {@link #MIN_ROW_H} (12) -- a resolucao de referencia do projeto (480x270,
+     * escala 4) fica em {@code rowH} 13, e ali o wrap nao acontecia e o rotulo
+     * era cortado. O passo agora encolhe com a linha ({@link #labelBlockAdvance})
+     * ate {@link #MIN_LABEL_ADVANCE}, e o bloco so entra quando ele fecha de
+     * verdade na linha. Nao da para forcar o wrap em {@code rowH} 12 e 13: duas
+     * linhas de tinta de 8px nao cabem em 13px sem se sobrepor. Nesse caso o
+     * rotulo volta a uma linha so, agora com reticencias, para o Mestre VER
+     * que o texto foi truncado em vez de ler um nome que parece completo.
+     *
+     * <p>A quebra e por palavra, como em {@code SkillsScreen} (popup da skill).
+     *
+     * @param labelW largura reservada ao rotulo (ate o que vem a direita)
+     * @return 1 ou 2, quantas linhas foram desenhadas
+     */
+    protected int addWrappedLabel(String text, int x0, int y, int labelW, int color) {
+        int maxW = Math.max(8, labelW);
+        int advance = labelBlockAdvance();
+        int blockH = advance + LABEL_GLYPH_H;
+        // O bloco de 2 linhas so entra quando ele fecha na linha, mais 1px de
+        // folga antes da linha de baixo (que e o que faltava no teste antigo,
+        // fixo em LABEL_BLOCK_H). Fora disso o rotulo e cortado numa linha so,
+        // com reticencias -- nunca invade a coluna da frente, que esta sempre
+        // limitada por maxW.
+        if (this.font.width(text) > maxW && blockH + 1 > rowH) {
+            text = truncateWithEllipsis(text, maxW);
+        }
+        if (this.font.width(text) <= maxW) {
+            textLines.add(new TextLine(text, x0, y + labelOffset(), color));
+            return 1;
+        }
+
+        int blockTop = y + (rowH - blockH) / 2;
+        Component literal = Component.literal(text);
+        List<FormattedCharSequence> parts = this.font.split(literal, maxW);
+        if (parts.size() > 2) {
+            // 3 linhas ou mais nao cabem no bloco de 2. A 1a fica inteira e a 2a
+            // recebe o resto do texto, cortado na largura reservada. A 1a linha
+            // em texto simples sai do mesmo StringSplitter que o font.split usa
+            // por tras (splitLines devolve FormattedText, que tem getString),
+            // porque FormattedCharSequence nao tem length: so
+            // accept(FormattedCharSink). O Math.min evita o_bounds quando o
+            // rotulo tem caractere fora do plano basico, em que o indice do
+            // codepoint nao bate com o indice UTF-16 do substring().
+            String firstLine = this.font.getSplitter().splitLines(literal, maxW, Style.EMPTY)
+                    .get(0).getString();
+            String rest = text.substring(Math.min(firstLine.length(), text.length())).trim();
+            parts = List.of(parts.get(0), FormattedCharSequence.forward(
+                    truncateWithEllipsis(rest, maxW), Style.EMPTY));
+        }
+        for (int i = 0; i < parts.size(); i++) {
+            FormattedCharSequence part = parts.get(i);
+            textLines.add(new TextLine(part, x0 + (maxW - this.font.width(part)) / 2,
+                    blockTop + i * advance, color));
+        }
+        return parts.size();
+    }
+
+    /**
+     * Passo entre as duas linhas do rotulo quebrado, ja apertado na linha atual.
+     *
+     * <p>27/09/2026: era {@link #LABEL_LINE_ADVANCE} fixo, e o bloco de 2 linhas
+     * so fechava com {@code rowH >= 18}. Em janela baixa ({@code rowH} 12 ou
+     * 13, que e o que a resolucao de referencia do projeto, 480x270 com escala
+     * 4, produz) o wrap nao acontecia e o rotulo era cortado em silencio. O
+     * passo agora encolhe junto com a linha, ate {@link #MIN_LABEL_ADVANCE}, que
+     * e o limite em que as duas linhas ainda nao se sobrepoem. O passo menor que
+     * isso nao compra wrap: compra sobreposicao.
+     */
+    protected int labelBlockAdvance() {
+        return Math.max(MIN_LABEL_ADVANCE,
+                Math.min(LABEL_LINE_ADVANCE, rowH - LABEL_GLYPH_H - 1));
+    }
+
+    /**
+     * Corta o texto na largura reservada e <b>marca o corte</b>.
+     *
+     * <p><b>27/09/2026:</b> o corte puro de {@code plainSubstrByWidth} e
+     * silencioso, e um rotulo cortado e indistinguivel de um rotulo completo --
+     * no editor de molde isso e o pior dos dois, porque o Mestre acha que o nome
+     * da pericia e mesmo. A marca e o que mostra a perda, entao ela e paga
+     * <b>antes</b> de cortar o texto: {@code plainSubstrByWidth} garante que o
+     * que sobrou cabe em {@code maxW - markW}, e o resultado inteiro cabe em
+     * {@code maxW}. Nao havendo corte, o texto volta intacto (sem marca).
+     *
+     * @param text texto a truncar, se preciso
+     * @param maxW largura maxima
+     */
+    protected String truncateWithEllipsis(String text, int maxW) {
+        if (this.font.width(text) <= maxW) {
+            return text;
+        }
+        int markW = this.font.width(TRUNCATION_MARK);
+        String cut = markW >= maxW ? "" : this.font.plainSubstrByWidth(text, maxW - markW);
+        return cut + TRUNCATION_MARK;
     }
 
     /**
@@ -414,16 +634,29 @@ public abstract class CharacterSheetScreen extends Screen {
      * <p>O contraste e o que faltava para o usuario perceber que o campo e
      * editavel: texto branco quando editavel, cinza apagado quando nao, e a
      * borda de foco nativa do vanilla quando o campo ganha foco.
+     *
+     * <p>27/09/2026 (bug do usuario): "o display da barra de HP/Mana so
+     * suporta 4 caracteres, entao limite a insercao do valor maximo na caixa de
+     * ate 9999 somente". O filtro era generico ({@code -?\d{0,9}}) e nao olhava
+     * o teto do campo, entao dava para digitar {@code 99999} no teto de HP --
+     * e o servidor recortava em silencio para 9999. Agora o teto vem por campo
+     * em {@code ceiling} ({@link SheetData#MAX_RESOURCE} no teto de HP e de
+     * Mana) e {@link #NO_CEILING} mantem o limite antigo de quem nao mudou
+     * ({@code level} e {@code xp}). O servidor continua sendo a autoridade: isto
+     * so evita a digitacao que seria descartada.
      */
-    protected EditBox createFieldBox(String field, int x, int y, int w, boolean numeric) {
+    protected EditBox createFieldBox(String field, int x, int y, int w, boolean numeric, int ceiling) {
         EditBox box = new EditBox(this.font, x, y, w, rowH - 2,
                 Component.literal(SheetData.labelOf(field)));
         if (numeric) {
             // Numeros com sinal: o "-" precisa passar, senao nao existe como
             // digitar valor negativo (os atributos vao para as setas, mas
             // nivel/xp e qualquer campo futuro continuam por aqui).
-            // O limite de 9 digitos mantem o numero longe do overflow.
-            box.setFilter(s -> s.matches("-?\\d{0,9}"));
+            // O limite de 9 digitos mantem o numero longe do overflow; o teto do
+            // campo, quando existe, e mais apertado e decide antes disso (o sinal
+            // nao conta para o teto: "-999" e o valor 999).
+            box.setFilter(s -> s.matches("-?\\d{0,9}")
+                    && (ceiling == NO_CEILING || withinCeiling(s, ceiling)));
             box.setMaxLength(10);
         } else {
             box.setMaxLength(SheetData.MAX_NAME);
@@ -452,6 +685,31 @@ public abstract class CharacterSheetScreen extends Screen {
         // nenhum campo": a FASE 3 criava a caixa e so a guardava no mapa.)
         addRenderableWidget(box);
         return box;
+    }
+
+    /**
+     * O numero cabe no teto do campo?
+     *
+     * <p>27/09/2026: o filtro so contava caracteres, e o usuario pediu o teto
+     * de <b>valor</b> (9999 no HP/Mana). A regra nao pode ser "no maximo 4
+     * caracteres", porque o sinal nao conta para o valor: {@code -999} sao 4
+     * caracteres com sinal e o numero 999, que cabe no 9999. Entao quem decide e
+     * o numero: mais digitos que o teto tem, recusa sem comparar; no mesmo
+     * numero de digitos, compara o valor -- com teto 99, {@code 99} passa e
+     * {@code 999} nao; com teto 9999, os 4 digitos sempre passam e o 5o ja e
+     * recusado. So o sinal (e o campo vazio, enquanto ainda esta digitando)
+     * passam sempre. O {@code parseLong} nunca ve mais de 9 digitos, porque o
+     * filtro acima ja limitou.
+     */
+    private static boolean withinCeiling(String value, int ceiling) {
+        String digits = value.startsWith("-") ? value.substring(1) : value;
+        if (digits.isEmpty()) {
+            return true;
+        }
+        if (digits.length() > Integer.toString(ceiling).length()) {
+            return false;
+        }
+        return Long.parseLong(digits) <= ceiling;
     }
 
     /**
@@ -517,12 +775,19 @@ public abstract class CharacterSheetScreen extends Screen {
 
     @Override
     public void render(GuiGraphics graphics, int mouseX, int mouseY, float delta) {
-        // super.render() desenha o fundo (renderBackground) e os widgets.
-        super.render(graphics, mouseX, mouseY, delta);
-
+        // O titulo vem ANTES de super.render() (27/09/2026): desenhado depois, ele
+        // ficava POR CIMA dos widgets e do texto, a mesma armadilha do numero da
+        // barra em StatusScreen.drawValue. O fundo da tela e do painel ja foi
+        // desenhado por quem chama render -- em 1.21.11 e renderWithTooltipAnd-
+        // Subtitles, que chama renderBackground antes de render, e Screen.render
+        // so itera os elementos -- e o painel comeca em y = 20, entao o titulo em
+        // y = 8 nao e coberto por nenhum dos dois.
         String title = titleText();
         graphics.drawString(this.font, title,
                 (this.width - this.font.width(title)) / 2, 8, COL_TITLE, false);
+
+        // super.render() desenha os widgets.
+        super.render(graphics, mouseX, mouseY, delta);
 
         // Estado de edicao explicito: responde a duvida "da para editar?".
         String state = canEdit ? "Editable" : "Read-only";

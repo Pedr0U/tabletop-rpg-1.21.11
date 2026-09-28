@@ -12,8 +12,10 @@ import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.function.Consumer;
 
 /**
@@ -33,6 +35,20 @@ import java.util.function.Consumer;
  * Descartar joga fora a copia e volta ao que o servidor tem. O preco e que nao
  * existe "desfazer" para uma edicao ja gravada; o preco da alternativa (gravar a
  * cada tecla) seria reescrever o modelo do mundo a cada tecla.
+ *
+ * <p><b>Fechar sem salvar nao apaga a edicao (decisao do usuario,
+ * 27/09/2026):</b> sair da tela sem gravar -- pelo ESC, pelo botao Close ou por
+ * qualquer outra troca de tela -- guarda um {@code rascunho} (ver
+ * {@link #draft}) e a proxima abertura comeca por ele. Ele <b>nao entra em
+ * vigor</b>: o modelo do servidor continua sendo o de {@code baseline} e nada e
+ * enviado. So o Descartar volta ao salvo e so o Salvar grava.
+ *
+ * <p><b>Mas o rascunho e por sessao de mundo, nao por tela (27/09/2026):</b>
+ * ele e estatico, e por isso sobreviveria a uma saida do mundo. Entrar em outro
+ * mundo com o rascunho do primeiro faria a proxima abertura comecar pelo modelo
+ * errado ({@code baseline} seria o do mundo novo) e um Salvar gravaria o modelo
+ * do mundo antigo no {@code SheetModelStore} do novo. E o motivo de existir
+ * {@link #discardTransientState()}, chamado no cleanup de desconexao.
  *
  * <p><b>So o Mestre chega aqui:</b> o servidor so envia o pacote de abrir depois
  * de {@code SessionManager.isMaster}. Esta tela nao refaz a checagem de proposito.
@@ -77,9 +93,44 @@ public class SheetEditorScreen extends Screen {
     // ------------------------------------------------------------------
 
     /** A copia em edicao. Nunca null. */
-    private SheetModel staged = SheetModelHolder.current();
+    private SheetModel staged = takeDraft();
     /** O que o servidor tinha quando a tela montou, ou o ultimo que foi salvo. */
     private SheetModel baseline = SheetModelHolder.current();
+
+    /**
+     * O que o Mestre digitou numa linha de pericia e que o modelo ainda nao
+     * aceitou, por <b>posicao</b> na lista: {@code posicao -> texto digitado}.
+     *
+     * <p><b>O nome vazio nao entra no modelo, e a tela nao finge que entrou.</b>
+     * {@code SheetModel.sanitizePericias} <b>descarta</b> a pericia de nome
+     * vazio e, se a lista toda sobrar vazia, restaura as 18 padrao: deixar o
+     * vazio no modelo deslocaria todas as linhas seguintes, e o botao de atributo
+     * e o {@code X} passariam a operar na pericia errada: a identidade da linha
+     * aqui e a posicao ({@link #periciaAt}). O modelo guarda o ultimo nome valido
+     * e o texto digitado fica aqui; enquanto o mapa nao estiver vazio o Salvar
+     * fica desligado ({@link #hasPendingName}).
+     *
+     * <p><b>E estatico de proposito:</b> a tela e montada de novo a cada
+     * abertura do item ({@code TabletopRpgClient} faz {@code new
+     * SheetEditorScreen()}), e o texto digitado precisa continuar na caixa depois
+     * de um ESC, que monta outra instancia. Vive so na memoria do cliente.
+     */
+    private static final Map<Integer, String> pendingNames = new LinkedHashMap<>();
+
+    /**
+     * A copia que o Mestre deixou na tela e fechou sem salvar.
+     *
+     * <p><b>Fecha sem salvar nao e cancelar.</b> Reabrir o item comeca por ele
+     * ({@link #takeDraft}) e ele <b>nao entra em vigor</b>: o modelo do
+     * servidor continua sendo o de {@code baseline} e nada e enviado. Descartar
+     * volta ao salvo e Salvar grava; os dois apagam este campo.
+     *
+     * <p><b>E estatico pela mesma razao de {@link #pendingNames}:</b> um campo
+     * de instancia desapareceria no ESC, que e justamente o caminho que precisa
+     * guardar. Nao vai para disco, nem para o {@code SheetModel}, nem para o
+     * {@code SheetData}, nem para pacote: dura ate o fim da sessao.
+     */
+    private static SheetModel draft;
 
     private int scrollPx;
 
@@ -91,6 +142,21 @@ public class SheetEditorScreen extends Screen {
      * recusaria de novo, e o resultado seria um laco.
      */
     private boolean suppressNotify;
+
+    /**
+     * Botoes do rodape cujo estado e conferido a cada frame (ver {@link #render}).
+     *
+     * <p>Sao campos, e nao variaveis locais de {@code buildFooter}, porque o
+     * estado deles e ajustado a cada frame: so com o retorno de
+     * {@code addRenderableWidget} nao haveria como ligar e desligar depois que a
+     * tela ja foi montada. O Salvar segue {@link #isDirty()} e tambem
+     * {@link #hasPendingName()}; o Descartar segue os dois
+     * ({@link #canDiscard()}); o Restaurar segue o padrao do modelo, e nao o que
+     * foi salvo.
+     */
+    private Button saveButton;
+    private Button discardButton;
+    private Button resetButton;
 
     /** Controles de conteudo, com a posicao que teriam sem rolagem. */
     private final List<Slot> slots = new ArrayList<>();
@@ -189,8 +255,9 @@ public class SheetEditorScreen extends Screen {
                 });
 
         y = header(y, "pericias");
-        for (SheetModel.PericiaDef def : staged.pericias()) {
-            y = periciaRow(y, def);
+        List<SheetModel.PericiaDef> pericias = staged.pericias();
+        for (int i = 0; i < pericias.size(); i++) {
+            y = periciaRow(y, pericias.get(i), i);
         }
         y = addButton(y, "add_pericia", staged.periciaCount() < SheetModel.MAX_PERICIAS,
                 staged.periciaCount(), SheetModel.MAX_PERICIAS,
@@ -223,12 +290,22 @@ public class SheetEditorScreen extends Screen {
         return y + ROW_H;
     }
 
+    /**
+     * Um interruptor de dois estados, com o rotulo do campo a esquerda.
+     *
+     * <p><b>O estado mora num holder, e nao no parametro {@code current}.</b> O
+     * parametro e congelado por valor quando o botao e montado, entao
+     * {@code !current} seria uma constante e todo clique enviaria o mesmo valor --
+     * o botao so mudaria na primeira vez. O holder e lido e escrito a cada
+     * clique, como em {@link #xpModeField}.
+     */
     private int toggleField(int y, String key, boolean current, Consumer<Boolean> apply) {
         captions.add(new Caption(y + 6, tr(key), COL_CAPTION));
-        Button button = Button.builder(toggleText(current), b -> {
-            boolean next = !current;
-            apply.accept(next);
-            b.setMessage(toggleText(next));
+        boolean[] on = {current};
+        Button button = Button.builder(toggleText(on[0]), b -> {
+            on[0] = !on[0];
+            apply.accept(on[0]);
+            b.setMessage(toggleText(on[0]));
         }).bounds(ctrlX(), y, 60, ROW_H - 4).build();
         addRenderableWidget(button);
         slots.add(new Slot(button, y));
@@ -308,41 +385,74 @@ public class SheetEditorScreen extends Screen {
     /**
      * Uma linha por pericia: nome editavel, atributo padrao e o botao de tirar.
      *
-     * <p><b>O nome recusa vazio e duplicado, e a caixa volta ao texto antigo.</b>
-     * {@code withPericiaText} recusa essas duas entradas, porque duas pericias com
-     * o mesmo nome fazem uma sobrescrever a outra em qualquer busca por nome.
-     * Devolver o texto para a caixa evita que o usuario veja o nome novo na tela
-     * enquanto o modelo por tras continua com o antigo -- e que o Salvar grave o
-     * antigo sem ele perceber.
+     * <p><b>A linha e identificada pela posicao, nunca pelo nome.</b> O nome e o
+     * que o Mestre esta digitando, entao usar o nome capturado na montagem da
+     * linha faz a busca errar a partir da segunda tecla: o modelo ja nao tem
+     * mais aquela pericia com aquele nome, a busca volta {@code null} e a tela
+     * cai no ramo de reversao, devolvendo o texto antigo na caixa e deixando no
+     * modelo so a primeira letra. A posicao na lista e estavel durante a vida da
+     * linha porque {@code withPericiaText} substitui a pericia no lugar e
+     * qualquer mudanca na quantidade de pericias passa por
+     * {@code rebuildWidgets()}, que remonta as linhas.
+     *
+     * <p><b>Nome vazio fica na caixa e nao entra no modelo.</b> Antes,
+     * {@code withPericiaText} recusava o vazio, a tela comparava por identidade
+     * ({@code next == staged}) e devolvia o texto antigo na caixa, e o
+     * {@code setValue} leva o cursor para o fim, entao o Mestre apertava Backspace,
+     * a letra voltava e o cursor pulava para o fim. Agora a caixa mostra o que foi
+     * digitado, o modelo continua com o ultimo nome valido
+     * ({@link #pendingNames}) e so volta a ser possivel gravar quando o nome
+     * voltar a ser valido (decisao do Mestre em 27/09/2026). So espacos contam
+     * como vazio porque o modelo faz {@code trim()}.
+     *
+     * <p><b>Nome ja usado por outra pericia ainda volta para a caixa.</b> Esse
+     * caso nao pode ficar pendurado como o vazio: duas linhas com o mesmo nome
+     * pendente nao tem ordem de resolucao, e o modelo recusa por identidade. A
+     * caixa volta ao texto antigo e o modelo continua coerente com a tela.
+     *
+     * <p><b>O {@code X} nao depende do nome.</b> Ele remove por
+     * {@code periciaAt(pos)}, a posicao, e nao pelo nome: e por isso que continua
+     * sendo a saida de um nome invalido, e o unico caminho, ja que o Salvar fica
+     * desligado enquanto houver um.
      */
-    private int periciaRow(int y, SheetModel.PericiaDef def) {
-        String originalName = def.name();
+    private int periciaRow(int y, SheetModel.PericiaDef def, int pos) {
         int rightX = colX() + colW() - BTN_W;
         int nameW = ctrlW() - GAP - ATTR_BTN_W - GAP - BTN_W;
 
         EditBox name = new EditBox(this.font, ctrlX(), y, nameW, ROW_H - 4, tr("name"));
         name.setMaxLength(SheetModel.LABEL_MAX);
-        name.setValue(originalName);
+        // rebuildWidgets() remonta a linha: a caixa volta com o texto que o Mestre
+        // deixou e nao com o nome valido que esta por tras dele.
+        name.setValue(pendingNames.containsKey(pos) ? pendingNames.get(pos) : def.name());
         name.setResponder(value -> {
             if (suppressNotify) {
                 return;
             }
-            SheetModel.PericiaDef live = staged.periciaByName(originalName);
-            String current = live == null ? originalName : live.name();
-            SheetModel next = staged.withPericiaText(current, value,
-                    live == null ? def.attributeId() : live.attributeId());
+            // Le a pericia de {@code staged} no momento da tecla: o texto da caixa
+            // ja e o nome novo, e o modelo precisa ser consultado pelo nome que ele
+            // tem agora, e nao pelo que a linha tinha quando foi montada.
+            SheetModel.PericiaDef live = periciaAt(pos);
+            if (live == null) {
+                return;
+            }
+            if (value == null || value.trim().isEmpty()) {
+                pendingNames.put(pos, value == null ? "" : value);
+                return;
+            }
+            SheetModel next = staged.withPericiaText(live.name(), value, live.attributeId());
             if (next == staged) {
-                SheetModel.PericiaDef after = staged.periciaByName(current);
+                pendingNames.remove(pos);
                 suppressNotify = true;
-                name.setValue(after == null ? originalName : after.name());
+                name.setValue(live.name());
                 suppressNotify = false;
                 return;
             }
+            pendingNames.remove(pos);
             staged = next;
         });
 
         Button attr = Button.builder(Component.literal(staged.attributeLabel(def.attributeId())), b -> {
-            SheetModel.PericiaDef live = staged.periciaByName(originalName);
+            SheetModel.PericiaDef live = periciaAt(pos);
             if (live == null || staged.attributes().isEmpty()) {
                 return;
             }
@@ -355,7 +465,12 @@ public class SheetEditorScreen extends Screen {
         attr.active = attributeIndexOf(def.attributeId()) >= 0;
 
         Button remove = Button.builder(Component.literal("X"), b -> {
-            staged = staged.removePericia(originalName);
+            SheetModel.PericiaDef live = periciaAt(pos);
+            if (live == null) {
+                return;
+            }
+            staged = staged.removePericia(live.name());
+            shiftPendingAbove(pos);
             rebuildWidgets();
         }).bounds(rightX, y, BTN_W, ROW_H - 4).build();
         remove.active = staged.periciaCount() > SheetModel.MIN_PERICIAS;
@@ -379,26 +494,48 @@ public class SheetEditorScreen extends Screen {
         return y + ROW_H;
     }
 
+    /**
+     * Monta o rodape: Salvar, Descartar, Reset e Close.
+     *
+     * <p><b>A largura do rodape acompanha a janela.</b> A conta vem de
+     * {@link #colW()}, que ja respeita a largura real, em vez de um total fixo de
+     * 418px: em 1600x900 com escala 4 a tela tem 400px, o {@code x} ficava
+     * negativo e o primeiro botao saia cortado. Agora a folga e a largura de cada
+     * botao encolhem junto e os quatro cabem entre 0 e {@code this.width}. A
+     * folga nunca cai abaixo de 2px, e na menor janela possivel (320px de tela,
+     * ja com escala 4) cada botao ainda fica com 72px, o que comporta o rotulo
+     * mais longo do rodape.
+     */
     private void buildFooter() {
         int y = this.height - FOOTER_H + 4;
-        int bw = 100;
-        int gap = 6;
-        int x = (this.width - (4 * bw + 3 * gap)) / 2;
+        int span = Math.min(colW(), this.width);
+        int gap = Math.max(2, span / 100);
+        int bw = (span - 3 * gap) / 4;
+        int x = Math.max(0, (this.width - (4 * bw + 3 * gap)) / 2);
 
-        addRenderableWidget(Button.builder(tr("save"), b -> save())
+        saveButton = addRenderableWidget(Button.builder(tr("save"), b -> save())
                 .bounds(x, y, bw, ROW_H - 2).build());
-        Button discard = addRenderableWidget(Button.builder(tr("discard"), b -> discard())
+        discardButton = addRenderableWidget(Button.builder(tr("discard"), b -> discard())
                 .bounds(x + (bw + gap), y, bw, ROW_H - 2).build());
-        Button reset = addRenderableWidget(Button.builder(tr("reset"), b -> {
+        resetButton = addRenderableWidget(Button.builder(tr("reset"), b -> {
             staged = SheetModel.defaults();
+            // O modelo inteiro foi trocado: as marcas de nome pendente eram
+            // posicoes da lista antiga, e o rascunho era de outra edicao.
+            clearDraft();
             rebuildWidgets();
         }).bounds(x + 2 * (bw + gap), y, bw, ROW_H - 2).build());
         addRenderableWidget(Button.builder(tr("close"), b -> onClose())
                 .bounds(x + 3 * (bw + gap), y, bw, ROW_H - 2).build());
 
-        // Descartar so faz sentido com algo para descartar.
-        discard.active = isDirty();
-        reset.active = !staged.equals(SheetModel.defaults());
+        // Descartar so faz sentido com algo para descartar. O estado dos tres
+        // botoes de edicao e conferido de novo a cada frame, no render, porque
+        // digitar numa caixa muda o modelo sem passar por init(): definido so
+        // aqui, eles ficariam desatualizados durante a digitacao. O Descartar
+        // entra tambem com um nome invalido pendente (ver o render): sem isso,
+        // apagar um nome e nao mexer em mais nada deixaria o Descartar e o
+        // Restaurar desligados e o Salvar tambem, sem saida para o texto valido.
+        discardButton.active = canDiscard();
+        resetButton.active = !staged.equals(SheetModel.defaults());
     }
 
     // ------------------------------------------------------------------
@@ -416,6 +553,17 @@ public class SheetEditorScreen extends Screen {
      * desenhar os filhos a mao, porque o {@code super.render()} do vanilla desenha
      * todos de uma vez, incluindo o rodape. Marcar {@code visible = false} usa o
      * caminho ja testado do vanilla e deixa o rodape sempre visivel.
+     *
+     * <p><b>So entra o que cabe inteiro (27/09/2026).</b> O teste antigo era
+     * {@code y + ROW_H > top}, e {@code ROW_H} (20) e a altura da <i>linha</i>,
+     * nao a do widget ({@code ROW_H - 4}, 16): com a rolagem em uma linha o
+     * primeiro controle ia parar em {@code y = 12}, dentro da faixa do titulo
+     * ({@code TITLE_Y = 10}) e acima do painel, que comeca em {@code CONTENT_TOP
+     * - 2}. O titulo era desenhado depois de {@code super.render()}, entao a caixa
+     * sumia debaixo dele. {@link #fitsInPanel} mede a altura real do widget e usa
+     * a mesma regra para controle e {@link Caption}, o que resolve as duas metades
+     * do sintoma: nada na faixa do titulo, nada fora do painel, e cabecalho e
+     * controle somem juntos na borda.
      */
     private void applyScroll() {
         scrollPx = Math.max(0, Math.min(scrollPx, maxScroll()));
@@ -424,8 +572,22 @@ public class SheetEditorScreen extends Screen {
         for (Slot slot : slots) {
             int y = top + slot.layoutY() - scrollPx;
             slot.widget().setY(y);
-            slot.widget().visible = y + ROW_H > top && y < bottom;
+            slot.widget().visible = fitsInPanel(y, slot.widget().getHeight(), top, bottom);
         }
+    }
+
+    /**
+     * Se uma caixa de altura {@code h} cabe inteira na janela de conteudo.
+     *
+     * <p><b>Um criterio so para controle e {@link Caption}.</b> Os dois ocupam a
+     * mesma faixa horizontal e nao podem aparecer e sumir em bordas diferentes: o
+     * cabecalho sumindo com a caixa ainda na tela (e o inverso) era a assimetria
+     * que denunciava o teste com {@code ROW_H} em {@link #applyScroll}. Caber
+     * inteiro tambem garante que nada seja desenhado sobre a borda do painel nem
+     * por cima do rodape.
+     */
+    private static boolean fitsInPanel(int y, int h, int top, int bottom) {
+        return y >= top && y + h <= bottom;
     }
 
     @Override
@@ -450,6 +612,102 @@ public class SheetEditorScreen extends Screen {
     }
 
     /**
+     * Ha alguma linha de pericia sem nome valido.
+     *
+     * <p>E o que desliga o Salvar: o {@code SheetModel} recusa o nome vazio, e
+     * mandar o modelo com a pericia pendurada nao gravaria o que o Mestre ve na
+     * tela.
+     */
+    private static boolean hasPendingName() {
+        return !pendingNames.isEmpty();
+    }
+
+    /**
+     * Se ha o que descartar: a copia editada, ou um nome pendente que o modelo
+     * recusou.
+     *
+     * <p>O nome pendente conta porque ele e estado da tela, e o Descartar e o
+     * caminho de volta ao salvo: sem ele, apagar um nome e nao mexer em mais nada
+     * deixaria o Descartar desligado (a copia esta igual a {@code baseline}) e o
+     * Salvar tambem, e o Mestre nao teria como voltar ao texto valido.
+     */
+    private boolean canDiscard() {
+        return isDirty() || hasPendingName();
+    }
+
+    /**
+     * Apaga o rascunho e as marcas de nome pendente.
+     *
+     * <p>Chamado pelo Salvar, pelo Descartar e pelo Restaurar: nos tres o que
+     * estava na tela deixa de valer, entao nenhuma sobra para a proxima sessao de
+     * edicao.
+     */
+    private static void clearDraft() {
+        draft = null;
+        pendingNames.clear();
+    }
+
+    /**
+     * Zera o estado de edicao que pertence a <b>sessao de mundo</b>, e nao a uma
+     * tela. E o par {@link #draft} + {@link #pendingNames}, nada mais.
+     *
+     * <p><b>Por que os dois campos precisam deste reset (27/09/2026):</b> eles
+     * sao estaticos porque a tela e remontada a cada abertura do item
+     * ({@code TabletopRpgClient} faz {@code new SheetEditorScreen()}) e o texto
+     * digitado precisa sobreviver a uma troca de tela. O preco e que eles duram
+     * mais que o mundo. O cleanup de desconexao ja zera o
+     * {@link SheetModelHolder}, entao ao entrar no mundo B o JOIN publica o
+     * modelo de B; sem isto, o {@code draft} continuava com o modelo de A, e
+     * {@code takeDraft()} devolveria A como {@code staged} com B como
+     * {@code baseline}: a tela abriria com "unsaved changes" e rotulos de outro
+     * mundo, e o Salvar mandaria o modelo de A para o {@code SheetModelStore}
+     * de B. O agravante e que {@code pendingNames} e chaveado por posicao: uma
+     * marca de A cairia numa linha que talvez nem exista em B, deixando o Salvar
+     * desligado com um aviso que nomeia uma linha inexistente.
+     *
+     * <p>Chamado de {@code TabletopRpgClient.registerConnectionCleanup()}, no
+     * mesmo {@code DISCONNECT} que zera o holder. Mesmo caminho de
+     * {@link #clearDraft()}: os dois apagam o rascunho e as marcas juntos, porque
+     * eles viajam juntos (ver {@link #captureDraft()}).
+     */
+    public static void discardTransientState() {
+        clearDraft();
+    }
+
+    /**
+     * O rascunho de um fechamento sem salvar, e o apaga em seguida.
+     *
+     * <p>Apagar aqui (e nao so no Salvar/Descartar) mantem uma unica copia: a
+     * proxima abertura comeca pelo rascunho uma vez so, e fechar de novo sem
+     * salvar reescreve o campo.
+     */
+    private static SheetModel takeDraft() {
+        SheetModel saved = draft;
+        draft = null;
+        return saved == null ? SheetModelHolder.current() : saved;
+    }
+
+    /**
+     * Perde a marca da posicao {@code removed} e baixa em uma as das posicoes
+     * seguintes.
+     *
+     * <p>Remover uma pericia tira um elemento do meio da lista, e a chave de
+     * {@link #pendingNames} e a posicao: sem remapear, o nome vazio que o Mestre
+     * digitou marcaria a pericia vizinha.
+     */
+    private static void shiftPendingAbove(int removed) {
+        Map<Integer, String> moved = new LinkedHashMap<>();
+        for (Map.Entry<Integer, String> entry : pendingNames.entrySet()) {
+            int pos = entry.getKey();
+            if (pos != removed) {
+                moved.put(pos > removed ? pos - 1 : pos, entry.getValue());
+            }
+        }
+        pendingNames.clear();
+        pendingNames.putAll(moved);
+    }
+
+    /**
      * Envia o modelo inteiro.
      *
      * <p>Depois de enviar, {@code baseline} passa a ser o que foi enviado: assim o
@@ -460,11 +718,15 @@ public class SheetEditorScreen extends Screen {
     private void save() {
         ClientPlayNetworking.send(new RpgNetworking.SheetModelSavePayload(staged));
         baseline = staged;
+        // O que foi gravado e o novo ponto de partida: nem o rascunho nem as
+        // marcas de nome pendente valem para a proxima edicao.
+        clearDraft();
         rebuildWidgets();
     }
 
     private void discard() {
         staged = baseline;
+        clearDraft();
         rebuildWidgets();
     }
 
@@ -480,6 +742,10 @@ public class SheetEditorScreen extends Screen {
         if (!isDirty()) {
             staged = SheetModelHolder.current();
             baseline = staged;
+            // O modelo que chegou pode ter outra quantidade de pericias, e a chave
+            // de pendingNames e a posicao: as marcas valem para a lista que saiu,
+            // nao para a que acabou de chegar.
+            pendingNames.clear();
         }
         rebuildWidgets();
     }
@@ -490,15 +756,38 @@ public class SheetEditorScreen extends Screen {
 
     @Override
     public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
-        super.render(graphics, mouseX, mouseY, partialTick);
+        // O que liga e desliga o Salvar e o Descartar e o texto digitado depois do
+        // ultimo save; o Salvar ainda exige que nenhuma pericia esteja sem nome,
+        // porque o modelo recusa o nome vazio e nao haveria o que gravar. O que
+        // liga e desliga o Restaurar e a copia em edicao contra o padrao do
+        // modelo. Digitar numa caixa nao passa por init(), por isso o estado e lido
+        // por frame, no mesmo caminho que o aviso de "unsaved" logo abaixo. Fica
+        // antes do super.render() para o botao sair ja desenhado no estado certo,
+        // sem o atraso de um frame do padraao do StatusScreen.
+        if (saveButton != null) {
+            saveButton.active = isDirty() && !hasPendingName();
+        }
+        if (discardButton != null) {
+            discardButton.active = canDiscard();
+        }
+        if (resetButton != null) {
+            resetButton.active = !staged.equals(SheetModel.defaults());
+        }
 
+        // O titulo entra antes dos widgets: o vanilla desenha o
+        // renderBackground antes do render (renderWithTooltipAndSubtitles), entao
+        // o titulo nao fica sob o fundo da tela, e assim, se alguma vez um
+        // controle encostar na faixa dele, e a caixa que aparece por cima do
+        // texto, e nao o texto por cima da caixa.
         graphics.drawCenteredString(this.font, this.title, this.width / 2, TITLE_Y, COL_TITLE);
+
+        super.render(graphics, mouseX, mouseY, partialTick);
 
         int top = CONTENT_TOP;
         int bottom = contentBottom();
         for (Caption caption : captions) {
             int y = top + caption.layoutY() - scrollPx;
-            if (y + this.font.lineHeight < top || y > bottom) {
+            if (!fitsInPanel(y, this.font.lineHeight, top, bottom)) {
                 continue;
             }
             graphics.drawString(this.font, caption.text(), colX(), y, caption.color(), false);
@@ -507,7 +796,13 @@ public class SheetEditorScreen extends Screen {
         if (maxScroll() > 0) {
             graphics.drawString(this.font, tr("scroll_hint"), COL_PADDING, TITLE_Y + 2, COL_HINT, false);
         }
-        if (isDirty()) {
+        if (hasPendingName()) {
+            // Mesmo lugar do aviso de "unsaved", e com prioridade: e ele que diz
+            // por que o Salvar esta desligado, e nessa faixa so cabe uma linha.
+            Component warn = tr("pericia_no_name");
+            graphics.drawString(this.font, warn, this.width - COL_PADDING - this.font.width(warn),
+                    TITLE_Y, COL_HEADER, false);
+        } else if (isDirty()) {
             Component warn = tr("unsaved");
             graphics.drawString(this.font, warn, this.width - COL_PADDING - this.font.width(warn),
                     TITLE_Y, COL_HEADER, false);
@@ -521,11 +816,84 @@ public class SheetEditorScreen extends Screen {
         graphics.fill(x - 4, CONTENT_TOP - 2, x + colW() + 4, contentBottom(), 0xC0000000);
     }
 
+    /**
+     * O ESC e o botao Close passam por aqui, mas a captura mora no
+     * {@link #removed()}.
+     *
+     * <p><b>27/09/2026 (bug):</b> a captura vivia so aqui, e aqui e so o caminho
+     * do ESC e do botao Close -- nao o de <b>toda</b> saida de tela. Abrir o
+     * inventario (tecla E), o menu, ou qualquer outra tela com o editor aberto e
+     * sujo trocava a tela sem registrar o rascunho, e a edicao ia embora.
+     * {@code Minecraft.setScreen} chama {@code removed()} em qualquer troca, entao
+     * o rascunho passa a ser registado pela saida, e nao pelo botao.
+     *
+     * <p>Aqui sobra so o fecho do ESC: {@code shouldCloseOnEsc()} e verdadeiro,
+     * o vanilla so chama {@code onClose} nesse caso, e ele e quem faz
+     * {@code setScreen(null)} -- o que dispara {@link #removed()}. Chamar
+     * {@link #captureDraft()} nos dois e idempotente.
+     */
     @Override
     public void onClose() {
+        captureDraft();
         if (this.minecraft != null) {
             this.minecraft.setScreen(null);
         }
+    }
+
+    /**
+     * Qualquer saida de tela passa por aqui: ESC, botao Close, inventario,
+     * outra tela do mod, e a queda da conexao.
+     *
+     * <p>27/09/2026: este e o gancho certo porque {@code Minecraft.setScreen} o
+     * chama em <b>qualquer</b> troca de tela, e nao so no caminho do ESC.
+     */
+    @Override
+    public void removed() {
+        captureDraft();
+    }
+
+    /**
+     * Registra a edicao nao salva para a proxima abertura. E so isso: nada e
+     * enviado, e o {@code baseline} nao muda.
+     *
+     * <p><b>O rascunho e as marcas de nome pendente viajam juntos, e o "com nada
+     * em edicao nao ha o que preservar" e uma leitura errada (27/09/2026).</b>
+     * {@code pendingNames} guarda o texto que o Mestre digitou numa linha de
+     * pericia e que o modelo ainda nao aceitou, e a chave e a <b>posicao</b> na
+     * lista: ele nao e derivavel de {@code staged}, que so guarda o ultimo nome
+     * valido, e a proxima abertura repopula as caixas dele
+     * ({@code periciaRow}). Apagar as marcas junto com o rascunho perderia o que
+     * foi digitado; guarda-las quando {@code staged} esta igual a
+     * {@code baseline} tambem: o texto continua na caixa, o Salvar continua
+     * desligado ({@link #hasPendingName}) e o aviso de "falta um nome valido"
+     * continua explicando por que. Por isso este metodo so mexe em
+     * {@code draft}, e as marcas ficam como estao.
+     *
+     * <p><b>Por que os botoes nao recriam rascunho:</b> {@link #save()},
+     * {@link #discard()} e o Restaurar chamam {@link #clearDraft()} e nao trocam
+     * de tela ({@code rebuildWidgets()} so refaz o {@code init()}), entao
+     * {@code removed()} so alcanca um deles depois. O Salvar faz
+     * {@code baseline = staged} e o Descartar faz {@code staged = baseline}, e
+     * os dois deixam {@link #isDirty()} falso: nada e recriado.
+     * <b>O Restaurar e a excecao, e e o comportamento certo:</b> ele poe
+     * {@link SheetModel#defaults()} em {@code staged} sem mexer em
+     * {@code baseline}, entao fechar depois dele <b>deve</b> guardar rascunho --
+     * o padrao ainda nao esta gravado no servidor e e o que o Mestre esta vendo.
+     *
+     * <p><b>Por que o teste de conexao:</b> a saida de tela que coincide com a
+     * queda da conexao e a saida do <b>mundo</b>, e o rascunho e estado da sessao
+     * de mundo ({@link #discardTransientState()}), nao da tela. Sem este teste a
+     * ordem entre este metodo e o evento de DISCONNECT decidiria sozinha se o
+     * rascunho do mundo que esta saindo sobrevive para o proximo -- e o pior
+     * desfecho seria justamente o que {@code discardTransientState()} existe
+     * para impedir. Ja sem conexao nao ha rascunho a preservar: o proximo
+     * {@code takeDraft()} so rodaria depois de um JOIN, com o modelo novo.
+     */
+    private void captureDraft() {
+        if (this.minecraft == null || this.minecraft.getConnection() == null) {
+            return;
+        }
+        draft = isDirty() ? staged : null;
     }
 
     @Override
@@ -565,5 +933,18 @@ public class SheetEditorScreen extends Screen {
             }
         }
         return -1;
+    }
+
+    /**
+     * A pericia na posicao {@code pos} da copia em edicao, ou {@code null} se a
+     * lista encolheu depois que a linha foi montada.
+     *
+     * <p>E o equivalente da busca por id das linhas de atributo, para uma lista
+     * em que {@code PericiaDef} nao tem id: a posicao e o unico identificador que
+     * sobrevive a uma troca de nome.
+     */
+    private SheetModel.PericiaDef periciaAt(int pos) {
+        List<SheetModel.PericiaDef> pericias = staged.pericias();
+        return pos >= 0 && pos < pericias.size() ? pericias.get(pos) : null;
     }
 }
