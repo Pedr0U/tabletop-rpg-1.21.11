@@ -429,8 +429,10 @@ public class SheetEditorScreen extends Screen {
                 return;
             }
             // Le a pericia de {@code staged} no momento da tecla: o texto da caixa
-            // ja e o nome novo, e o modelo precisa ser consultado pelo nome que ele
-            // tem agora, e nao pelo que a linha tinha quando foi montada.
+            // ja e o nome novo, e o modelo precisa ser consultado pelo id que a
+            // linha tem agora, e nao pelo nome que ela tinha quando foi montada.
+            // 28/09/2026: a chave e' o {@code id} da pericia (o nome e' o que o
+            // Mestre esta digitando, e por isso muda a cada tecla).
             SheetModel.PericiaDef live = periciaAt(pos);
             if (live == null) {
                 return;
@@ -439,7 +441,7 @@ public class SheetEditorScreen extends Screen {
                 pendingNames.put(pos, value == null ? "" : value);
                 return;
             }
-            SheetModel next = staged.withPericiaText(live.name(), value, live.attributeId());
+            SheetModel next = staged.withPericiaText(live.id(), value, live.attributeId());
             if (next == staged) {
                 pendingNames.remove(pos);
                 suppressNotify = true;
@@ -459,7 +461,7 @@ public class SheetEditorScreen extends Screen {
             int index = attributeIndexOf(live.attributeId());
             int next = ((index < 0 ? 0 : index) + 1) % staged.attributes().size();
             String id = staged.attributes().get(next).id();
-            staged = staged.withPericiaText(live.name(), live.name(), id);
+            staged = staged.withPericiaText(live.id(), live.name(), id);
             b.setMessage(Component.literal(staged.attributeLabel(id)));
         }).bounds(ctrlX() + nameW + GAP, y, ATTR_BTN_W, ROW_H - 4).build();
         attr.active = attributeIndexOf(def.attributeId()) >= 0;
@@ -469,7 +471,7 @@ public class SheetEditorScreen extends Screen {
             if (live == null) {
                 return;
             }
-            staged = staged.removePericia(live.name());
+            staged = staged.removePericia(live.id());
             shiftPendingAbove(pos);
             rebuildWidgets();
         }).bounds(rightX, y, BTN_W, ROW_H - 4).build();
@@ -939,9 +941,12 @@ public class SheetEditorScreen extends Screen {
      * A pericia na posicao {@code pos} da copia em edicao, ou {@code null} se a
      * lista encolheu depois que a linha foi montada.
      *
-     * <p>E o equivalente da busca por id das linhas de atributo, para uma lista
-     * em que {@code PericiaDef} nao tem id: a posicao e o unico identificador que
-     * sobrevive a uma troca de nome.
+     * <p><b>28/09/2026:</b> a {@code PericiaDef} tem {@code id} (o
+     * {@code pericia_N} que o modelo gera e congela), e as edicoes desta tela o
+     * usam. A <b>linha</b> continua identificada pela posicao, e nao pelo id nem
+     * pelo nome: o rascunho do texto digitado ({@code pendingNames}) e' por
+     * posicao, e qualquer mudanca na quantidade de pericias remonta as linhas
+     * ({@code rebuildWidgets()}).
      */
     private SheetModel.PericiaDef periciaAt(int pos) {
         List<SheetModel.PericiaDef> pericias = staged.pericias();

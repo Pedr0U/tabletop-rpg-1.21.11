@@ -99,9 +99,9 @@ public class StatusScreen extends CharacterSheetScreen {
     /** Geometria das 20 linhas (o widget e' a moldura; nome/valor sao desenhados). */
     private final List<PericiaRow> periciaRows = new ArrayList<>();
 
-    /** Valor otimista por pericia, para cliques rapidos nao se perderem. */
+    /** Valor otimista por <b>id</b> de pericia, para cliques rapidos nao se perderem. */
     private final Map<String, Integer> pendingPericiaValue = new HashMap<>();
-    /** Atributo otimista por pericia, mesmo proposito de {@link #pendingPericiaValue}. */
+    /** Atributo otimista por <b>id</b> de pericia, mesmo proposito de {@link #pendingPericiaValue}. */
     private final Map<String, String> pendingPericiaAttribute = new HashMap<>();
 
     /**
@@ -585,9 +585,12 @@ public class StatusScreen extends CharacterSheetScreen {
         SheetData.Pericia pericia = sheet.pericias().get(index);
         this.minecraft.setScreen(new AttributePickerScreen(
                 this, pericia.name(), pericia.attributeId(), chosen -> {
-                    pendingPericiaAttribute.put(pericia.name(), chosen);
+                    // 28/09/2026: a chave e o ID da pericia, nao o nome. O nome
+                    // e' o rotulo e pode mudar no editor; o id e' o que o
+                    // servidor usa para achar a linha.
+                    pendingPericiaAttribute.put(pericia.id(), chosen);
                     ClientPlayNetworking.send(RpgNetworking.SheetPericiaPayload.setAttribute(
-                            targetName, pericia.name(), chosen));
+                            targetName, pericia.id(), chosen));
                 }));
     }
 
@@ -608,9 +611,9 @@ public class StatusScreen extends CharacterSheetScreen {
         if (next == current) {
             return; // ja no limite: nao envia nada
         }
-        pendingPericiaValue.put(pericia.name(), next);
+        pendingPericiaValue.put(pericia.id(), next);
         ClientPlayNetworking.send(RpgNetworking.SheetPericiaPayload.setValue(
-                targetName, pericia.name(), next));
+                targetName, pericia.id(), next));
     }
 
     /**
@@ -642,15 +645,23 @@ public class StatusScreen extends CharacterSheetScreen {
         return next != current;
     }
 
-    /** Valor a exibir: o otimista se houver, senao o do servidor. */
+    /**
+     * Valor a exibir: o otimista se houver, senao o do servidor.
+     *
+     * <p>28/09/2026: a chave e o <b>id</b> da pericia, e nao o nome. O nome e'
+     * rotulo e o Mestre pode troca-lo no editor; com o nome na chave, um rename
+     * traria a linha de volta com o valor antigo e o numero piscaria na tela.
+     * Esta e' a unica leitura do otimista: {@link #stepPericiaValue},
+     * {@link #canStepPericia} e {@link #applyStepButtons} passam por aqui.
+     */
     private int displayPericiaValue(SheetData.Pericia pericia) {
-        Integer pending = pendingPericiaValue.get(pericia.name());
+        Integer pending = pendingPericiaValue.get(pericia.id());
         return pending != null ? pending : pericia.value();
     }
 
     /** Id do atributo a exibir: o otimista se houver, senao o do servidor. */
     private String displayPericiaAttributeId(SheetData.Pericia pericia) {
-        String pending = pendingPericiaAttribute.get(pericia.name());
+        String pending = pendingPericiaAttribute.get(pericia.id());
         return pending != null ? pending : pericia.attributeId();
     }
 
@@ -921,7 +932,7 @@ public class StatusScreen extends CharacterSheetScreen {
             return;
         }
         pendingPericiaValue.entrySet().removeIf(entry -> {
-            SheetData.Pericia pericia = sheet.periciaByName(entry.getKey());
+            SheetData.Pericia pericia = sheet.periciaById(entry.getKey());
             return pericia == null || !keepPending(entry.getValue(), pericia.value(),
                     SheetData.Pericia.VALUE_MIN, SheetData.Pericia.VALUE_MAX);
         });

@@ -634,20 +634,26 @@ public final class RpgNetworking {
      * pertence ao <b>modelo</b> (que o Mestre muda no Sheet Editor), e este
      * pacote existe só para o jogador ajustar o valor e a escolha de atributo de
      * uma perícia que <b>já existe</b> na ficha. Criar e remover é trabalho do
-     * editor, e o servidor recusa uma perícia fora do modelo: se o nome não
-     * casar, {@code withPericiaValue} devolve a ficha intacta.
+     * editor, e o servidor recusa uma perícia fora do modelo: se o id não casar,
+     * {@code withPericiaValue} devolve a ficha intacta.
      *
      * <p><b>27/09/2026:</b> o campo {@code attribute} virou {@code attributeId}
      * do tipo {@code String}. Antes era o enum {@code SheetData.Attribute},
      * removido junto com os seis campos fixos da ficha. O id é a chave estável;
      * um id fora do modelo é ignorado.
+     *
+     * <p><b>28/09/2026:</b> o campo {@code pericia} virou {@code periciaId}.
+     * Mesmo numero de campos, mesmo codec e mesma ordem - so o nome e o que
+     * mudou - porque agora o que identifica a pericia e o {@code id} dela (o
+     * nome pode ter sido alterado pelo Mestre, o id nao). Viajar o nome fazia o
+     * servidor nao achar a pericia depois de um rename, e o valor zerava.
      */
-    public record SheetPericiaPayload(String targetName, String pericia, SheetData.PericiaOp op, int value,
+    public record SheetPericiaPayload(String targetName, String periciaId, SheetData.PericiaOp op, int value,
                                       String attributeId) implements CustomPacketPayload {
         public static final Type<SheetPericiaPayload> TYPE = new Type<>(TabletopRpg.id("sheet_pericia"));
         public static final StreamCodec<FriendlyByteBuf, SheetPericiaPayload> STREAM_CODEC = StreamCodec.composite(
                 ByteBufCodecs.stringUtf8(64), SheetPericiaPayload::targetName,
-                ByteBufCodecs.stringUtf8(SheetData.SKILL_MAX), SheetPericiaPayload::pericia,
+                ByteBufCodecs.stringUtf8(SheetData.SKILL_MAX), SheetPericiaPayload::periciaId,
                 SheetData.PericiaOp.STREAM_CODEC, SheetPericiaPayload::op,
                 ByteBufCodecs.VAR_INT, SheetPericiaPayload::value,
                 ByteBufCodecs.stringUtf8(32), SheetPericiaPayload::attributeId,
@@ -661,13 +667,13 @@ public final class RpgNetworking {
          * servidor nem olha o atributo. Não existe mais um "DEXTERITY" padrão
          * para inventar: o atributo de uma perícia nova é escolhido pelo Mestre.
          */
-        public static SheetPericiaPayload setValue(String targetName, String pericia, int value) {
-            return new SheetPericiaPayload(targetName, pericia, SheetData.PericiaOp.SET_VALUE, value, "");
+        public static SheetPericiaPayload setValue(String targetName, String periciaId, int value) {
+            return new SheetPericiaPayload(targetName, periciaId, SheetData.PericiaOp.SET_VALUE, value, "");
         }
 
         /** Atalho: mexer só no atributo (botão de lista suspensa). */
-        public static SheetPericiaPayload setAttribute(String targetName, String pericia, String attributeId) {
-            return new SheetPericiaPayload(targetName, pericia, SheetData.PericiaOp.SET_ATTRIBUTE, 0, attributeId);
+        public static SheetPericiaPayload setAttribute(String targetName, String periciaId, String attributeId) {
+            return new SheetPericiaPayload(targetName, periciaId, SheetData.PericiaOp.SET_ATTRIBUTE, 0, attributeId);
         }
 
         @Override
@@ -1005,8 +1011,8 @@ public final class RpgNetworking {
             }
             SheetData current = SessionManager.getOrCreateSheet(target.getUUID(), target.getName().getString());
             SheetData updated = switch (payload.op() == null ? SheetData.PericiaOp.INVALID : payload.op()) {
-                case SET_VALUE -> current.withPericiaValue(payload.pericia(), payload.value());
-                case SET_ATTRIBUTE -> current.withPericiaAttribute(payload.pericia(), payload.attributeId());
+                case SET_VALUE -> current.withPericiaValue(payload.periciaId(), payload.value());
+                case SET_ATTRIBUTE -> current.withPericiaAttribute(payload.periciaId(), payload.attributeId());
                 case INVALID -> current;
             };
             if (updated == current) {

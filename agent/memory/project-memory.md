@@ -1169,3 +1169,70 @@ destruida; adicionar seria codigo morto.
 - Reconciliacao aplica a faixa de atributos a **todo** `pendingNumeric`, HP/Mana
   incluidos. Como HP/Mana nao tem rajada, nao ha pendente a frente para sustentar e
   a igualdade normal resolve. Reavaliar quando o modelo de vida/mana mudar.
+
+### FATO verificado - 28/09/2026, id estavel de pericia (migration aplicada)
+
+Cada pericia agora tem id `pericia_N` (N >= 1), gerado uma vez e congelado, espelhando
+`attr_N` dos atributos. `SheetModel.PericiaDef(String id, String name, String attributeId)` e
+`SheetData.Pericia(String id, String name, int value, String attributeId)`, id como primeiro
+componente. O NOME virou so rotulo. Renomear preserva valor e atributo.
+
+**ORDEM OBRIGATORIA que impede perda silenciosa:** preencher o id ANTES de deduplicar, e NUNCA
+deduplicar por id vazio. Sem isso, uma ficha antiga (18 pericias, todas com id `""`) colapsa
+para 1, sem erro, sem warning, sem log. O `Codec` do DataFixerUpper omite campo igual ao default
+(`Codec.java:303-308` do datafixerupper-9.0.19), o que torna esse cuidado obrigatorio.
+
+- `PERICIA_CODEC` usa `optionalFieldOf("id", "")`, **nao** `fieldOf("id")`: um `fieldOf` faria
+  o `Codec.list` derrubar o `SheetData.CODEC` inteiro e perder a **ficha completa**, nao so as
+  pericias. O `fieldOf` de `AttributeValue.id` e obrigatorio de proposito (leia o comentario em
+  `SheetData.java:227-230`) e **nao** se aplica a pericia.
+- O primeiro `seen.add` vence: a primeira ocorrencia e preservada, a segunda recebe id novo.
+
+**O MECHANISMO REAL da migracao e POSICIONAL, e nao por nome.** O id e preenchido na ordem da
+lista, e o NBT antigo foi gravado na ordem do modelo (o `align` antigo percorria a lista do
+modelo), entao casar por id == casar por posicao reproduz o que casar por nome reproduzia.
+
+**O fallback por nome virou CODIGO MORTO:** `hasPericiaIds()` so devolve `false` com a lista
+VAZIA (o construtor compacto preenche o id de toda entrada retida, e nao existe estado misturo),
+e sobre lista vazia `periciaByNameOrLegacy` devolve `null`. `LEGACY_PERICIA_NAMES` virou inerte.
+Mantido por principio de defesa, com o Javadoc honesto.
+
+**Limitacoes residuais (documentadas no codigo, no catalogo e no relatorio):**
+- Remover pericia com jogador offline, **sem** adicionar: seguro, so perde o valor da removida.
+- Remover e **depois adicionar**: `addPericia` pega o menor N livre, que pode ser o da removida,
+  e a nova **herda o valor** da removida em todas as fichas. Contorno: renomear em vez de
+  remover e recriar.
+- O mesmo vale para ATRIBUTOS, e **nao foi possivel corrigir**: `SessionManager` nao expoe iteracao
+  sobre as fichas em memoria. O Javadoc de `addAttribute` foi corrigido para prometer so o que o
+  codigo garante ("nunca colide com um atributo que o modelo ainda tem"). O defeito original era
+  exatamente um Javadoc que prometia mais do que o codigo fazia.
+
+- `SheetPericiaPayload` foi de `pericia` para `periciaId`: 5 campos, mesma ordem, mesmo codec. O
+  `composite` tem teto de 6, entao nao ha risco de formato de fio aqui. Mas `SheetData.Pericia` foi
+  de **3 para 4 campos** no `STREAM_CODEC`: **reinstalar o jar nos dois lados** em versoes misturadas.
+- `AttributePickerScreen` **nao** precisou mudar: recebe `pericia.name()` so como rotulo e devolve o
+  id do **atributo**. A memoria do projeto dizia que este arquivo mudaria, e estava errado.
+- `MasterCommands.findPericia` continua por nome normalizado: e interface humana, nao armazenamento.
+
+**FIO / saves:** backup de 52 arquivos `.dat` em `%LOCALAPPDATA%\Temp\opencode\backup-saves-20260928-1010`
+(45355 bytes, conferido identico). 11 fichas reais em disco, sendo 6 pre-migration e 1 com 10
+pericias customizadas pelo Mestre (o caso que perdia dados).
+
+### FATO verificado - 28/09/2026, nao validado em jogo
+
+17 testes unitarios passam (antes eram 8), mas **a prova da migracao e empirica**: e preciso
+entrar em jogo com uma das 6 fichas pre-migration e conferir **cada** pericia, nao so o total.
+`PlayerSheetPersistenceMixin` alinha com `SheetModelHolder.current()`, que ainda vale o **default**
+se a carga rodar antes do `SERVER_STARTED` (singleplayer): `realignAllSheets` restaura lista e
+valores, mas **nao** o vinculo pericia->atributo quando o id do atributo padrao tambem existe no
+modelo real. Defeito pre-existente, nao desta migration.
+
+### HIPOTESE - 28/09/2026, a confirmar em jogo
+
+- A migracao por posicao segura para as 6 fichas pre-migration, por analise. So um login real
+  prova.
+- O fallback posicional e seguro **se** o mundo nao tiver o Mestre removendo pericia do meio com o
+  jogador offline.
+- `sanitizePericias` deduplica por id em minusculas, mas `periciaById` compara exato: um `.dat`
+  editado a mao com `PERICIA_1` passaria pelo sanitize e nunca casaria (valor 0). Mesmo padrao ja
+  existe nos atributos. Inconsistencia conhecida, nao bug no fluxo normal.
