@@ -1083,7 +1083,8 @@ catalogo da rodada 2 pendente e id estavel em `PericiaDef` pendente.
   desenhado antes do `super.render()` vale para as tres telas.
 - O detector `check-catalogo.ps1` mora em
   `%USERPROFILE%\.config\opencode\skills\agente-tcc\catalogo-sync\`, **nao** dentro do repositorio.
-  Dois subagentes seguidos falharam em acha-lo procurando no projeto. Caminho应该在 skill
+  Dois subagentes seguidos falharam em acha-lo procurando no projeto. O caminho precisa estar
+  escrito dentro da skill `catalogo-sync`, e nao discovery em runtime.
   catalogo-sync estar explicito.
 
 ### HIPOTESE - 28/09/2026, pendente de confirmacao em jogo
@@ -1092,3 +1093,79 @@ catalogo da rodada 2 pendente e id estavel em `PericiaDef` pendente.
   Revisar com o usuario na proxima sessao e o caminho mais barato.
 - `javap -c` foi usado em jar do cache do Loom. Bytecode e evidencia forte, mas so para o 1.21.11
   nomeado; reconferir se a versao mudar.
+
+### FATO verificado - 28/09/2026, item sheet_editor corrigido (sprite e nome)
+
+Causa raiz confirmada por bytecode do jar nomeado 1.21.11:
+
+- O 1.21.11 carrega modelo de item **SO** de `assets/<ns>/items/<id>.json`.
+  `ClientItemInfoLoader` usa `FileToIdConverter.json("items")`; **nao ha fallback
+  legado** em runtime. `bakedItemStackModels` so e populado dali, com
+  `getOrDefault(id, missingModels.item())`. `assets/tabletop-rpg/items/sheet_editor.json`
+  nunca existiu, entao o item era desenhado com modelo ausente.
+- A ausencia e **SILENCIOSA**: o loader so loga warning quando o arquivo existe e
+  falha ao parsear; arquivo faltante nunca chega ao parser. Nao ha pista no log.
+- A translation key automatica do item **preserva o hifen** do namespace
+  (`Util.makeDescriptionId` concatena namespace + "." + path): a chave real e
+  `item.tabletop-rpg.sheet_editor`. `en_us.json` tinha `item.tabletoprpg.sheet_editor`,
+  sem hifen, e o jogo mostrava a chave crua.
+- `en_us.json` tem **dois padroes** de chave, e **ambos estao corretos**:
+  derivados do id (`item.tabletop-rpg.*`, `key.category.tabletop-rpg.rpg`) e
+  passados como literal no codigo (`screen.tabletoprpg.*`, `key.tabletoprpg.*`,
+  `itemGroup.tabletoprpg.*`). `item.tabletoprpg.sheet_editor.denied` **precisa
+  continuar sem hifen**, porque `ModItems.java:119` passa a string como literal
+  para `Component.translatable`. Nao "arrumar" essa linha.
+- `key.category` e **singular**, nao `key.categories`. Ja estava certo.
+- ERRO MEU: alterei `models/item/sheet_editor.json`, que o jogo nunca le, e
+  declarei corrigido. Alterar o arquivo certo e o jogo ler aquele arquivo sao
+  afirmacoes diferentes; a segunda exige evidencia do jar.
+
+### FATO verificado - 28/09/2026, API de widget na 1.21.11
+
+- `net.minecraft.client.gui.components.Button` e **`abstract`**, nao `final`.
+- `AbstractButton.renderWidget` e **`protected final`** e chama `renderContents`
+  + `handleCursor`. Para customizar visual, so da para implementar
+  `renderContents` (copiar o corpo de `Button$Plain`).
+- `AbstractWidget` **nao tem** `tick()`. Para temporizar por widget, a tela
+  precisa de `tick()` percorrendo `children()`.
+- `Screen` **nao tem** `hasShiftDown()`. Existe em `InputWithModifiers`.
+  `MouseButtonEvent` e `KeyEvent` implementam `InputWithModifiers`.
+- O `mouseReleased` **nao testa `isMouseOver`**: e roteado pelo **foco**
+  (`ContainerEventHandler` so entrega ao `getFocused()` se `button==0 && isDragging()`).
+  "Continua valendo com o cursor fora do botao" vem de graca do vanilla.
+- `AbstractButton.keyPressed` tambem chama `onPress`, e **nao ha rota de release
+  por teclado** que chegue ao widget. Segurar Enter/Espaco em botao focado ramparia
+  para sempre sem guarda `input instanceof MouseButtonEvent`.
+- `playDownSound` e chamado por `AbstractWidget.mouseClicked`, nao por `onPress`.
+  Repeticao disparada de `tick()` e silenciosa de graca.
+- `MouseHandler.isLeftPressed()` **existe mas NAO serve** para detectar segurada
+  com tela aberta: o bytecode de `onButton` so escreve o campo quando
+  `screen == null && getOverlay() == null`. Usar
+  `GLFW.glfwGetMouseButton(Window.handle(), 0)` (botao 0 = left, `GLFW_PRESS = 1`).
+- `StreamCodec.composite` tem teto de **6 campos**, nao 12. O record de 13 campos
+  (`SheetModel`) contorna com `StreamCodec.of(ENCODER, DECODER)`.
+
+### FATO verificado - 28/09/2026, valor otimista da ficha
+
+O eco do servidor (`broadcastSheet`) chega ~50 ms atras. Com rajada a 25 passos/s,
+`pendingNumeric.clear()` / `pendingPericiaValue.clear()` no eco apagavam o valor
+otimista a cada passo, o cliente recalculava de valor velho e **reenviava valor
+MENOR** que o ja gravado: numero subia e voltava, e a aceleracao nao se materializava.
+
+Regra nova: o eco so limpa o pendente quando o autoritativo **iguala** o pendente
+(`CharacterSheetScreen.keepPending`, `StatusScreen.reconcilePericiaValues`).
+Pendente fora da faixa legal e descartado, para o cliente nao mostrar numero invalido
+preso. A reconciliacao e **autossincronizante**: o servidor aplica em ordem, entao o
+ultimo eco iguala o ultimo enviado. Limpeza total continua em `onModelChanged`.
+Desconexao nao tem `clear()` explicito porque `targetName` e `final` e a tela e
+destruida; adicionar seria codigo morto.
+
+### HIPOTESE - 28/09/2026, a confirmar em jogo
+
+- O `canStep` de atributos e pericias usando valor otimista deve parar a rajada no
+  teto, mas isso so foi verificado por leitura.
+- A rajada morrer em silencio ao rolar a coluna de pericias (que chama
+  `rebuildWidgets`) e o desfecho aceitavel, mas o usuario pode achar estranho.
+- Reconciliacao aplica a faixa de atributos a **todo** `pendingNumeric`, HP/Mana
+  incluidos. Como HP/Mana nao tem rajada, nao ha pendente a frente para sustentar e
+  a igualdade normal resolve. Reavaliar quando o modelo de vida/mana mudar.
