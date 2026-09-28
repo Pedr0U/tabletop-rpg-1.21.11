@@ -1061,3 +1061,34 @@ jogo, nao credencial.
 
 Estado da entrega no commit: validacao automatica verde, **13 defeitos aguardando teste em jogo**,
 catalogo da rodada 2 pendente e id estavel em `PericiaDef` pendente.
+
+### FATO verificado - 28/09/2026, catalogo do editor completado (c663e5b)
+
+- `FUNCIONALIDADES-E-COMANDOS.md` estava **parcialmente** desatualizado, nao inteiramente. A
+  tarefa de sincronizacao que o agente principal marcou como "cancelada" **tinha escrito** a maior
+  parte antes de ser interrompida, e o texto foi versionado em `988335c`. Conclusao: "cancelado"
+  nao significa "nao aconteceu". Conferir o arquivo antes de registrar pendencia.
+- O filtro de teto do `EditBox` **nao da retorno visivel**: `insertText` chama `filter.test`, e
+  se vier falso retorna antes do `putfield value`, sem `onValueChange`, sem som, sem aviso.
+  Confirmado por `javap -c` no jar nomeado do 1.21.11.
+- CORRECAO DE RACIOCINIO: `deleteCharsToPos` **tambem** aplica `filter.test` com o mesmo retorno
+  cedo. Apagar funciona por causa do *criterio* de `withinCeiling` (so recusa valor acima do teto,
+  e o numero que sobra ao apagar e menor), e nao porque o caminho de apagar seja sem filtro.
+- O wrap de rotulo so fecha com `rowH` 17 ou mais. Com as 18 pericias do padrao, a linha cai para
+  `rowH` 12 ou 13 em 480x270 escala 4, e o rotulo sai truncado com reticencias.
+- `Reset` (Restaurar) **preserva rascunho**: poe o padrao no rascunho, nao mexe no estado salvo,
+  entao `isDirty()` continua verdadeiro e `captureDraft` guarda. So `Discard` volta ao salvo e so
+  `Save` aplica.
+- `Status` e `Skills` **herdam** `CharacterSheetScreen.render` sem sobrescrever, entao o titulo
+  desenhado antes do `super.render()` vale para as tres telas.
+- O detector `check-catalogo.ps1` mora em
+  `%USERPROFILE%\.config\opencode\skills\agente-tcc\catalogo-sync\`, **nao** dentro do repositorio.
+  Dois subagentes seguidos falharam em acha-lo procurando no projeto. Caminho应该在 skill
+  catalogo-sync estar explicito.
+
+### HIPOTESE - 28/09/2026, pendente de confirmacao em jogo
+
+- O texto do catalogo Newly reescrito pode conter erro de leitura, ja que nenhum humano revisou.
+  Revisar com o usuario na proxima sessao e o caminho mais barato.
+- `javap -c` foi usado em jar do cache do Loom. Bytecode e evidencia forte, mas so para o 1.21.11
+  nomeado; reconferir se a versao mudar.
