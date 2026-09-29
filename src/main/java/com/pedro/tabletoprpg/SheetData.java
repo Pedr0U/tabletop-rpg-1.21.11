@@ -5,6 +5,8 @@ import com.mojang.serialization.codecs.RecordCodecBuilder;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.network.codec.ByteBufCodecs;
 import net.minecraft.network.codec.StreamCodec;
+import net.minecraft.network.codec.StreamDecoder;
+import net.minecraft.network.codec.StreamEncoder;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -19,25 +21,34 @@ import java.util.Set;
  *
  * <p>Estrutura agrupada em sub-records para manter cada
  * {@code StreamCodec.composite} com no máximo 6 campos (limite da API):
-     * {@code identity} (4), {@code vitals} (4), {@code progress} (2),
+     * {@code identity} (5), {@code vitals} (4), {@code progress} (2),
  * {@code attributes} (6) e {@code skills} (lista).
  *
  * <p><b>Invariante de faixa:</b> os construtores compactos limitam o que
  * <b>precisa</b> ser limitado - vida (com piso {@link #MAX_HP_FLOOR} e teto
- * {@link #MAX_RESOURCE}), mana, nível, textos (nome/descrição) e o valor da
- * perícia (0-3). A validação acontece <b>por construção</b> e não depende do
- * chamador lembrar de clamp. O servidor continua sendo a autoridade (a edição
- * chega por payload e é convertida com {@link #withField}), mas mesmo um cliente
- * malicioso não consegue gravar um valor fora de faixa.
+ * {@link #MAX_RESOURCE}), mana, nível, textos (nome/descrição), o valor do
+ * atributo e o valor da perícia. A validação acontece <b>por construção</b> e
+ * não depende do chamador lembrar de clamp. O servidor continua sendo a
+ * autoridade (a edição chega por payload e é convertida com
+ * {@link #withField}), mas mesmo um cliente malicioso não consegue gravar um
+ * valor fora de faixa.
  *
- * <p><b>Atributos: teto 30 e piso -30</b> (decisao do usuario, 27/09/2026).
- * Eles viraram modificadores somados as rolagens e podem ser negativos, entao
- * o piso e {@link Attributes#VALUE_MIN} (-30) - ver {@link Attributes}. O teto
- * 30 entrou depois, quando a ficha ganhou botoes {@code -}/{@code +} de dois
- * digitos: sem teto, o numero cresce ate invadir o rotulo e os botoes. O valor
- * de uma <b>pericia</b> e diferente: tem piso 0, porque representa o
- * investimento do jogador (0-3). A aritmetica das rolagens usa {@code long}
- * para nao estourar.
+ * <p><b>O limite de atributo e de pericia vem do Mestre (28/09/2026).</b> Sao
+ * os tres {@code int} do fim do record, que o {@link SheetModel} preenche: piso
+ * e teto do atributo, teto da pericia (padrao -30, 30 e 30). Eles moram na
+ * ficha, e nao so no modelo, para que qualquer caminho que monte uma ficha ja
+ * saia limitado (inclusive a leitura do NBT) e para que a tela e o servidor
+ * leiam o mesmo numero sem consultar o modelo. <b>O clamp autoritativo e o
+ * construtor compacto desta classe</b>, e nao cada call site: e ele que corta o
+ * valor do atributo no intervalo {@code [attributeValueMin, attributeValueMax]}
+ * e o da pericia em {@code [0, periciaValueMax]}. O piso 0 da pericia continua
+ * fixo: o valor dela e o <b>investimento</b> do jogador e o que <b>soma</b> na
+ * rolagem ({@code 1d20 + valor + atributo}), entao negativo ali significaria
+ * penalidade, e penalidade pertence ao atributo, que aceita negativo. Os limites
+ * internos de {@link Attributes} e {@link Pericia} sao apenas um <b>teto
+ * absoluto largo</b> (rede de seguranca do protocolo, como
+ * {@link #MAX_RESOURCE}); a regra e do modelo. A aritmetica das rolagens usa
+ * {@code long} para nao estourar.
  *
  * <p><b>HP pode ser negativo</b> (decisão do usuário): o piso é
  * {@link #MAX_HP_FLOOR} e {@code hp <= 0} significa personagem deitado
@@ -58,7 +69,10 @@ public record SheetData(
         Progress progress,
         Attributes attributes,
         List<Skill> skills,
-        List<Pericia> pericias
+        List<Pericia> pericias,
+        int attributeValueMin,
+        int attributeValueMax,
+        int periciaValueMax
     ) {
 
     /** Teto de caracteres dos textos livres (nome, raça, classe). */
@@ -117,7 +131,7 @@ public record SheetData(
      * tinha caso proprio em {@link #withField}.
      */
     public static final List<String> TEXT_FIELDS =
-            List.of("characterName", "race", "characterClass", "background", "xptext");
+            List.of("playerName", "characterName", "race", "characterClass", "background", "xptext");
     /**
      * Campos com rotulo <b>desenhado na ficha</b>: os de texto, os numericos
      * com rotulo proprio e o XP em modo TEXT.
@@ -130,7 +144,7 @@ public record SheetData(
      * {@link SheetModel} e a lista dos numericos com rotulo; aqui estao todos.
      */
     public static final List<String> LABELLED_FIELDS = List.of(
-            "characterName", "race", "characterClass", "background",
+            "playerName", "characterName", "race", "characterClass", "background",
             "hp", "mana", "level", "xp", "xptext"
     );
     /**
@@ -147,6 +161,11 @@ public record SheetData(
             "level", "xp"
     );
 
+    private static final StreamCodec<FriendlyByteBuf, List<Skill>> SKILLS_STREAM_CODEC =
+            Skill.STREAM_CODEC.apply(ByteBufCodecs.list());
+    private static final StreamCodec<FriendlyByteBuf, List<Pericia>> PERICIAS_STREAM_CODEC =
+            Pericia.STREAM_CODEC.apply(ByteBufCodecs.list());
+
     /**
      * Codec da ficha. Cada grupo tem seu próprio codec; a lista de skills é
      * limitada por item ({@code stringUtf8(SKILL_MAX)}) e o
@@ -154,17 +173,50 @@ public record SheetData(
      *
      * <p>São 6 grupos, que é exatamente o limite de {@link
      * StreamCodec#composite} - por isso {@code skills} e {@code pericias} são
-     * listas de records separados em vez de um record único com 8 campos.
+     * listas de records separados em vez de um record único.
+     *
+     * <p><b>28/09/2026: o {@code composite} foi trocado por encoder e decoder
+     * proprios.</b> Os tres limites de valor do Mestre (piso e teto do atributo,
+     * teto da pericia) levaram o record a 9 campos, e o
+     * {@link StreamCodec#composite} para em 6: nao havia como acrescenta-los
+     * sem inventar mais um sub-record so para carregar tres inteiros. O
+     * {@code StreamCodec.of} nao tem esse teto, e e o mesmo caminho que o
+     * {@link SheetModel} ja usa (ver o Javadoc do {@code ENCODER} dele).
+     *
+     * <p><b>A ORDEM DO ENCODER TEM DE SER IGUAL A DO DECODER.</b> Os dois sao
+     * lambdas independentes e nada os amarra em tempo de compilacao: acrescentar
+     * um campo so num dos lados continua compilando e falha so em runtime. O
+     * round-trip de {@code SheetModelCodecTest} e o que pega esse erro.
      */
-    public static final StreamCodec<FriendlyByteBuf, SheetData> STREAM_CODEC = StreamCodec.composite(
-            Identity.STREAM_CODEC, SheetData::identity,
-            Vitals.STREAM_CODEC, SheetData::vitals,
-            Progress.STREAM_CODEC, SheetData::progress,
-            Attributes.STREAM_CODEC, SheetData::attributes,
-            Skill.STREAM_CODEC.apply(ByteBufCodecs.list()), SheetData::skills,
-            Pericia.STREAM_CODEC.apply(ByteBufCodecs.list()), SheetData::pericias,
-            SheetData::new
+    private static final StreamEncoder<FriendlyByteBuf, SheetData> ENCODER = (buf, sheet) -> {
+        Identity.STREAM_CODEC.encode(buf, sheet.identity());
+        Vitals.STREAM_CODEC.encode(buf, sheet.vitals());
+        Progress.STREAM_CODEC.encode(buf, sheet.progress());
+        Attributes.STREAM_CODEC.encode(buf, sheet.attributes());
+        SKILLS_STREAM_CODEC.encode(buf, sheet.skills());
+        PERICIAS_STREAM_CODEC.encode(buf, sheet.pericias());
+        // Os tres limites por ultimo, como no record. Sem eles no pacote, o
+        // cliente receberia a ficha com o padrao do record e as setas de +/- do
+        // Status desligariam no limite errado quando o Mestre configurasse outro.
+        ByteBufCodecs.VAR_INT.encode(buf, sheet.attributeValueMin());
+        ByteBufCodecs.VAR_INT.encode(buf, sheet.attributeValueMax());
+        ByteBufCodecs.VAR_INT.encode(buf, sheet.periciaValueMax());
+    };
+
+    private static final StreamDecoder<FriendlyByteBuf, SheetData> DECODER = buf -> new SheetData(
+            Identity.STREAM_CODEC.decode(buf),
+            Vitals.STREAM_CODEC.decode(buf),
+            Progress.STREAM_CODEC.decode(buf),
+            Attributes.STREAM_CODEC.decode(buf),
+            SKILLS_STREAM_CODEC.decode(buf),
+            PERICIAS_STREAM_CODEC.decode(buf),
+            ByteBufCodecs.VAR_INT.decode(buf),
+            ByteBufCodecs.VAR_INT.decode(buf),
+            ByteBufCodecs.VAR_INT.decode(buf)
     );
+
+    public static final StreamCodec<FriendlyByteBuf, SheetData> STREAM_CODEC =
+            StreamCodec.of(ENCODER, DECODER);
 
     // ------------------------------------------------------------------
     // PERSISTENCIA EM NBT (Codec do DataFixer, nao o StreamCodec acima)
@@ -178,7 +230,10 @@ public record SheetData(
             Codec.STRING.optionalFieldOf("characterName", "").forGetter(Identity::characterName),
             Codec.STRING.optionalFieldOf("race", "").forGetter(Identity::race),
             Codec.STRING.optionalFieldOf("characterClass", "").forGetter(Identity::characterClass),
-            Codec.STRING.optionalFieldOf("background", "").forGetter(Identity::background)
+            Codec.STRING.optionalFieldOf("background", "").forGetter(Identity::background),
+            // 29/09/2026: nome do jogador dono da ficha, pedido do usuario.
+            // Opcional com "" para uma ficha de mundo ja salva continuar abrindo.
+            Codec.STRING.optionalFieldOf("playerName", "").forGetter(Identity::playerName)
     ).apply(i, Identity::new));
 
     private static final Codec<Vitals> VITALS_CODEC = RecordCodecBuilder.create(i -> i.group(
@@ -281,22 +336,56 @@ public record SheetData(
      * {@link #sanitizePericias} e volta a lista fixa.
      */
     public static final Codec<SheetData> CODEC = RecordCodecBuilder.create(i -> i.group(
-            IDENTITY_CODEC.optionalFieldOf("identity", new Identity("", "", "", "")).forGetter(SheetData::identity),
+            IDENTITY_CODEC.optionalFieldOf("identity", new Identity("", "", "", "", "")).forGetter(SheetData::identity),
             VITALS_CODEC.optionalFieldOf("vitals", Vitals.defaults()).forGetter(SheetData::vitals),
             PROGRESS_CODEC.optionalFieldOf("progress", Progress.defaults()).forGetter(SheetData::progress),
             ATTRIBUTES_CODEC.optionalFieldOf("attributes", Attributes.defaults()).forGetter(SheetData::attributes),
             Codec.list(SKILL_CODEC).optionalFieldOf("skills", List.of()).forGetter(SheetData::skills),
-            Codec.list(PERICIA_CODEC).optionalFieldOf("pericias", List.of()).forGetter(SheetData::pericias)
+            Codec.list(PERICIA_CODEC).optionalFieldOf("pericias", List.of()).forGetter(SheetData::pericias),
+            // Os tres limites de valor (28/09/2026). Seguem a mesma regra dos
+            // outros campos: opcionais, com o padrao do SheetModel quando
+            // ausentes, para que um save de antes desta mudanca abra igual. Um
+            // save antigo nasce com -30/30/30 e e re-limitado pelo
+            // SheetModel.align assim que o Mestre salva o modelo.
+            Codec.INT.optionalFieldOf("attributeValueMin", SheetModel.DEFAULT_ATTRIBUTE_VALUE_MIN).forGetter(SheetData::attributeValueMin),
+            Codec.INT.optionalFieldOf("attributeValueMax", SheetModel.DEFAULT_ATTRIBUTE_VALUE_MAX).forGetter(SheetData::attributeValueMax),
+            Codec.INT.optionalFieldOf("periciaValueMax", SheetModel.DEFAULT_PERICIA_VALUE_MAX).forGetter(SheetData::periciaValueMax)
     ).apply(i, SheetData::new));
 
-    /** Normaliza nulos, a lista de skills e a lista de perícias. */
+    /**
+     * Normaliza nulos, a lista de skills, a lista de perícias e <b>corta os
+     * valores no intervalo do Mestre</b>.
+     *
+     * <p><b>28/09/2026 - o clamp autoritativo do limite de valor mora AQUI, e
+     * nao em cada call site.</b> O piso/teto do atributo e o teto da pericia
+     * sao os tres {@code int} do fim do record, e este construtor e o unico lugar
+     * que os le para cortar. E por isso que eles acompanham a ficha: com o clamp
+     * aqui, {@link #withField}, {@link #withPericiaValue},
+     * {@link #mutatePericia}, {@link SheetModel#align} e a leitura do NBT ficam
+     * limitados de uma vez so, sem ninguem ter de lembrar de limitar.
+     *
+     * <p><b>Por que os limites sao saneados tambem:</b> eles chegam de um NBT
+     * editado a mao e de um pacote de rede, entao o mesmo teto absoluto do
+     * {@link SheetModel} se aplica ({@code -999..999} no atributo, {@code 0..999}
+     * na pericia), e um teto abaixo do piso vira o proprio piso — sem isso, o
+     * intervalo viraria vazio e o clamp de baixo cortaria <b>todos</b> os valores
+     * para o piso, ate os que estavam certos.
+     */
     public SheetData {
-        identity = identity == null ? new Identity("", "", "", "") : identity;
+        identity = identity == null ? new Identity("", "", "", "", "") : identity;
         vitals = vitals == null ? Vitals.defaults() : vitals;
         progress = progress == null ? Progress.defaults() : progress;
+        attributeValueMin = clamp(attributeValueMin, SheetModel.VALUE_LIMIT_MIN, SheetModel.VALUE_LIMIT_MAX);
+        attributeValueMax = clamp(attributeValueMax, SheetModel.VALUE_LIMIT_MIN, SheetModel.VALUE_LIMIT_MAX);
+        if (attributeValueMax < attributeValueMin) {
+            attributeValueMax = attributeValueMin;
+        }
+        periciaValueMax = clamp(periciaValueMax, 0, SheetModel.VALUE_LIMIT_MAX);
         attributes = attributes == null ? Attributes.defaults() : attributes;
         skills = sanitizeSkills(skills);
         pericias = sanitizePericias(pericias);
+        attributes = clampAttributes(attributes, attributeValueMin, attributeValueMax);
+        pericias = clampPericiaValues(pericias, periciaValueMax);
     }
 
     // ------------------------------------------------------------------
@@ -310,7 +399,7 @@ public record SheetData(
      * usuario como "campo embaixo da classe". Ele fica dentro de
      * {@code Identity} e <b>nao</b> vira um sétimo grupo de
      * {@link SheetData#STREAM_CODEC}: o limite de 6 grupos é do record de
-     * fora, e um record de 4 campos cabe folgadamente.
+     * fora, e um record de 5 campos cabe folgadamente.
      *
      * <p>Ordem importa no codec de rede ({@code StreamCodec.composite} é
      * posicional) mas nao no de NBT, que é por nome. <b>Não há negociação de
@@ -319,13 +408,23 @@ public record SheetData(
      * próximo campo do record. Por isso {@code background} foi posto no fim
      * apenas por convencao de leitura - a posição é indiferente para a
      * segurança, e a compatibilidade real vem de o mod ir junto com o cliente.
+     *
+     * <p><b>{@code playerName} (29/09/2026):</b> quinto e ultimo campo, pedido
+     * do usuario como "campo Player na frente de Identity, com uma caixinha
+     * pequena para o nome do dono da ficha". Ele e <b>independente</b> do
+     * {@code characterName}: aquele e o nome do personagem, este e o nome de
+     * quem joga. Texto vazio e <b>legitimo</b> (caixa vazia = nao preenchido),
+     * e por isso ele passa pelo {@link SheetData#clean(String)} de um argumento,
+     * que devolve {@code ""} em vez de um fallback.
      */
-    public record Identity(String characterName, String race, String characterClass, String background) {
+    public record Identity(String characterName, String race, String characterClass, String background,
+                           String playerName) {
         public static final StreamCodec<FriendlyByteBuf, Identity> STREAM_CODEC = StreamCodec.composite(
                 ByteBufCodecs.stringUtf8(MAX_NAME), Identity::characterName,
                 ByteBufCodecs.stringUtf8(MAX_NAME), Identity::race,
                 ByteBufCodecs.stringUtf8(MAX_NAME), Identity::characterClass,
                 ByteBufCodecs.stringUtf8(MAX_NAME), Identity::background,
+                ByteBufCodecs.stringUtf8(MAX_NAME), Identity::playerName,
                 Identity::new
         );
 
@@ -334,26 +433,34 @@ public record SheetData(
             race = clean(race);
             characterClass = clean(characterClass);
             background = clean(background);
+            // clean(String) de um argumento: trim + teto MAX_NAME, e devolve ""
+            // para null/"" em vez de cair em um fallback.
+            playerName = clean(playerName);
         }
 
         /** Cópia com o nome do personagem trocado. */
         public Identity withCharacterName(String value) {
-            return new Identity(value, race, characterClass, background);
+            return new Identity(value, race, characterClass, background, playerName);
         }
 
         /** Cópia com a raça trocada. */
         public Identity withRace(String value) {
-            return new Identity(characterName, value, characterClass, background);
+            return new Identity(characterName, value, characterClass, background, playerName);
         }
 
         /** Cópia com a classe trocada. */
         public Identity withCharacterClass(String value) {
-            return new Identity(characterName, race, value, background);
+            return new Identity(characterName, race, value, background, playerName);
         }
 
         /** Cópia com a origem trocada. */
         public Identity withBackground(String value) {
-            return new Identity(characterName, race, characterClass, value);
+            return new Identity(characterName, race, characterClass, value, playerName);
+        }
+
+        /** Cópia com o nome do jogador dono da ficha trocado. */
+        public Identity withPlayerName(String value) {
+            return new Identity(characterName, race, characterClass, background, value);
         }
     }
 
@@ -437,10 +544,23 @@ public record SheetData(
      */
     public record Attributes(List<AttributeValue> values) {
 
-        /** Teto do valor de um atributo (decisao do usuario, 27/09/2026). */
-        public static final int VALUE_MAX = 30;
-        /** Piso do valor de um atributo (decisao do usuario, 27/09/2026). */
-        public static final int VALUE_MIN = -30;
+        /**
+         * Teto <b>absoluto</b> do valor de um atributo.
+         *
+         * <p><b>28/09/2026: este nao e mais o teto de regra.</b> O Mestre escolhe
+         * o teto e o piso da ficha no Sheet Editor, e quem corta o valor nesse
+         * intervalo e o construtor compacto de {@link SheetData}
+         * ({@code [attributeValueMin, attributeValueMax]}). Estas duas constantes
+         * sobraram como <b>rede de seguranca do protocolo</b>, o mesmo papel que
+         * {@link SheetData#MAX_RESOURCE} tem para o HP: um cliente modificado pode
+         * mandar {@code Integer.MAX_VALUE}, e sem teto nenhum o numero viraria
+         * {@code -2147483648} na tela por causa do overflow. Por isso o valor e
+         * largo o bastante para nenhum Mestre alcancar e curto o bastante para
+         * nao estourar nada.
+         */
+        public static final int VALUE_MAX = 999;
+        /** Piso absoluto do valor de um atributo; ver {@link #VALUE_MAX}. */
+        public static final int VALUE_MIN = -999;
 
         /**
          * O valor de UM atributo.
@@ -471,6 +591,9 @@ public record SheetData(
                 if (id.length() > 32) {
                     id = id.substring(0, 32);
                 }
+                // Ceil e piso ABSOLUTOS, nao o intervalo da ficha: o intervalo
+                // que o Mestre definiu e aplicado pela SheetData logo acima. Aqui
+                // so o numero absurdo da rede/ do NBT editado a mao.
                 value = clamp(value, Attributes.VALUE_MIN, Attributes.VALUE_MAX);
             }
         }
@@ -616,6 +739,21 @@ public record SheetData(
          */
         MOVE,
         /**
+         * Troca nome e descricao da skill que esta no <b>indice</b> do payload,
+         * sem mudar a ordem da lista (decisao do usuario em 29/09/2026).
+         *
+         * <p>E o que o botao Edit da tela de Skills faz: carrega a skill
+         * selecionada nas caixas do rodape e o "Add" vira "Save".
+         *
+         * <p><b>Por que o indice e nao so o nome:</b> enquanto o jogador edita,
+         * outra edicao (inclusive a seta de reordenar da propria tela) pode
+         * trocar a skill de posicao. O nome em diante no payload e' a trava: o
+         * servidor so grava se a skill que estiver NAQUele indice ainda tiver
+         * aquele nome. Sem esse teste, um "Save" atrasado sobrescreveria a skill
+         * que o jogador nunca editou.
+         */
+        UPDATE,
+        /**
          * Valor invalido vindo da rede. <b>Nao fazer nada com ele.</b>
          *
          * <p>Existe para que um indice corrompido seja descartado em vez de
@@ -678,10 +816,11 @@ public record SheetData(
      * <p>Só duas operações, porque a lista de perícias é <b>fixa</b>: não há
      * como criar nem remover (decisão do usuário em 25/09/2026 - "perícias são
      * fixas que serão personalizados para cada sistema"). O que muda é o valor
-     * (0-3) e o atributo que ela soma.
+     * (limitado pelo Mestre, ver {@link Pericia#VALUE_MAX}) e o atributo que ela
+     * soma.
      */
     public enum PericiaOp {
-        /** Muda só o valor (0-3). */
+        /** Muda só o valor da perícia. */
         SET_VALUE,
         /** Muda só o atributo que a perícia soma. */
         SET_ATTRIBUTE,
@@ -742,29 +881,35 @@ public record SheetData(
         );
 
         /**
-         * Valor minimo e maximo da pericia.
+         * Piso e teto <b>absolutos</b> do valor da pericia.
          *
-         * <p><b>27/09/2026:</b> o teto era 3 e foi elevado para 30, a pedido
-         * do usuario, junto com a caixa de numero responsiva e o "+" que
-         * escurece no limite. O piso continua 0: o bonus de pericia e o que
-         * <b>soma</b> na rolagem ({@code 1d20 + valor + atributo}), entao
-         * negativo aqui significaria penalidade em vez de bonus -- e penalidade
-         * pertence ao atributo, que aceita negativo.
+         * <p><b>28/09/2026: o teto deixou de ser a regra.</b> O teto de verdade
+         * e o {@code periciaValueMax} que o Mestre escolhe no Sheet Editor, e quem
+         * corta o valor nele e o construtor compacto de {@link SheetData}. O piso 0
+         * continua fixo, e por um motivo de regra: o bonus de pericia e o que
+         * <b>soma</b> na rolagem ({@code 1d20 + valor + atributo}), entao negativo
+         * aqui significaria penalidade em vez de bonus -- e penalidade pertence ao
+         * atributo, que aceita negativo.
          *
-         * <p>Este é o <b>único</b> ponto autoritativo do teto. Quem lê esta
-         * constante: a tela ({@code StatusScreen.stepPericiaValue}) e o próprio
-         * construtor deste record, que corta o valor na carga do NBT.
-         * <b>{@code MasterCommands.rollSkill} NÃO lê</b>: ele confia em
-         * {@code pericia.value()}, que já passou por aqui.
+         * <p>Estas duas constantes ficaram como <b>rede de seguranca do
+         * protocolo</b> (o mesmo papel de {@link Attributes#VALUE_MAX}): cortam o
+         * numero absurdamente grande que um cliente modificado ou um NBT editado a
+         * mao trariam, e nao limitam o uso. Quem le o teto de regra na tela e o
+         * {@code sheet.periciaValueMax()}, e o
+         * {@code MasterCommands.rollSkill} nao le nenhum dos dois: confia em
+         * {@code pericia.value()}, que ja passou pelo construtor da ficha.
          */
         public static final int VALUE_MIN = 0;
-        public static final int VALUE_MAX = 30;
+        public static final int VALUE_MAX = 999;
 
         public Pericia {
             // Mesmo teto de 32 e mesmo trim do id de um AttributeValue: e o
             // mesmo papel, a chave com que a ficha liga esta pericia ao modelo.
             id = cleanId(id);
             name = cleanSkill(name);
+            // Ceil e piso ABSOLUTOS, nao o intervalo da ficha: o teto que o
+            // Mestre definiu e aplicado pela SheetData logo acima. Aqui so o
+            // numero absurdo da rede/ do NBT editado a mao.
             value = clamp(value, VALUE_MIN, VALUE_MAX);
             // Cenario defensivo: um payload antigo, um save editado a mao ou um
             // cliente modificado poderiam mandar null. Sem isto, o NPE rebentaria
@@ -935,15 +1080,32 @@ public record SheetData(
         return null;
     }
 
-    /** Ficha inicial de um jogador: nome = nome da conta, resto no padrão. */
+    /**
+     * Ficha inicial de um jogador: nome = nome da conta, resto no padrão.
+     *
+     * <p><b>Os tres limites de valor vem do modelo (28/09/2026).</b> A ficha
+     * nova ja nasce com o intervalo que o Mestre configurou, e nao com o padrao
+     * do record: sem isto, o primeiro jogador a entrar depois de uma mudanca de
+     * limite teria a ficha limitada pelo valor antigo ate o proximo
+     * {@link #aligned()}, e a tela dele mostraria as setas travadas no teto
+     * errado.
+     */
     public static SheetData defaultSheet(String playerName) {
+        SheetModel model = SheetModelHolder.current();
         return new SheetData(
-                new Identity(clean(playerName), "", "", ""),
+                // 29/09/2026: o campo novo "playerName" nasce VAZIO de
+                // proposito. O nome do jogador continua indo no campo do
+                // personagem, como antes - o usuario nao pediu para mudar esse
+                // campo, so pediu a caixinha nova em cima dele.
+                new Identity(clean(playerName), "", "", "", ""),
                 Vitals.defaults(),
                 Progress.defaults(),
                 Attributes.defaults(),
                 List.of(),
-                defaultPericias()
+                defaultPericias(),
+                model.attributeValueMin(),
+                model.attributeValueMax(),
+                model.periciaValueMax()
         );
     }
 
@@ -982,23 +1144,41 @@ public record SheetData(
         String value = rawValue.trim();
 
         return switch (key) {
-            case "charactername" -> new SheetData(identity.withCharacterName(value), vitals, progress, attributes, skills, pericias);
-            case "race" -> new SheetData(identity.withRace(value), vitals, progress, attributes, skills, pericias);
-            case "characterclass" -> new SheetData(identity.withCharacterClass(value), vitals, progress, attributes, skills, pericias);
-            case "background" -> new SheetData(identity.withBackground(value), vitals, progress, attributes, skills, pericias);
+            case "charactername" -> new SheetData(identity.withCharacterName(value), vitals, progress,
+                    attributes, skills, pericias, attributeValueMin, attributeValueMax, periciaValueMax);
+            case "race" -> new SheetData(identity.withRace(value), vitals, progress,
+                    attributes, skills, pericias, attributeValueMin, attributeValueMax, periciaValueMax);
+            case "characterclass" -> new SheetData(identity.withCharacterClass(value), vitals, progress,
+                    attributes, skills, pericias, attributeValueMin, attributeValueMax, periciaValueMax);
+            case "background" -> new SheetData(identity.withBackground(value), vitals, progress,
+                    attributes, skills, pericias, attributeValueMin, attributeValueMax, periciaValueMax);
+            // 29/09/2026: nome do jogador dono da ficha. A chave chega como
+            // "playerName" e o switch compara em minuscula (key), igual aos
+            // casos acima. A permissao e a mesma de todos os outros campos de
+            // texto: quem aplica este metodo ja passou por canEditSheet no
+            // servidor, que libera o dono da ficha e o Mestre.
+            case "playername" -> new SheetData(identity.withPlayerName(value), vitals, progress,
+                    attributes, skills, pericias, attributeValueMin, attributeValueMax, periciaValueMax);
 
             case "hp" -> replaceVitals(new Vitals(parseInt(value, vitals.hp()), vitals.hpMax(), vitals.mana(), vitals.manaMax()));
             case "hpmax" -> replaceVitals(new Vitals(vitals.hp(), parseInt(value, vitals.hpMax()), vitals.mana(), vitals.manaMax()));
             case "mana" -> replaceVitals(new Vitals(vitals.hp(), vitals.hpMax(), parseInt(value, vitals.mana()), vitals.manaMax()));
             case "manamax" -> replaceVitals(new Vitals(vitals.hp(), vitals.hpMax(), vitals.mana(), parseInt(value, vitals.manaMax())));
 
-            case "level" -> new SheetData(identity, vitals, new Progress(parseInt(value, progress.level()), progress.xp(), progress.xpText()), attributes, skills, pericias);
+            case "level" -> new SheetData(identity, vitals,
+                    new Progress(parseInt(value, progress.level()), progress.xp(), progress.xpText()),
+                    attributes, skills, pericias, attributeValueMin, attributeValueMax, periciaValueMax);
             // Com o modelo em modo TEXT, o campo da barra mostra o texto que o
             // Mestre digitou (ex.: "Fiel aogrupo"). O numero continua guardado
             // para quando o modelo voltar para NUMBER.
             case "xp" -> SheetModelHolder.current().xp() == SheetModel.XpMode.TEXT
-                    ? new SheetData(identity, vitals, new Progress(progress.level(), progress.xp(), value), attributes, skills, pericias)
-                    : new SheetData(identity, vitals, new Progress(progress.level(), parseInt(value, progress.xp()), progress.xpText()), attributes, skills, pericias);
+                    ? new SheetData(identity, vitals, new Progress(progress.level(), progress.xp(), value),
+                            attributes, skills, pericias,
+                            attributeValueMin, attributeValueMax, periciaValueMax)
+                    : new SheetData(identity, vitals,
+                            new Progress(progress.level(), parseInt(value, progress.xp()), progress.xpText()),
+                            attributes, skills, pericias,
+                            attributeValueMin, attributeValueMax, periciaValueMax);
 
             // O texto do XP vem num campo SEPARADO do numero, e nao no mesmo
             // "xp": e o que a tela de Status abre em modo TEXT. Sem este caso o
@@ -1011,7 +1191,9 @@ public record SheetData(
             // a tela nao mostra essa caixa, entao um pacote com "xptext" so pode
             // vir de um cliente forjado.
             case "xptext" -> SheetModelHolder.current().xp() == SheetModel.XpMode.TEXT
-                    ? new SheetData(identity, vitals, new Progress(progress.level(), progress.xp(), value), attributes, skills, pericias)
+                    ? new SheetData(identity, vitals, new Progress(progress.level(), progress.xp(), value),
+                            attributes, skills, pericias,
+                            attributeValueMin, attributeValueMax, periciaValueMax)
                     : this;
 
             // Qualquer outra chave e um id de atributo. O que decide se ela
@@ -1025,11 +1207,13 @@ public record SheetData(
     }
 
     private SheetData replaceVitals(Vitals newVitals) {
-        return new SheetData(identity, newVitals, progress, attributes, skills, pericias);
+        return new SheetData(identity, newVitals, progress, attributes, skills, pericias,
+                attributeValueMin, attributeValueMax, periciaValueMax);
     }
 
     private SheetData replaceAttributes(Attributes newAttributes) {
-        return new SheetData(identity, vitals, progress, newAttributes, skills, pericias);
+        return new SheetData(identity, vitals, progress, newAttributes, skills, pericias,
+                attributeValueMin, attributeValueMax, periciaValueMax);
     }
 
     /**
@@ -1057,17 +1241,63 @@ public record SheetData(
             }
         }
         if (updated) {
-            return new SheetData(identity, vitals, progress, attributes, next, pericias);
+            return new SheetData(identity, vitals, progress, attributes, next, pericias,
+                    attributeValueMin, attributeValueMax, periciaValueMax);
         }
         if (skills.size() >= MAX_SKILLS) {
             return this; // lista cheia
         }
         next.add(new Skill(cleanName, cleanDesc));
-        return new SheetData(identity, vitals, progress, attributes, next, pericias);
+        return new SheetData(identity, vitals, progress, attributes, next, pericias,
+                attributeValueMin, attributeValueMax, periciaValueMax);
     }
 
     /**
-     * Muda SÓ o valor de uma perícia (0-3), preservando o atributo.
+     * Troca nome e descricao da skill que esta no <b>indice</b> dado, no mesmo
+     * lugar da lista (decisao do usuario em 29/09/2026: o botao Edit da tela de
+     * Skills aproveita as caixas do rodape e o botao "Add" vira "Save").
+     *
+     * <p><b>Por que o indice e nao o nome:</b> o nome e' o que a tela lembra da
+     * selecao, mas ele nao sobrevive a uma reordenacao -- quem mexe nas setas
+     * entre a selecao e o "Save" troca a skill de posicao, e uma atualizacao por
+     * nome cairia na skill errada. O indice trava a posicao, e o servidor (que
+     * e' quem valida) exige que o nome em diante seja o da skill que esta la.
+     *
+     * <p><b>Por que a duplicata e' recusada aqui:</b> {@link
+     * #sanitizeSkills} descarta a skill repetida e mantem a <b>primeira</b> da
+     * lista, entao salvar com o nome de outra skill teria um resultado
+     * dependente da posicao: ou o Save seria engolido em silencio, ou a skill
+     * vizinha seria apagada. Devolver a ficha intacta faz o servidor recusar o
+     * pedido (nada muda, sem erro) em vez de deixar o sanitizeSkills escolher
+     * qual das duas fica.
+     *
+     * <p>Indice fora da faixa e nome vazio devolvem a ficha intacta, como os
+     * outros {@code with...} deste arquivo.
+     */
+    public SheetData withSkill(int index, String name, String description) {
+        String cleanName = cleanSkill(name);
+        if (cleanName.isEmpty() || index < 0 || index >= skills.size()) {
+            return this;
+        }
+        List<Skill> next = new ArrayList<>(skills.size());
+        for (int i = 0; i < skills.size(); i++) {
+            Skill existing = skills.get(i);
+            if (i == index) {
+                next.add(new Skill(cleanName, cleanDescription(description)));
+            } else if (existing.name().equalsIgnoreCase(cleanName)) {
+                // Nome ja usado por OUTRA skill: recusar e melhor do que deixar o
+                // sanitizeSkills escolher qual das duas fica.
+                return this;
+            } else {
+                next.add(existing);
+            }
+        }
+        return new SheetData(identity, vitals, progress, attributes, next, pericias,
+                attributeValueMin, attributeValueMax, periciaValueMax);
+    }
+
+    /**
+     * Muda SÓ o valor de uma perícia, preservando o atributo.
      *
      * <p><b>28/09/2026: o parametro e o {@code id} da pericia</b> (antes era o
      * nome), porque e o id que o cliente recebe no
@@ -1117,7 +1347,8 @@ public record SheetData(
                 next.add(existing);
             }
         }
-        return changed ? new SheetData(identity, vitals, progress, attributes, skills, next) : this;
+        return changed ? new SheetData(identity, vitals, progress, attributes, skills, next,
+                attributeValueMin, attributeValueMax, periciaValueMax) : this;
     }
 
     /** Remove uma skill pelo nome (comparação sem diferenciar maiusculas). */
@@ -1135,7 +1366,8 @@ public record SheetData(
             }
             next.add(existing);
         }
-        return removed ? new SheetData(identity, vitals, progress, attributes, next, pericias) : this;
+        return removed ? new SheetData(identity, vitals, progress, attributes, next, pericias,
+                attributeValueMin, attributeValueMax, periciaValueMax) : this;
     }
 
     /**
@@ -1168,7 +1400,8 @@ public record SheetData(
         }
         List<Skill> next = new ArrayList<>(skills);
         next.add(to, next.remove(from));
-        return new SheetData(identity, vitals, progress, attributes, next, pericias);
+        return new SheetData(identity, vitals, progress, attributes, next, pericias,
+                attributeValueMin, attributeValueMax, periciaValueMax);
     }
 
     // ------------------------------------------------------------------
@@ -1181,6 +1414,7 @@ public record SheetData(
             return "";
         }
         return switch (field.toLowerCase(Locale.ROOT)) {
+            case "playername" -> identity.playerName();
             case "charactername" -> identity.characterName();
             case "race" -> identity.race();
             case "characterclass" -> identity.characterClass();
@@ -1505,6 +1739,44 @@ public record SheetData(
             n++;
         }
         return "pericia_" + n;
+    }
+
+    /**
+     * Corta o valor de cada atributo no intervalo que o Mestre definiu.
+     *
+     * <p>Devolve a <b>mesma instancia</b> quando nada precisou ser cortado, para
+     * que o caminho comum (uma edicao de nome, uma skill) nao aloque uma lista e
+     * uma ficha nova a cada gravacao do NBT.
+     */
+    private static Attributes clampAttributes(Attributes source, int min, int max) {
+        List<Attributes.AttributeValue> out = new ArrayList<>(source.values().size());
+        boolean changed = false;
+        for (Attributes.AttributeValue value : source.values()) {
+            int limited = clamp(value.value(), min, max);
+            changed = changed || limited != value.value();
+            out.add(limited == value.value() ? value
+                    : new Attributes.AttributeValue(value.id(), limited));
+        }
+        return changed ? new Attributes(out) : source;
+    }
+
+    /**
+     * Corta o valor de cada pericia em {@code 0..max}.
+     *
+     * <p>O piso 0 e fixo e nao vem do modelo (ver o Javadoc da classe), entao o
+     * intervalo e montado aqui em vez de vir em dois inteiros. Mesma regra de
+     * devolver a mesma instancia quando nada mudou.
+     */
+    private static List<Pericia> clampPericiaValues(List<Pericia> source, int max) {
+        List<Pericia> out = new ArrayList<>(source.size());
+        boolean changed = false;
+        for (Pericia pericia : source) {
+            int limited = clamp(pericia.value(), 0, max);
+            changed = changed || limited != pericia.value();
+            out.add(limited == pericia.value() ? pericia
+                    : new Pericia(pericia.id(), pericia.name(), limited, pericia.attributeId()));
+        }
+        return changed ? List.copyOf(out) : source;
     }
 
     private static int clamp(int value, int min, int max) {

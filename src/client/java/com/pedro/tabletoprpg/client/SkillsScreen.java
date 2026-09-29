@@ -44,6 +44,13 @@ import java.util.List;
  * <p><b>Ordem dos campos no rodape (feedback do usuario):</b> o campo de
  * <b>nome fica ACIMA do de descricao</b>, porque e a ordem logica de
  * preenchimento.
+ *
+ * <p><b>Editar uma skill (decisao do usuario em 29/09/2026):</b> o botao
+ * <b>Edit</b>, ao lado do Add, carrega a skill selecionada nas <b>mesmas
+ * caixas</b> que o Add usa, e o Add vira <b>Save</b>. O Save grava
+ * <b>no mesmo lugar da lista</b> (por isso o payload leva indice, e nao so o
+ * nome), entao a ordem que o jogador montou nao se perde. Um segundo clique no
+ * Edit descarta a edicao e volta ao modo de adicionar.
  */
 public class SkillsScreen extends CharacterSheetScreen {
 
@@ -98,6 +105,19 @@ public class SkillsScreen extends CharacterSheetScreen {
     /** Cores do painel de tooltip/popup. */
     private static final int COL_TOOLTIP_BG = 0xF0101014;
     private static final int COL_TOOLTIP_EDGE = 0xFF6A6A72;
+    /**
+     * Fundo da faixa reservada a descricao da skill selecionada.
+     *
+     * <p>E o "quadrado mais escuro" pedido pelo usuario para a descricao nao se
+     * confundir com a lista de skills criadas. Fica logo abaixo de
+     * {@link #COL_TOOLTIP_BG}, e ainda mais escuro que o fundo do painel
+     * inteiro, para o olho separar as duas areas.
+     *
+     * <p>Cor propria de proposito: {@link #COL_TOOLTIP_BG} e compartilhada com o
+     * tooltip de hover ({@code drawTooltipBox}), entao escurece-la junto
+     * mudaria o popup e o tooltip sem ninguem ter pedido.
+     */
+    private static final int COL_DESC_BG = 0xF2090A0E;
     /** Trilho da barra de rolagem: escuro, para contrastar com o polegar. */
     private static final int COL_SCROLL_TRACK = 0xFF303038;
     /** Polegar da barra de rolagem: claro, para ficar visivel de primeira. */
@@ -161,6 +181,22 @@ public class SkillsScreen extends CharacterSheetScreen {
      * a cada edicao, e um objeto velho mostraria descricao desatualizada.
      */
     private String selectedSkill;
+    /**
+     * Posicao de {@link #selectedSkill} na lista atual, ou -1 sem selecao.
+     *
+     * <p><b>29/09/2026 (botao Edit).</b> O nome sozinho nao serve para o
+     * "Save": ele identifica a skill, mas nao o <b>lugar</b> dela, e a ordem da
+     * lista muda (setas, e mesmo uma edicao de outra pessoa enquanto a caixa
+     * esta aberta). Como o Edit salva no mesmo lugar, o que ele precisa e da
+     * posicao.
+     *
+     * <p>Este indice e' <b>sempre re-ancorado pelo nome</b> a cada ficha que
+     * chega ({@link #onSheetReceived}), e nao guardado como esta: ai uma
+     * reordenacao deixaria o Edit apontando para a skill vizinha. O nome e' a
+     * identidade, o indice e' a posicao, e quem casa os dois de novo e' o
+     * servidor (o nome em diante tem de bater com a skill daquele indice).
+     */
+    private int selectedIndex = -1;
     /** Rolagem do texto dentro do popup. */
     private int popupScroll;
     /**
@@ -217,6 +253,31 @@ public class SkillsScreen extends CharacterSheetScreen {
      */
     private MultiLineEditBox descInput;
 
+    /**
+     * Botao "Add" do rodape, que vira "Save" no modo de edicao.
+     *
+     * <p>Guardado em campo porque o rotulo muda: e o unico jeito de a mesma
+     * caixa servir para as duas coisas, sem criar e destruir botao (o que
+     * custaria o foco do teclado no meio da digitacao).
+     */
+    private Button addButton;
+    /**
+     * Botao "Edit" do rodape: carrega a skill selecionada nas caixas.
+     *
+     * <p>Habilitado so com skill selecionada e com a ficha editavel -- ver
+     * {@link #refreshEditButton}.
+     */
+    private Button editButton;
+    /**
+     * true quando o rodape esta <b>editando</b> uma skill em vez de adicionar.
+     *
+     * <p>Enquanto e' true, o "Save" manda {@code SkillOp.UPDATE} no indice da
+     * skill selecionada, e um segundo clique no "Edit" volta para o modo de
+     * adicionar (mesmo caminho do "Discard" do Sheet Editor: as caixas voltam
+     * ao estado inicial, sem alterar nada na ficha).
+     */
+    private boolean editingSkill;
+
     private boolean suppressNotify;
 
     public SkillsScreen(String targetName, Screen menuReturn) {
@@ -246,6 +307,17 @@ public class SkillsScreen extends CharacterSheetScreen {
         int addY = backY - nameH - 2;
         int descY = addY - descH - 2;
         int nameY = descY - nameH - 2;
+
+        // 29/09/2026 (botao Edit): a linha do Add ganhou um vizinho. A largura
+        // util (panelW - 4, a mesma das caixas acima) e' dividida em dois: o
+        // "Edit" fica a ESQUERDA, mais estreito, porque o rotulo e' curto e fixo
+        // ("Edit"), e o Add/Save segue a direita, do mesmo tamanho de antes para
+        // o "Save" -- que e' mais longo -- caber sem encolher. A ordem e' a da
+        // leitura: o que se faz com a skill selecionada vem antes de adicionar
+        // uma nova.
+        int footerW = panelW - 4;
+        int editW = Math.max(24, footerW / 4);
+        int addW = footerW - editW - 4;
 
         // A lista para antes da faixa do popup, e o popup fica entre a lista e
         // o campo de nome -- ou seja, abaixo da lista, como pedido.
@@ -358,9 +430,33 @@ public class SkillsScreen extends CharacterSheetScreen {
         descInput.active = canEdit;
         addRenderableWidget(descInput);
 
-        addRenderableWidget(Button.builder(Component.literal("Add"), b -> addSkill())
-                .bounds(x0, addY, panelW - 4, rowH - 2)
-                .build());
+        // Rodape: [ Edit ] [ Add/Save ].
+        //
+        // 29/09/2026 (decisao do usuario): o botao Edit entra AO LADO do Add, e
+        // o Add vira "Save" quando ha edicao em curso. Os dois botoes ficam na
+        // MESMA linha e com a MESMA altura de antes (rowH - 2): o que muda e
+        // so a divisao da largura util.
+        //
+        // O modo de edicao NAO sobrevive ao init(): as duas caixas acima sao
+        // recriadas vazias aqui (o init roda de novo a cada resize, e e o que
+        // faz a lista se remontar), entao um "Save" com as caixas vazias seria
+        // pior do que voltar ao "Add" -- o jogador veria um rotulo de edicao
+        // sobre um texto que ele nao digitou.
+        editingSkill = false;
+        editButton = Button.builder(Component.literal("Edit"), b -> editSelectedSkill())
+                .bounds(x0, addY, editW, rowH - 2)
+                .build();
+        addRenderableWidget(editButton);
+
+        addButton = Button.builder(Component.literal("Add"), b -> addSkill())
+                .bounds(x0 + editW + 4, addY, addW, rowH - 2)
+                .build();
+        addRenderableWidget(addButton);
+        // O Add nasce sempre ativo, igual antes: a regra de permissao dele e
+        // checada DENTRO de addSkill (que sai cedo com !canEdit), nao no active.
+        // O Edit precisa de active porque ele depende tambem da selecao, e uma
+        // selecao que muda sem o Add mudar de estado nao passa por addSkill.
+        refreshEditButton();
     }
 
     /** Os 2 botoes de uma linha, na ordem: abrir descricao, remover. */
@@ -454,7 +550,25 @@ public class SkillsScreen extends CharacterSheetScreen {
                 }
             }
         }
+        refreshEditButton();
         clampSkillScroll();
+    }
+
+    /**
+     * Habilita o botao Edit conforme a selecao e a permissao.
+     *
+     * <p>Mesma regra do Add ({@code canEdit} decide se a ficha pode ser
+     * editada), mais a exigencia de ter skill selecionada -- sem selecao nao ha
+     * o que carregar nas caixas.
+     *
+     * <p>Chamada de dois lugares: no fim de {@code buildPanel} (o botao acabou
+     * de nascer e a ficha pode ainda nao ter chegado) e em {@code selectSkill}
+     * (a selecao muda por clique, sem passar por {@link #applyExtraState}).
+     */
+    private void refreshEditButton() {
+        if (editButton != null) {
+            editButton.active = canEdit && selectedIndex >= 0;
+        }
     }
 
     /**
@@ -469,6 +583,23 @@ public class SkillsScreen extends CharacterSheetScreen {
             selectedSkill = null;
             popupScroll = 0;
         }
+        // 29/09/2026: o indice selecionado e RE-ANCORADO pelo nome a cada ficha
+        // que chega. E' o que mantem o indice honesto depois de um add, um
+        // remove ou um move vindos de fora (ou das setas desta propria tela):
+        // o nome e' a identidade da skill, o indice so e a posicao dela AGORA.
+        // Sem esta linha, o Edit carregaria -- e o Save gravaria -- na skill
+        // que tivesse deslizado para a posicao antiga.
+        selectedIndex = indexOfSkill(selectedSkill);
+        // Uma skill nova (de qualquer origem, inclusive o "Save" desta tela) e a
+        // confirmacao do servidor: o modo de edicao termina aqui, e as caixas
+        // voltam ao estado de "adicionar". Sem isso, um add/remove/move de outra
+        // pessoa deixaria a tela mostrando "Save" sobre uma skill que o jogador
+        // nunca abriu para editar.
+        if (editingSkill) {
+            setEditingMode(false);
+            clearSkillInputs();
+        }
+        refreshEditButton();
     }
 
     /**
@@ -551,15 +682,28 @@ public class SkillsScreen extends CharacterSheetScreen {
 
     /** Procura uma skill pelo nome (mesma comparacao do servidor, sem diferenciar caixa). */
     private SheetData.Skill findSkill(String name) {
+        int index = indexOfSkill(name);
+        return index < 0 ? null : sheet.skills().get(index);
+    }
+
+    /**
+     * Posicao de uma skill pelo nome, ou -1 (mesma comparacao do servidor).
+     *
+     * <p>Complementa o {@link #findSkill}: quem precisa saber <b>onde</b> a
+     * skill esta (o indice que o Edit e o Save levam no payload) usa este, e
+     * quem so precisa do texto usa aquele.
+     */
+    private int indexOfSkill(String name) {
         if (sheet == null || name == null || name.isBlank()) {
-            return null;
+            return -1;
         }
-        for (SheetData.Skill skill : sheet.skills()) {
-            if (skill.name().equalsIgnoreCase(name)) {
-                return skill;
+        List<SheetData.Skill> skills = sheet.skills();
+        for (int i = 0; i < skills.size(); i++) {
+            if (skills.get(i).name().equalsIgnoreCase(name)) {
+                return i;
             }
         }
-        return null;
+        return -1;
     }
 
     // ------------------------------------------------------------------
@@ -575,12 +719,87 @@ public class SkillsScreen extends CharacterSheetScreen {
             return;
         }
         String description = descInput == null ? "" : descInput.getValue();
+        if (editingSkill) {
+            // Modo edicao: o mesmo botao agora e' "Save" e grava NO MESMO LUGAR
+            // da lista. O indice e' o da skill selecionada, e o nome em diante
+            // viaja junto: o servidor so aceita se a skill que estiver naquele
+            // indice ainda for a que o jogador abriu para editar. Sem selecao
+            // valida, o pedido e' recusado pelo servidor (sem erro), e e' melhor
+            // do que um update sem posicao.
+            if (selectedIndex < 0) {
+                return;
+            }
+            ClientPlayNetworking.send(RpgNetworking.SheetSkillPayload.update(
+                    targetName, selectedIndex, name, description));
+            // Nao limpa as caixas aqui: a saida do modo de edicao acontece quando
+            // a ficha volta do servidor (onSheetReceived), que e' o unico momento
+            // em que se sabe que o servidor aceitou.
+            return;
+        }
         // Nome novo cria a skill; nome que ja existe ATUALIZA a descricao (o
         // servidor decide, comparando sem diferenciar caixa). A skill nao tem
         // valor nem atributo, entao nao ha mais campo para reaproveitar aqui.
         ClientPlayNetworking.send(RpgNetworking.SheetSkillPayload.add(targetName, name, description));
         // Limpa as caixas; os valores reais so entram quando o servidor
         // confirmar (a resposta pode recusar: lista cheia).
+        clearSkillInputs();
+    }
+
+    /**
+     * Botao "Edit": carrega a skill selecionada nas caixas do rodape e entra no
+     * modo de edicao (o "Add" vira "Save").
+     *
+     * <p>Um segundo clique no MESMO botao volta ao modo de adicionar, com as
+     * caixas limpas -- e o "Discard" desta edicao. A skill nao e tocada: como o
+     * Edit so carrega texto nas caixas, descartar e' so limpar as caixas.
+     */
+    private void editSelectedSkill() {
+        if (!canEdit || skillInput == null) {
+            return;
+        }
+        if (editingSkill) {
+            // Descartar: volta ao modo de adicionar, como o "Add" que so
+            // escreve nas caixas sem chegar a mandar nada.
+            setEditingMode(false);
+            clearSkillInputs();
+            return;
+        }
+        if (selectedIndex < 0) {
+            return;
+        }
+        SheetData.Skill skill = sheet.skills().get(selectedIndex);
+        // A linha selecionada e a que abre a descricao, entao o popup e a caixa
+        // de descricao passam a mostrar o mesmo texto; e o que o jogador espera
+        // ao clicar em Edit.
+        suppressNotify = true;
+        skillInput.setValue(skill.name());
+        if (descInput != null) {
+            descInput.setValue(skill.description());
+        }
+        suppressNotify = false;
+        setEditingMode(true);
+    }
+
+    /**
+     * Liga/desliga o modo de edicao, que e' o que troca o rotulo do botao.
+     *
+     * <p>Existe como metodo separado porque o rotulo tem TRES lugares que o
+     * mudam (o Edit, o descarte e a confirmacao do servidor) e eles nao podem
+     * divergir: botao dizendo "Add" com as caixas cheias de uma skill seria o
+     * jeito mais facil de o jogador apagar a descricao sem querer.
+     */
+    private void setEditingMode(boolean editing) {
+        editingSkill = editing;
+        if (addButton != null) {
+            addButton.setMessage(Component.literal(editing ? "Save" : "Add"));
+        }
+    }
+
+    /** Esvazia as duas caixas do rodape sem gerar payload de volta. */
+    private void clearSkillInputs() {
+        if (skillInput == null) {
+            return;
+        }
         suppressNotify = true;
         skillInput.setValue("");
         if (descInput != null) {
@@ -600,11 +819,19 @@ public class SkillsScreen extends CharacterSheetScreen {
         pendingRemoval = null;
         if (skill.name().equalsIgnoreCase(selectedSkill)) {
             selectedSkill = null;
+            selectedIndex = -1;
             popupScroll = 0;
+            refreshEditButton();
             return;
         }
         selectedSkill = skill.name();
+        // O indice e' a posicao REAL desta linha, e nao a linha da tela: com a
+        // lista rolada, a linha 0 da tela pode ser a skill 7 da ficha. E ele
+        // que o Edit e o Save levam no payload, e por isso tem de ser a posicao
+        // na lista e nao o numero da linha visivel.
+        selectedIndex = visibleSkillIndex(row);
         popupScroll = 0;
+        refreshEditButton();
     }
 
     private void removeSkillAt(int row) {
@@ -628,7 +855,9 @@ public class SkillsScreen extends CharacterSheetScreen {
         // aberto mostrando uma skill que acabou de sumir.
         if (skill.name().equalsIgnoreCase(selectedSkill)) {
             selectedSkill = null;
+            selectedIndex = -1;
             popupScroll = 0;
+            refreshEditButton();
         }
         // Na remocao so o nome importa: a descricao vai vazia de proposito (o
         // servidor remove pela comparacao de nome).
@@ -664,6 +893,11 @@ public class SkillsScreen extends CharacterSheetScreen {
     @Override
     protected void close() {
         pendingRemoval = null;
+        // Sair tambem e descartar a edicao em curso: pelo ESC a tela inteira e
+        // jogada fora, e pelo Back a proxima e outra tela -- nos dois casos o
+        // modo de edicao morre com o objeto, e deixar o flag true aqui so
+        // guardaria estado que ninguem le.
+        editingSkill = false;
         if (this.minecraft != null) {
             this.minecraft.setScreen(new StatusScreen(targetName, returnScreen()));
             TabletopRpgClient.requestSheet(targetName);
@@ -918,12 +1152,39 @@ public class SkillsScreen extends CharacterSheetScreen {
     }
 
     /**
+     * Quadrado de fundo da faixa reservada a descricao da skill.
+     *
+     * <p>E separador de area, nao decoracao: cobre a faixa inteira
+     * ({@code popupY} ate {@code popupY + POPUP_H}) com {@link #COL_DESC_BG},
+     * mais escuro que o fundo do painel, e marca as 4 bordas com
+     * {@link #COL_SCROLL_TRACK}, no mesmo estilo das 4 bordas que
+     * {@link #renderPopup} ja faz.
+     *
+     * <p>Desenhado sempre, antes do texto e antes do retorno de "sem skill
+     * selecionada": e a faixa reservada que existe na tela mesmo vazia, e e ela
+     * que precisa ficar visivel para separar descricao de lista. So desenho,
+     * nada de texto, barra de rolagem ou calculo de layout.
+     */
+    private void renderDescBackdrop(GuiGraphics graphics) {
+        graphics.fill(popupX, popupY, popupX + popupW, popupY + POPUP_H, COL_DESC_BG);
+        graphics.fill(popupX, popupY, popupX + popupW, popupY + 1, COL_SCROLL_TRACK);
+        graphics.fill(popupX, popupY + POPUP_H - 1, popupX + popupW, popupY + POPUP_H, COL_SCROLL_TRACK);
+        graphics.fill(popupX, popupY, popupX + 1, popupY + POPUP_H, COL_SCROLL_TRACK);
+        graphics.fill(popupX + popupW - 1, popupY, popupX + popupW, popupY + POPUP_H, COL_SCROLL_TRACK);
+    }
+
+    /**
      * Popup de descricao completa, logo abaixo da lista.
      *
      * <p>Se a descricao for maior que a faixa, a ultima linha mostra quantas
      * faltam, e a roda do mouse rola o texto.
      */
     private void renderPopup(GuiGraphics graphics) {
+        // O separador vem primeiro e fora do "sem selecao", para o quadrado
+        // existir sempre: e ele que divide a tela em lista e descricao. O popup
+        // desenha por cima, como antes.
+        renderDescBackdrop(graphics);
+
         List<FormattedCharSequence> lines = popupLines();
         if (lines == null) {
             // Sem selecao: a faixa fica vazia, sem moldura, para o popup aparecer

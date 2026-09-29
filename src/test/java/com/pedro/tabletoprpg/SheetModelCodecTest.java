@@ -5,6 +5,7 @@ import io.netty.buffer.Unpooled;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.NbtOps;
+import net.minecraft.nbt.Tag;
 import net.minecraft.network.FriendlyByteBuf;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -37,27 +38,105 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class SheetModelCodecTest {
 
-    /** Round-trip pelo codec de rede: encode e decode tem de devolver o mesmo modelo. */
-    @Test
-    @DisplayName("SheetModel sobrevive a um round-trip pelo STREAM_CODEC")
-    void roundTrip() {
-        SheetModel original = new SheetModel(
-                "Nome", "Raca", true, "Classe", "Historia",
-                "Vida", "Energia", false, "Nivel", "Experiencia",
-                SheetModel.XpMode.TEXT,
-                List.of(
-                        new SheetModel.AttributeDef("forca", "FOR", "Forca"),
-                        new SheetModel.AttributeDef("destreza", "DES", "Destreza")),
-                List.of(
-                        new SheetModel.PericiaDef("pericia_1", "Acrobacia", "destreza"),
-                        new SheetModel.PericiaDef("pericia_2", "Persuasao", "forca")));
+/** Round-trip pelo codec de rede: encode e decode tem de devolver o mesmo modelo. */
+@Test
+@DisplayName("SheetModel sobrevive a um round-trip pelo STREAM_CODEC")
+void roundTrip() {
+    SheetModel original = new SheetModel(
+            "Nome", "Raca", true, "Classe", "Historia",
+            "Vida", "Energia", false, "Nivel", "Experiencia",
+            SheetModel.XpMode.TEXT,
+            List.of(
+                    new SheetModel.AttributeDef("forca", "FOR", "Forca"),
+                    new SheetModel.AttributeDef("destreza", "DES", "Destreza")),
+            List.of(
+                    new SheetModel.PericiaDef("pericia_1", "Acrobacia", "destreza"),
+                    new SheetModel.PericiaDef("pericia_2", "Persuasao", "forca")),
+            // 28/09/2026: limites NAO PADRAO de proposito. Com o padrao (-30/30/30)
+            // o round-trip passaria mesmo se os tres VAR_INT fossem lidos na
+            // posicao errada, porque o encoder e o decoder leriam o mesmo zero nas
+            // duas pontas. Com -5/12/7, um deslocamento de uma posicao troca os
+            // numeros e o assertEquals falha.
+            -5, 12, 7);
 
-        FriendlyByteBuf buf = new FriendlyByteBuf(Unpooled.buffer());
-        SheetModel.STREAM_CODEC.encode(buf, original);
-        SheetModel decoded = SheetModel.STREAM_CODEC.decode(buf);
+    FriendlyByteBuf buf = new FriendlyByteBuf(Unpooled.buffer());
+    SheetModel.STREAM_CODEC.encode(buf, original);
+    SheetModel decoded = SheetModel.STREAM_CODEC.decode(buf);
 
-        assertEquals(original, decoded);
-    }
+    assertEquals(original, decoded);
+}
+
+/**
+ * Os tres limites de valor tem de atravessar a rede na posicao certa, e um
+ * save gravado antes deles tem de abrir no padrao.
+ *
+ * <p>Existe separado do {@link #roundTrip()} porque o que ele prova nao e a
+ * simetria do par encoder/decoder, e sim a <b>compatibilidade de um lado so</b>:
+ * o NBT antigo nao tem os campos, entao o caminho exercitado e o
+ * {@code optionalFieldOf} com o padrao. Sem o padrao, toda ficha salva antes de
+ * 28/09/2026 perderia os limites e o Mestre veria a regra voltar a -30/30/30 sem
+ * ele ter mudado nada.
+ */
+@Test
+@DisplayName("Limites de valor sobrevivem a rede e o NBT antigo abre no padrao")
+void valueLimitsTravelAndLegacyNbtFallsBackToDefaults() {
+    SheetModel custom = SheetModel.defaults().withValueLimits(-5, 12, 7);
+
+    FriendlyByteBuf buf = new FriendlyByteBuf(Unpooled.buffer());
+    SheetModel.STREAM_CODEC.encode(buf, custom);
+    SheetModel streamed = SheetModel.STREAM_CODEC.decode(buf);
+    assertEquals(-5, streamed.attributeValueMin(), "o piso do atributo nao sobreviveu a rede");
+    assertEquals(12, streamed.attributeValueMax(), "o teto do atributo nao sobreviveu a rede");
+    assertEquals(7, streamed.periciaValueMax(), "o teto da pericia nao sobreviveu a rede");
+
+    // NBT sem os tres campos: e a ficha de um mundo que ja rodava antes da
+    // mudanca. O round-trip completo do modelo tambem tem de pasar, porque e o
+    // mesmo codec gravado que a tela do editor vai ler.
+    CompoundTag empty = new CompoundTag();
+    SheetModel parsed = SheetModel.CODEC.parse(NbtOps.INSTANCE, empty).getOrThrow();
+    assertEquals(SheetModel.DEFAULT_ATTRIBUTE_VALUE_MIN, parsed.attributeValueMin());
+    assertEquals(SheetModel.DEFAULT_ATTRIBUTE_VALUE_MAX, parsed.attributeValueMax());
+    assertEquals(SheetModel.DEFAULT_PERICIA_VALUE_MAX, parsed.periciaValueMax());
+
+    // E o inverso: um NBT com os campos tem de devolver exatamente eles.
+    Tag saved = SheetModel.CODEC.encodeStart(NbtOps.INSTANCE, custom).getOrThrow();
+    SheetModel reread = SheetModel.CODEC.parse(NbtOps.INSTANCE, saved).getOrThrow();
+    assertEquals(custom, reread, "os limites nao sobreviveram ao NBT");
+}
+
+/**
+ * O piso e o teto podem chegar invertidos de um NBT editado a mao ou de um
+ * payload forjado. Invertido nao pode significar "intervalo vazio", senao o clamp
+ * da ficha cortaria <b>todo</b> valor para o piso, inclusive os que estavam
+ * certos -- inclusive o proprio piso, que o Mestre veria saltar de 0 para 10.
+ */
+@Test
+@DisplayName("Teto abaixo do piso vira o proprio piso, e nao um intervalo vazio")
+void invertedLimitsCollapseToTheFloor() {
+    SheetModel inverted = SheetModel.defaults().withValueLimits(10, 5, 30);
+    assertEquals(10, inverted.attributeValueMin());
+    assertEquals(10, inverted.attributeValueMax(),
+            "max < min nao foi corrigido: o intervalo ficou vazio");
+
+    // E o efeito observavel: o intervalo continua existindo, entao o clamp
+    // leva ao piso em vez de estourar ou apagar o atributo. Com [10,10] o 7
+    // esta fora, e 10 e o unico lugar legitimo para ele parar.
+    String id = SheetModel.defaults().attributes().get(0).id();
+    SheetData sheet = SheetData.defaultSheet("Heroi").withField(id, "7");
+    assertEquals(10, inverted.align(sheet).attributeValue(id),
+            "o valor abaixo do piso nao foi cortado para o piso");
+
+    // E o piso em si sobrevive, que e o que o Mestre nota: se o intervalo
+    // invertido virasse "vazio", o atributo dele pularia de 10 para outro numero.
+    assertEquals(10, inverted.align(sheet.withField(id, "10")).attributeValue(id),
+            "o proprio piso nao sobreviveu ao intervalo invertido");
+
+    // O teto da pericia tem piso 0 fixo, entao um teto negativo vira 0 e nao
+    // "todos os valores negativos": o intervalo tem de continuar existindo.
+    SheetModel negativePericia = SheetModel.defaults().withValueLimits(-30, 30, -5);
+    assertEquals(0, negativePericia.periciaValueMax(),
+            "teto de pericia negativo nao foi cortado no piso 0");
+}
 
     /**
      * O round-trip acima passa com o modelo do RECORD inteiro. Este teste pega o
@@ -106,7 +185,10 @@ class SheetModelCodecTest {
                 List.of(new SheetModel.AttributeDef("a", "A", "A"),
                         new SheetModel.AttributeDef("A", "B", "B")),
                 List.of(new SheetModel.PericiaDef("pericia_1", "X", "a"),
-                        new SheetModel.PericiaDef("PERICIA_1", "x", "a")));
+                        new SheetModel.PericiaDef("PERICIA_1", "x", "a")),
+                SheetModel.DEFAULT_ATTRIBUTE_VALUE_MIN,
+                SheetModel.DEFAULT_ATTRIBUTE_VALUE_MAX,
+                SheetModel.DEFAULT_PERICIA_VALUE_MAX);
 
         assertTrue(tooMany.attributeCount() <= SheetModel.MAX_ATTRIBUTES,
                 "atributos acima do teto");
@@ -134,7 +216,10 @@ class SheetModelCodecTest {
                 List.of(new SheetModel.AttributeDef("a", "A", "A")),
                 List.of(new SheetModel.PericiaDef("", "X", "a"),
                         new SheetModel.PericiaDef("", "Y", "a"),
-                        new SheetModel.PericiaDef("", "Z", "a")));
+                        new SheetModel.PericiaDef("", "Z", "a")),
+                SheetModel.DEFAULT_ATTRIBUTE_VALUE_MIN,
+                SheetModel.DEFAULT_ATTRIBUTE_VALUE_MAX,
+                SheetModel.DEFAULT_PERICIA_VALUE_MAX);
 
         assertEquals(3, model.periciaCount(), "as pericias sem id colapsaram em uma so");
         assertEquals("pericia_1", model.pericias().get(0).id());
@@ -250,7 +335,8 @@ class SheetModelCodecTest {
                 model.hpLabel(), model.manaLabel(), model.manaEnabled(), model.levelLabel(),
                 model.xpLabel(), model.xp(),
                 List.of(model.attributes().get(0)),
-                List.of(model.pericias().get(0)));
+                List.of(model.pericias().get(0)),
+                model.attributeValueMin(), model.attributeValueMax(), model.periciaValueMax());
 
         assertEquals(atMinimum,
                 atMinimum.removeAttribute(atMinimum.attributes().get(0).id()),
@@ -275,14 +361,27 @@ class SheetModelCodecTest {
      * O id da pericia viaja em um dos seis campos de {@link SheetData#STREAM_CODEC}
      * (a lista conta como um campo so), entao o round-trip da ficha inteira e o
      * que garante que cliente e servidor leem a mesma coisa.
+     *
+     * <p><b>28/09/2026: os tres limites entram com valores NAO PADRAO</b> por
+     * causa do mesmo motivo do {@link #roundTrip()}: a ficha que o
+     * {@code defaultSheet} devolve tem -30/30/30, e com o padrao um
+     * {@code assertEquals(original, decoded)} passaria mesmo se os tres
+     * {@code VAR_INT} fossem lidos na posicao errada.
      */
     @Test
     @DisplayName("SheetData sobrevive a um round-trip pelo STREAM_CODEC")
     void sheetSurvivesStreamRoundTrip() {
         String periciaId = SheetModel.defaults().pericias().get(0).id();
-        SheetData original = SheetData.defaultSheet("Heroi")
+        SheetData base = SheetData.defaultSheet("Heroi")
                 .withField("level", "7")
                 .withPericiaValue(periciaId, 5);
+        // Os limites entram pelo construtor, e nao por um metodo de copia, porque
+        // o unico caminho que os GRAVA em producao e o SheetModel.align (o
+        // Mestre mudou a regra, oalign propaga para todas as fichas). Forjar
+        // direto no construtor e o que testa o codec, e nao um caminho que a
+        // tela usa.
+        SheetData original = new SheetData(base.identity(), base.vitals(), base.progress(),
+                base.attributes(), base.skills(), base.pericias(), -5, 12, 7);
 
         FriendlyByteBuf buf = new FriendlyByteBuf(Unpooled.buffer());
         SheetData.STREAM_CODEC.encode(buf, original);
@@ -292,7 +391,65 @@ class SheetModelCodecTest {
                 "o id da pericia nao sobreviveu ao round-trip");
         assertEquals(5, decoded.periciaById(periciaId).value());
         assertEquals(7, decoded.getNumeric("level"));
+        assertEquals(-5, decoded.attributeValueMin(), "o piso do atributo nao sobreviveu a rede");
+        assertEquals(12, decoded.attributeValueMax(), "o teto do atributo nao sobreviveu a rede");
+        assertEquals(7, decoded.periciaValueMax(), "o teto da pericia nao sobreviveu a rede");
         assertEquals(original, decoded);
+    }
+
+    /**
+     * <b>28/09/2026: o clamp autoritativo, que e o ponto inteiro da mudanca.</b>
+     * Baixar o limite no editor tem de <b>cortar o valor ja salvo</b>, e nao so
+     * travar a seta da tela: quem decide e o construtor compacto da
+     * {@link SheetData}, entao o corte acontece no {@code align} e tambem na
+     * leitura do NBT, sem ninguem precisar lembrar de limitar.
+     *
+     * <p><b>Por que testar pelo align e nao por um {@code withField}:</b> o
+     * {@code withField} ja entregaria o numero grande intacto (ele so converte o
+     * texto), e o corte no align e justamente o caminho que roda quando o Mestre
+     * aperta Salvar. O {@code withField} com valor grande logo depois de
+     * exists para provar que o valor ate chega na ficha, e so o align corta.
+     */
+    @Test
+    @DisplayName("Baixar o limite no editor corta o valor ja salvo, no piso e no teto")
+    void alignClampsSavedValuesToTheNewLimits() {
+        SheetModel model = SheetModel.defaults();
+        String attributeId = model.attributes().get(0).id();
+        String periciaId = model.pericias().get(0).id();
+
+        SheetData generous = SheetData.defaultSheet("Heroi")
+                .withField(attributeId, "28")
+                .withPericiaValue(periciaId, 25);
+
+        // A regra nova e mais apertada dos dois lados.
+        SheetModel tight = model.withValueLimits(-5, 12, 7);
+        SheetData clamped = tight.align(generous);
+
+        assertEquals(12, clamped.attributeValue(attributeId),
+                "o atributo acima do teto novo nao foi cortado");
+        assertEquals(7, clamped.periciaById(periciaId).value(),
+                "a pericia acima do teto novo nao foi cortada");
+
+        // E o piso, que e a outra metade do intervalo: um atributo abaixo do novo
+        // piso sobe, e um valor dentro do intervalo nao se mexe.
+        SheetData negative = SheetData.defaultSheet("Heroi")
+                .withField(attributeId, "-28")
+                .withField(model.attributes().get(1).id(), "3");
+        SheetData floored = tight.align(negative);
+        assertEquals(-5, floored.attributeValue(attributeId),
+                "o atributo abaixo do piso novo nao foi cortado");
+        assertEquals(3, floored.attributeValue(model.attributes().get(1).id()),
+                "um valor dentro do intervalo foi cortado");
+
+        // A pericia tem piso 0 fixo, entao o teto novo nunca a torna negativa.
+        assertTrue(tight.periciaValueMax() >= 0, "o teto da pericia ficou negativo");
+
+        // Voltar a um limite largo NAO ressuscita o valor cortado: o corte ja
+        // foi aplicado na ficha. E o esperado -- o Mestre leu o numero, e um
+        // teto que sobe depois nao pode adivinhar o que o jogador pretendia.
+        SheetData reopened = model.withValueLimits(-30, 30, 30).align(clamped);
+        assertEquals(12, reopened.attributeValue(attributeId),
+                "o valor cortado voltou sozinho quando o limite subiu");
     }
 
     /**
@@ -418,7 +575,10 @@ class SheetModelCodecTest {
                         new SheetModel.PericiaDef("pericia_2", "Y", "a"),
                         new SheetModel.PericiaDef("", "Z", "a"),
                         new SheetModel.PericiaDef("", "W", "a"),
-                        new SheetModel.PericiaDef("", "V", "a")));
+                        new SheetModel.PericiaDef("", "V", "a")),
+                SheetModel.DEFAULT_ATTRIBUTE_VALUE_MIN,
+                SheetModel.DEFAULT_ATTRIBUTE_VALUE_MAX,
+                SheetModel.DEFAULT_PERICIA_VALUE_MAX);
 
         assertEquals(5, model.periciaCount(), "alguma pericia sem id foi descartada");
         assertEquals(List.of("pericia_1", "pericia_2", "pericia_3", "pericia_4", "pericia_5"),
@@ -440,7 +600,8 @@ class SheetModelCodecTest {
                         new SheetData.Pericia("pericia_2", "Y", 2, "a"),
                         new SheetData.Pericia("", "Z", 3, "a"),
                         new SheetData.Pericia("", "W", 4, "a"),
-                        new SheetData.Pericia("", "V", 5, "a")));
+                        new SheetData.Pericia("", "V", 5, "a")),
+                base.attributeValueMin(), base.attributeValueMax(), base.periciaValueMax());
 
         assertEquals(5, sheet.pericias().size(), "a ficha perdeu uma pericia sem id");
         assertEquals("pericia_3", sheet.pericias().get(2).id());
@@ -469,7 +630,8 @@ class SheetModelCodecTest {
         SheetData sheet = new SheetData(base.identity(), base.vitals(), base.progress(),
                 base.attributes(), base.skills(),
                 List.of(new SheetData.Pericia("pericia_99", nameInModel, 5,
-                        model.attributes().get(0).id())));
+                        model.attributes().get(0).id())),
+                base.attributeValueMin(), base.attributeValueMax(), base.periciaValueMax());
 
         assertTrue(sheet.hasPericiaIds(), "a ficha tem id: e por isso que o nome nao pode casar");
         // A prova de que o nome casaria: por isso o fallback por nome seria um bug
@@ -488,14 +650,21 @@ class SheetModelCodecTest {
 
     /**
      * <b>Renomear duas vezes seguidas.</b> O primeiro rename ja e coberto acima;
-     * este pega o segundo, que e onde a recusa de nome repetido pode atrapalhar:
-     * renomear "Nome novo" para outro nome que ja existe tem de devolver o modelo
-     * intacto, e renomear de novo para um nome livre tem de preservar o id
-     * <b>no segundo passo tambem</b>.
+     * este pega o segundo, que e onde a troca de nome atrapalha: renomear "Nome
+     * novo" para outro nome precisa preservar o id <b>no segundo passo
+     * tambem</b>.
+     *
+     * <p><b>28/09/2026: o nome repetido entra (decisao do Mestre).</b> Antes este
+     * teste travava a recusa - o modelo devolvia a ficha intacta, e a tela
+     * devolvia o texto antigo na caixa, de modo que o Mestre nem conseguia
+     * digitar o nome. Agora o rename para o nome de outra pericia e aceito, as
+     * duas linhas ficam com o mesmo texto e ids diferentes (a identidade e o id),
+     * e quem impede de gravar duas linhas iguais e a tela, com o Salvar desligado
+     * enquanto o nome repetido estiver na tela.
      */
     @Test
-    @DisplayName("Renomear duas vezes: o id atravessa as duas e o nome repetido e recusado")
-    void renamingTwiceKeepsIdAndRefusesRepeatedName() {
+    @DisplayName("Renomear duas vezes: o id atravessa as duas e o nome repetido entra")
+    void renamingTwiceKeepsIdAndAcceptsRepeatedName() {
         SheetModel model = SheetModel.defaults();
         SheetModel.PericiaDef def = model.pericias().get(0);
         String id = def.id();
@@ -510,14 +679,18 @@ class SheetModelCodecTest {
         assertEquals(5, second.align(sheet).periciaById(id).value(),
                 "o valor se perdeu no segundo rename");
 
-        // Nome que ja pertence a outra pericia: recusado, e o modelo volta intacto.
+        // Nome que ja pertence a outra pericia: entra, e as duas linhas ficam com
+        // o mesmo texto em ids diferentes.
         String takenId = model.pericias().get(1).id();
-        SheetModel refused = second.withPericiaText(id, takenName, def.attributeId());
-        assertEquals(second, refused, "o rename aceitou um nome que ja estava em uso");
-        assertEquals(takenId, refused.periciaByName(takenName).id(),
-                "o nome recusado passou a apontar para a pericia errada");
-        assertNotEquals(takenName, refused.periciaById(id).name(),
-                "a pericia renomeada tomou o nome de outra");
+        SheetModel third = second.withPericiaText(id, takenName, def.attributeId());
+        assertEquals(takenName, third.periciaById(id).name(),
+                "o rename nao aceitou o nome que ja estava em uso");
+        assertEquals(takenName, third.periciaById(takenId).name(),
+                "a pericia que ja tinha esse nome perdeu o texto");
+        assertNotEquals(takenId, third.periciaById(id).id(),
+                "o nome repetido casou as duas pericias em uma so");
+        assertEquals(5, third.align(sheet).periciaById(id).value(),
+                "o valor se perdeu quando o nome repetido entrou");
     }
 
     /**

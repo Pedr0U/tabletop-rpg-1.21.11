@@ -242,6 +242,16 @@ public class SheetEditorScreen extends Screen {
         y = labelField(y, "field_xp", staged.xpLabel(),
                 v -> staged = staged.withLabel("xp", v));
         y = xpModeField(y);
+        y = header(y, "value_limits");
+        y = limitField(y, "attribute_min", staged.attributeValueMin(), true,
+                v -> staged = staged.withValueLimits(v,
+                        staged.attributeValueMax(), staged.periciaValueMax()));
+        y = limitField(y, "attribute_max", staged.attributeValueMax(), false,
+                v -> staged = staged.withValueLimits(
+                        staged.attributeValueMin(), v, staged.periciaValueMax()));
+        y = limitField(y, "pericia_max", staged.periciaValueMax(), false,
+                v -> staged = staged.withValueLimits(
+                        staged.attributeValueMin(), staged.attributeValueMax(), v));
 
         y = header(y, "attributes");
         for (SheetModel.AttributeDef def : staged.attributes()) {
@@ -331,6 +341,82 @@ public class SheetEditorScreen extends Screen {
     }
 
     /**
+     * Uma linha de limite de valor: rotulo a esquerda, caixa numerica a direita.
+     *
+     * <p><b>O que entra em {@code staged} e so um numero completo.</b> Cada tecla
+     * dispara o {@code responder}, e um "-", um "3" ou uma string vazia sao
+     * estados intermediarios, nao limites: entrar com eles deixaria a regra do
+     * modelo com teto "-3" por um instante, e o {@code withValueLimits} ja
+     * corrige teto para piso nesse caso. Como nao ha nada a enviar enquanto a
+     * digitacao nao fecha (o save so acontece no botao), o que fica e o ultimo
+     * numero completo no {@code staged}, e a caixa mostra o texto digitado.
+     * Sem isso, digitar "30" para trocar "-30" por "30" passaria por "-3" e o
+     * modelo gravaria teto 0 no meio da digitacao.
+     *
+     * <p><b>{@code signed} so no piso do atributo.</b> E o unico dos tres que
+     * aceita negativo, e por um motivo de regra: o valor da pericia tem piso 0
+     * fixo (o bonus soma, e negativo ali viraria penalidade) e um teto de
+     * atributo negativo nao tem sentido util. O filtro e o mesmo
+     * {@code -?\d{0,9}} da ficha ({@code createFieldBox}), entao o sinal pode
+     * ser digitado em qualquer posicao e o numero fica longe do overflow.
+     *
+     * <p><b>O que acontece com um intervalo todo negativo, ja gravado:</b> o
+     * Mestre pode digitar piso -5 e teto 0, o que deixa a pericia e o atributo
+     * num intervalo que so aceita valores de -5 a 0. A caixa do teto mostra
+     * "0" e aceita nao menos que 0, entao ele nao consegue digitar "-5" la -- e
+     * nao precisa: o piso -5 ja faz o teto efetivo ser -5 pelo clamp do
+     * {@code SheetModel}, e o valor e o mesmo. Um NBT editado a mao com teto
+     * negativo ainda e lido sem erro, porque quem corrige e o construtor
+     * compacto, e nao o filtro da tela.
+     *
+     * <p><b>Sem {@code rebuildWidgets()}, de proposito:</b> as outras linhas
+     * guardam o texto pendente em {@code pendingNames} justamente para nao ter
+     * que remontar. Aqui nao ha texto a preservar -- a caixa e a fonte da
+     * verdade enquanto o campo esta em foco -- e remontar a cada tecla jogaria
+     * fora o foco e o cursor. O {@code staged} atualizado por tecla e o que o
+     * botao Salvar envia, entao a edicao ja vale sem remontar.
+     */
+    private int limitField(int y, String key, int current, boolean signed, Consumer<Integer> apply) {
+        captions.add(new Caption(y + 6, tr(key), COL_CAPTION));
+        EditBox box = new EditBox(this.font, ctrlX(), y, ctrlW(), ROW_H - 4, tr(key));
+        box.setFilter(s -> s.matches(signed ? "-?\\d{0,9}" : "\\d{0,9}"));
+        box.setMaxLength(10);
+        box.setValue(Integer.toString(current));
+        box.setResponder(value -> {
+            if (suppressNotify) {
+                return;
+            }
+            Integer parsed = parseCompleteNumber(value);
+            if (parsed != null) {
+                apply.accept(parsed);
+            }
+        });
+        addRenderableWidget(box);
+        slots.add(new Slot(box, y));
+        return y + ROW_H;
+    }
+
+    /**
+     * O texto da caixa como numero, ou {@code null} enquanto nao for um numero
+     * completo.
+     *
+     * <p>{@code null} cobre as tres formas incompletas: texto vazio (o Mestre
+     * apagou tudo), so o sinal ("-") e um numero que estourou o {@code int}. O
+     * filtro ja impede as outras, mas o guarda e o que impede o
+     * {@code NumberFormatException} de chegar ao {@code apply}.
+     */
+    private static Integer parseCompleteNumber(String value) {
+        if (value == null || value.isEmpty() || "-".equals(value)) {
+            return null;
+        }
+        try {
+            return Integer.valueOf(value);
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    /**
      * Uma linha por atributo: sigla editavel, nome editavel e o botao de tirar.
      *
      * <p><b>O id nao e editavel, de proposito.</b> O id e a identidade do
@@ -405,10 +491,14 @@ public class SheetEditorScreen extends Screen {
      * voltar a ser valido (decisao do Mestre em 27/09/2026). So espacos contam
      * como vazio porque o modelo faz {@code trim()}.
      *
-     * <p><b>Nome ja usado por outra pericia ainda volta para a caixa.</b> Esse
-     * caso nao pode ficar pendurado como o vazio: duas linhas com o mesmo nome
-     * pendente nao tem ordem de resolucao, e o modelo recusa por identidade. A
-     * caixa volta ao texto antigo e o modelo continua coerente com a tela.
+     * <p><b>Nome ja usado por outra pericia fica na caixa e no rascunho
+     * (28/09/2026).</b> Antes esse caso voltava para a caixa, e recusa no modelo
+     * e reversao na tela eram a mesma coisa: o Mestre nao conseguia nem digitar o
+     * nome. Agora o nome repetido entra em {@code staged} como o valido, a caixa
+     * mostra o que foi digitado e quem barra e o <b>Salvar</b>, desligado por
+     * {@link #hasDuplicateName()}, com o aviso de nome repetido no lugar do de
+     * "unsaved changes". O Descartar continua sendo a saida
+     * ({@link #canDiscard()}).
      *
      * <p><b>O {@code X} nao depende do nome.</b> Ele remove por
      * {@code periciaAt(pos)}, a posicao, e nao pelo nome: e por isso que continua
@@ -442,13 +532,6 @@ public class SheetEditorScreen extends Screen {
                 return;
             }
             SheetModel next = staged.withPericiaText(live.id(), value, live.attributeId());
-            if (next == staged) {
-                pendingNames.remove(pos);
-                suppressNotify = true;
-                name.setValue(live.name());
-                suppressNotify = false;
-                return;
-            }
             pendingNames.remove(pos);
             staged = next;
         });
@@ -625,16 +708,45 @@ public class SheetEditorScreen extends Screen {
     }
 
     /**
+     * Ha duas ou mais pericias com o mesmo nome na copia em edicao.
+     *
+     * <p><b>28/09/2026:</b> o modelo passou a aceitar o nome repetido (ver
+     * {@link SheetModel#withPericiaText}), porque recusar la fazia a caixa
+     * devolver sozinha o texto antigo e o Mestre nao conseguia digitar. O que
+     * segura a duplicata e a tela: o Salvar fica desligado e o aviso de nome
+     * repetido entra na fila do {@code render()}, entre o de nome vazio e o de
+     * "unsaved changes".
+     *
+     * <p>A comparacao ignora caixa porque o nome e o que o Mestre le na linha, e
+     * porque e assim que o resto do projeto compara nome de pericia (ver
+     * {@link SheetModel#periciaByName(String)}).
+     */
+    private boolean hasDuplicateName() {
+        List<SheetModel.PericiaDef> pericias = staged.pericias();
+        for (int i = 0; i < pericias.size(); i++) {
+            for (int j = i + 1; j < pericias.size(); j++) {
+                if (pericias.get(i).name().equalsIgnoreCase(pericias.get(j).name())) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
      * Se ha o que descartar: a copia editada, ou um nome pendente que o modelo
-     * recusou.
+     * recusou, ou um nome repetido que o Salvar nao aceita.
      *
      * <p>O nome pendente conta porque ele e estado da tela, e o Descartar e o
      * caminho de volta ao salvo: sem ele, apagar um nome e nao mexer em mais nada
      * deixaria o Descartar desligado (a copia esta igual a {@code baseline}) e o
-     * Salvar tambem, e o Mestre nao teria como voltar ao texto valido.
+     * Salvar tambem, e o Mestre nao teria como voltar ao texto valido. O nome
+     * repetido entra pelo mesmo motivo: com ele o Salvar esta desligado, e sem
+     * o Descartar ligado o Mestre ficaria preso num rascunho que so ele mesmo
+     * desfez.
      */
     private boolean canDiscard() {
-        return isDirty() || hasPendingName();
+        return isDirty() || hasPendingName() || hasDuplicateName();
     }
 
     /**
@@ -759,15 +871,16 @@ public class SheetEditorScreen extends Screen {
     @Override
     public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
         // O que liga e desliga o Salvar e o Descartar e o texto digitado depois do
-        // ultimo save; o Salvar ainda exige que nenhuma pericia esteja sem nome,
-        // porque o modelo recusa o nome vazio e nao haveria o que gravar. O que
-        // liga e desliga o Restaurar e a copia em edicao contra o padrao do
-        // modelo. Digitar numa caixa nao passa por init(), por isso o estado e lido
-        // por frame, no mesmo caminho que o aviso de "unsaved" logo abaixo. Fica
-        // antes do super.render() para o botao sair ja desenhado no estado certo,
-        // sem o atraso de um frame do padraao do StatusScreen.
+        // ultimo save; o Salvar ainda exige que nenhuma pericia esteja sem nome
+        // nem com o nome repetido de outra, porque o nome vazio nao entra no
+        // modelo e o repetido deixaria duas linhas iguais no molde. O que liga e
+        // desliga o Restaurar e a copia em edicao contra o padrao do modelo. Digitar
+        // numa caixa nao passa por init(), por isso o estado e lido por frame, no
+        // mesmo caminho que o aviso de "unsaved" logo abaixo. Fica antes do
+        // super.render() para o botao sair ja desenhado no estado certo, sem o
+        // atraso de um frame do padrao do StatusScreen.
         if (saveButton != null) {
-            saveButton.active = isDirty() && !hasPendingName();
+            saveButton.active = isDirty() && !hasPendingName() && !hasDuplicateName();
         }
         if (discardButton != null) {
             discardButton.active = canDiscard();
@@ -802,6 +915,13 @@ public class SheetEditorScreen extends Screen {
             // Mesmo lugar do aviso de "unsaved", e com prioridade: e ele que diz
             // por que o Salvar esta desligado, e nessa faixa so cabe uma linha.
             Component warn = tr("pericia_no_name");
+            graphics.drawString(this.font, warn, this.width - COL_PADDING - this.font.width(warn),
+                    TITLE_Y, COL_HEADER, false);
+        } else if (hasDuplicateName()) {
+            // Abaixo do de nome vazio e acima do de "unsaved": o vazio e o mais
+            // grave porque impede a pericia de existir, e o repetido so impede de
+            // gravar o rascunho, que ainda e descartavel.
+            Component warn = tr("pericia_duplicate_name");
             graphics.drawString(this.font, warn, this.width - COL_PADDING - this.font.width(warn),
                     TITLE_Y, COL_HEADER, false);
         } else if (isDirty()) {

@@ -103,13 +103,17 @@ public class RpgMenuScreen extends Screen {
         int y = startY + 60;
 
         // Botoes por papel (feedback do usuario):
-        //  - Jogador: Status, Skills, Rolls, Settings (+ End Turn no turno dele).
+        //  - Jogador: Player Sheet, Skills, Rolls, Settings (+ End Turn no turno
+        //    dele). 29/09/2026: "Status" virou "Player Sheet", porque o jogador
+        //    le o botao como o estado do personagem e nao como o nome da tela
+        //    (que e a ficha). O nome da TELA (StatusScreen) e o titulo "Sheet: .."
+        //    continuam como estavam: o renome e so do botao.
         //  - Mestre: Players, Rolls, Settings. O mestre NAO tem ficha propria
         //    (sem "My Sheet") e o jogador NAO tem "Players".
         if (isMaster) {
             y = addButton("Players", x, y, () -> openPlayers());
         } else {
-            y = addButton("Status", x, y, () -> openStatus());
+            y = addButton("Player Sheet", x, y, () -> openStatus());
             y = addButton("Skills", x, y, () -> openSkills());
         }
 
