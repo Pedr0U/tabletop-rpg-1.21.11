@@ -5,6 +5,7 @@
 	"client": [
 		"LocalPlayerMixin",
 		"ClientPlayerPoseMixin",
+		"ClientInputMixin",
 		"CameraMixin",
 		"MinecraftMixin",
 		"GameRendererMixin",

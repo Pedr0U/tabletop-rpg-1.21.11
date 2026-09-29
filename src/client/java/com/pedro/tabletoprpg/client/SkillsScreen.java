@@ -675,10 +675,15 @@ public class SkillsScreen extends CharacterSheetScreen {
     // ------------------------------------------------------------------
 
     /**
-     * Rola a lista de skills, ou o texto do popup quando ele esta aberto.
+     * Rola a area de rolagem que esta debaixo do cursor: a descricao do popup
+     * ou a lista de skills.
      *
-     * <p>Ordem importa: com o popup aberto, a roda rola a descricao (que e o
-     * que o usuario esta lendo) e a lista so quando o popup ja chegou ao fim.
+     * <p>Cada area rola SO com o cursor em cima dela, e a roda nunca passa de
+     * uma para a outra. Feedback do usuario em 28/09/2026: com o cursor sobre
+     * o popup, a lista descia junto assim que a descricao chegava ao fim (a
+     * barra de cima mexia com o cursor no popup, embaixo dele) e a de baixo
+     * parava de subir. No gap entre as duas areas, no rodape e no vazio, a roda
+     * nao rola nada.
      */
     @Override
     public boolean mouseScrolled(double mouseX, double mouseY, double deltaX, double deltaY) {
@@ -686,7 +691,7 @@ public class SkillsScreen extends CharacterSheetScreen {
         // rolar as linhas que nao cabem na altura dele. Esta tela consome a
         // roda e nunca repassava, entao um texto maior que o campo ficava
         // travado sem rolagem. Os botoes devolvem false, e o popup nao e
-        // widget, entao lista e popup continuam exatamente como antes.
+        // widget, entao o que sobrar da roda e nosso.
         if (super.mouseScrolled(mouseX, mouseY, deltaX, deltaY)) {
             return true;
         }
@@ -698,18 +703,54 @@ public class SkillsScreen extends CharacterSheetScreen {
         // estava invertido (o usuario validou o popup arrastando a barra, que
         // funciona por construcao, e nao pela roda).
         int step = deltaY < 0 ? 1 : -1;
-        if (popupLines() != null) {
-            int maxScroll = Math.max(0, popupLines().size() - popupVisibleLines());
-            if (popupScroll < maxScroll) {
-                popupScroll = Math.max(0, Math.min(maxScroll, popupScroll + step));
+        int maxPopup = popupMaxScroll();
+        if (maxPopup > 0 && pointerOverPopup(mouseX, mouseY)) {
+            popupScroll = Math.max(0, Math.min(maxPopup, popupScroll + step));
+            return true;
+        }
+        if (pointerOverSkillRows(mouseX, mouseY)) {
+            int maxList = Math.max(0, sheet.skills().size() - skillRows);
+            if (maxList > 0) {
+                skillScroll = Math.max(0, Math.min(maxList, skillScroll + step));
                 return true;
             }
         }
-        if (sheet != null && skillRows > 0 && sheet.skills().size() > skillRows) {
-            int maxScroll = Math.max(0, sheet.skills().size() - skillRows);
-            skillScroll = Math.max(0, Math.min(maxScroll, skillScroll + step));
+        return false;
+    }
+
+    /**
+     * O cursor esta sobre a caixa do popup aberto?
+     *
+     * <p>Repete a conta que o {@link #renderPopup} faz para desenhar a caixa
+     * (o mesmo {@code boxH} a partir do mesmo {@link #popupLines()}), para a
+     * roda agir exatamente na regiao que o jogador ve. Sem popup -- sem skill
+     * selecionada ou descricao vazia -- e {@code false}.
+     */
+    private boolean pointerOverPopup(double mouseX, double mouseY) {
+        List<FormattedCharSequence> lines = popupLines();
+        if (lines == null) {
+            return false;
         }
-        return true;
+        int boxH = Math.min(POPUP_H, lines.size() * POPUP_LINE_H + 10);
+        return mouseX >= popupX && mouseX < popupX + popupW
+                && mouseY >= popupY && mouseY < popupY + boxH;
+    }
+
+    /**
+     * O cursor esta sobre as linhas da lista de skills?
+     *
+     * <p>A altura e a mesma que posiciona e mede a barra da lista
+     * ({@code listBarY} + {@code listBarH}, o par montado em
+     * {@code buildPanel}) e a largura e a do painel inteiro, entao a faixa cobre
+     * a lista e a sua barra. Devolve {@code false} sem ficha ou sem linhas, para
+     * quem chama poder ler {@code sheet} sem repetir a checagem.
+     */
+    private boolean pointerOverSkillRows(double mouseX, double mouseY) {
+        if (sheet == null || skillRows <= 0) {
+            return false;
+        }
+        return mouseX >= panelX && mouseX < panelX + panelW
+                && mouseY >= listBarY && mouseY < listBarY + listBarH;
     }
 
     @Override
@@ -958,10 +999,21 @@ public class SkillsScreen extends CharacterSheetScreen {
         popupScroll = Math.max(0, Math.min(maxScroll, (int) Math.round(relativo * (double) maxScroll / desloca)));
     }
 
-    /** O mouse esta sobre o trilho da barra? */
+    /**
+     * O mouse esta na margem direita do popup, onde mora a barra?
+     *
+     * <p>Feedback do usuario em 28/09/2026 ("mesmo clicando e arrastando nao
+     * sobe"): o alvo era so o trilho, 6px de largura com 2px de folga de cada
+     * lado, entao um clique 2px fora caia no vazio e a barra nao dava nenhuma
+     * resposta. Agora a faixa e a margem direita <b>inteira</b> do popup, de
+     * {@code BAR_W + 2 * BAR_PAD} = 12px, que e o mesmo respiro que o nome da
+     * skill ja deixa para a barra da lista ({@link #onListScrollbar}). Na
+     * vertical continua valendo a altura do trilho, ou seja, a altura do popup
+     * sem a moldura. O polegar e desenhado do mesmo jeito, com 6px.
+     */
     private boolean onScrollbar(double mouseX, double mouseY) {
         return popupMaxScroll() > 0
-                && mouseX >= barTrackX - 2 && mouseX <= barTrackX + BAR_W + 2
+                && mouseX >= barTrackX - BAR_PAD && mouseX < barTrackX + BAR_W + BAR_PAD
                 && mouseY >= barTrackY && mouseY <= barTrackY + barTrackH;
     }
 
@@ -969,18 +1021,23 @@ public class SkillsScreen extends CharacterSheetScreen {
     public boolean mouseClicked(MouseButtonEvent event, boolean doubleClick) {
         // Botao esquerdo so: o direito esta reservado ao X de remover skill.
         if (event.button() == 0) {
-            // A barra da lista e testada ANTES da do popup porque as duas
-            // faixas podem se cruzar na tela: a do popup fica logo abaixo da
-            // lista, entao sem esta ordem um clique perto da juncao seria
-            // capturado pela barra errada.
-            if (onListScrollbar(event.x(), event.y())) {
-                draggingListBar = true;
-                setSkillScrollFromMouse(event.y());
-                return true;
-            }
+            // A barra do popup e testada ANTES da da lista porque o popup e
+            // desenhado depois dela (renderPopup roda depois de
+            // renderListScrollbar), entao quem esta por cima na tela e quem
+            // ganha o clique.
+            //
+            // Na pratica a troca muda quase nada: as faixas de Y sao disjuntas,
+            // porque o popup comeca 16px abaixo do fim da lista (o "+ 16" do
+            // popupY em buildPanel). As faixas so se cruzam no eixo X, e nesse
+            // caso o popup fica com o clique em vez da lista.
             if (onScrollbar(event.x(), event.y())) {
                 draggingScrollbar = true;
                 setPopupScrollFromMouse(event.y());
+                return true;
+            }
+            if (onListScrollbar(event.x(), event.y())) {
+                draggingListBar = true;
+                setSkillScrollFromMouse(event.y());
                 return true;
             }
         }

@@ -1,6 +1,7 @@
 package com.pedro.tabletoprpg.client.mixin;
 
 import com.pedro.tabletoprpg.client.SpectatorCameraController;
+import com.pedro.tabletoprpg.client.TabletopRpgClient;
 import net.minecraft.client.renderer.GameRenderer;
 import net.minecraft.world.entity.Entity;
 import org.joml.Matrix4f;
@@ -21,6 +22,16 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
  * veria a própria mão flutuando na visão do alvo espectado (ou na própria
  * visão congelada).
  *
+ * <p><b>1b. Mão/arma escondida também com o jogador LOCAL CAÍDO</b> (0 HP na
+ * ficha, deitado mas vivo). Aqui a câmera de espectador está desligada, ou
+ * seja {@code isActive()} é falso e a condição acima não disparava — e a mão
+ * em 1ª pessoa do vanilla continuava sendo desenhada sobre um corpo deitado
+ * na pose {@code SWIMMING} forçada pelo {@code ClientPlayerPoseMixin}:
+ * symptomatizado pelo usuário como "a mão do personagem sai para fora da tela
+ * ao virar com o mouse". Não há braço para desenhar nessa pose, então a mão
+ * é suprimida. {@code TabletopRpgClient.downed} é justamente o estado do
+ * jogador LOCAL, que é o dono desta visão em 1ª pessoa.
+ *
  * <p><b>2. Filtros de visão dos mobs removidos</b> ao espectar. O vanilla
  * aplica post-effects de visão ("creeper", "spider", "invert" do EnderMan)
  * via {@code GameRenderer.checkEntityPostEffect} quando a entidade da câmera
@@ -40,7 +51,7 @@ public abstract class GameRendererMixin {
         if (notFirstPerson) {
             return; // terceira pessoa: o vanilla não renderiza a mão aqui
         }
-        if (SpectatorCameraController.isActive()) {
+        if (SpectatorCameraController.isActive() || TabletopRpgClient.downed) {
             ci.cancel();
         }
     }
