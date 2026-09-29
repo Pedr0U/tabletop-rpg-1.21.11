@@ -1256,3 +1256,117 @@ sobreviveu ao reinicio. O defeito pre-existente do PlayerSheetPersistenceMixin
 (carga antes do SERVER_STARTED) NAO reproduziu nesse cenario. Segue documentado
 como risco dependente de timing, mas com evidencia de que nao se manifesta no
 fluxo normal de singleplayer.
+
+## 2026-09-28 - Camera livre (input, nao aiStep), mao do caido e scroll do popup
+
+Rodada de correcao de 3 bugs reportados pelo usuario. Relatorio:
+`agent/reports/2026-09-28_camera-livre-mao-caido-scroll-popup.md`. **Sem commit** (decisao
+do usuario: commit so quando ele pedir). Validado por `build --no-daemon` (22s,
+`scanEncoding` 0 falhas) e `runClient` ate o menu; **nada validado em jogo**.
+
+### Camera livre: congelamento era o cancelamento de `aiStep` (FATO verificado)
+
+- **FACT:** em 1.21.11 e o `LivingEntity.aiStep()` que chama **`travel()`** (movimento,
+  gravidade, colisao) **e** `calculateEntityAnimation()` (animacao das pernas). O
+  `LocalPlayerMixin` cancelava `aiStep()` quando `isFreeCameraActive()`, o que tirava a
+  gravidade (personagem congelado no ar apos pular) e deixava o `walkAnimation` preso no
+  ultimo valor (pose de corrida parada).
+- **FACT:** `walkAnimation` **congela** com o `aiStep` cancelado (nao acelera). Com o
+  cancelamento, os unicos chiamers de `calculateEntityAnimation` no jogo sao
+  `LivingEntity.aiStep()` e `RemotePlayer.tick()`; nao existe `stop()` em lugar nenhum do
+  mod. Consequencia: ao sair do congelamento a animacao retoma de um `position` obsoleto.
+- **Decisao do usuario (28/09/2026):** na camera livre o **corpo fica parado, mas assenta
+  no chao**, e a animacao volta ao idle. O WASD continua movendo so a camera.
+- **Solucao:** `ClientInputMixin` (novo, so cliente) zera o movimento **no input**, sem
+  cancelar nada; `aiStep()` volta a rodar inteiro (gravidade, colisao e animacao vanilla).
+  O `LocalPlayerMixin` agora cancela so por `locked` e `downed`.
+- **FACT de API:** `net.minecraft.client.player.ClientInput` tem `public Input keyPresses`,
+  `protected Vec2 moveVector` e `public void tick()` **VAZIO**; `KeyboardInput` e que
+  sobrescreve `tick()`. `LocalPlayer.input` e **sempre** um `KeyboardInput` (criado no
+  `ClientPacketListener`). Portanto o `@Inject` tem que ser em **`KeyboardInput.tick()`** -
+  injetar no `ClientInput.tick` seria codigo morto (a chamada e `invokevirtual`).
+- **FACT de API:** `net.minecraft.world.entity.player.Input` e um **record imutavel** com 7
+  campos booleanos na ordem `(forward, backward, left, right, jump, shift, sprint)` e
+  acessores `forward()`...`sprint()`. **Nao existe setter nem `jump(boolean)`.** Para
+  zerar pulo/agachar preservando o resto, tem que **reconstruir o record** - o mesmo
+  truque que o proprio vanilla faz em `ClientInput.makeJump()`. O record esta no jar
+  **common**, nao no `minecraft-clientonly`.
+- **PADRAO DE MIXIN UTIL (ainda NAO validado em jogo):** para alcancar membro da classe-pai
+  (`ClientInput.moveVector`, `ClientInput.keyPresses`) a partir de um mixin de
+  `KeyboardInput`, o mixin **estende a classe-pai direta do alvo**
+  (`class XMixin extends ClientInput`) e usa o acesso normal do Java. O `@Shadow` de campo
+  herdado **estoura** `InvalidMixinException: @Shadow field ... was not located in the
+  target class`, porque o Mixin procura o alvo do shadow so nos campos do proprio alvo.
+- **ARMADILHA DE VALIDACAO:** `KeyboardInput` so e carregada ao **entrar num mundo**. Um
+  `runClient` que so chega ao menu ("Sound engine started", 0 crash-reports) **nao prova**
+  que esse mixin aplica. A prova vem de entrar num mundo.
+- **Efeito colateral assumido:** com a camera livre ligada, **pular e agachar deixam de
+  responder** (o corpo fica realmente parado); ataque, uso de item e corrida continuam.
+
+### Mao do caido: era a mao em 1a pessoa, nao o corpo (FATO verificado)
+
+- **FACT:** quando a camera de espectador esta **desligada** (`isActive()` falso), nenhum
+  dos mixins de alinhamento age, e o `EntityTurnMixin`/`GameRendererMixin` tambem nao age
+  (ambos sao condicionados a `isActive()`). O corpo do caido continua girando normal com o
+  mouse (vanilla), entao **nao ha desalinhamento** nesse caminho: o que aparece e a mao em
+  **primeira pessoa** do vanilla, num jogador deitado na pose `SWIMMING` forcada por
+  `ClientPlayerPoseMixin`.
+- **FATO (reforca decisao de 26/09/2026):** a condicao `!spectator` do
+  `DownedBodyAlignMixin` esta **correta** e nao deve ser removida. O alinhamento so e
+  necessario quando a camera de espectador congela o yaw do corpo.
+- **Solucao:** `GameRendererMixin.renderItemInHand` passou a cancelar tambem por
+  `TabletopRpgClient.downed` - o mesmo mecanismo ja usado em 26/09 para esconder a mao ao
+  espectar a si mesmo. 1 linha.
+- **Pendente:** a instrumentacao `DIAG_TEMP` (`[DownAlign]`, log a cada 10 renders) foi
+  removida de `DownedBodyAlignMixin`, `CinematicCameraRig` e `CameraMixin`, conforme o
+  plano da rodada de 26/09 que nunca usou o log. As hipoteses (a), (b) e (c) que ela media
+  nao chegaram a ser testadas e seguem **nao verificadas**.
+
+### Scroll do popup de skills: o fall-through era a causa (FATO verificado)
+
+- **FACT:** nao existe `AbstractScrollArea` no mod; as duas barras (lista e popup) sao
+  desenhadas a mao em `SkillsScreen`. A barra da **debaixo** e a do **popup** de descricao
+  (confirmado com o usuario em 28/09/2026). A unica barra vanilla da tela e a do campo de
+  descricao no rodape (`MultiLineEditBox`), invisivel enquanto o texto digitado couber.
+- **CAUSA do sintoma "a de cima desce junto":** `mouseScrolled` rolava o popup e, quando o
+  popup ja tinha chegado ao fim (`popupScroll < maxScroll` falso), **cai no bloco da lista**
+  e rola a lista com a MESMA roda. Era a ordem arbitrada e descrita no Javadoc do metodo.
+- **Correcao:** a roda passa a rolar **so a regiao sob o cursor** (`pointerOverPopup` /
+  `pointerOverSkillRows`), sem passar para a outra; e a barra do popup aceita o arrasto na
+  **margem direita de 12 px** do popup (`BAR_W 6 + 2*BAR_PAD 3`), que antes so aceitava o
+  trilho de 6 px mais 2 px de cada lado - um clique 2 px fora nao pegava nada e nao dava
+  nenhuma resposta, o que o usuario leu como "arrastando nao sobe".
+- **FACT de layout:** neste arquivo `BAR_SLOT` vale **32**, e **nao** 12: a faixa util de
+  12 px do respiro e `BAR_W + 2*BAR_PAD`. `popupY = y + skillRows*rowH + 16`, entao as
+  faixas de Y de lista e popup sao disjuntas na pratica; so o X cruza (7 px). A ordem de
+  teste no `mouseClicked` foi invertida (popup primeiro) porque ele e desenhado depois.
+- `mouseScrolled` passou a retornar `false` quando nao rolou nada (antes `true` fixo):
+  afirmar que o evento foi tratado sem tratamento e contrato errado; a tela e modal, entao
+  nao ha consumidor acima dela.
+
+### CORRECAO de 28/09/2026: a aplicacao do `ClientInputMixin` JA ESTA VALIDADA
+
+O item "ARMADILHA DE VALIDACAO" acima falava em hipotese; e o proprio usuario ja tinha
+resolvido, sem eu ter pedido. `run/logs/latest.log` vai ate 21:14 (o build novo foi feito
+as 20:21 e o `runClient` subiu as 20:22): o mundo `New World` foi carregado e jogado por
+~50 min, com 0 crash-reports e nenhum `InvalidMixin`/`InvalidInjection`/`NoSuchMethodError`.
+**FATO: entrar num mundo e o que carrega `KeyboardInput`, e o `ClientInputMixin` rodou sem
+falhar.** A aposta do padrao "mixin estende a classe-pai do alvo" esta confirmada em
+runtime.
+
+**TECNICA REUTILIZAVEL (FATO):** para descobrir **qual build o cliente do usuario rodou**,
+contar no `run/logs/latest.log` um marcador que existe **so** no build novo. Aqui o
+`[DownAlign]` foi removido no mesmo round, e o log tem **0** linhas dele -> o cliente
+obrigatoriamente rodou o build novo. Vale mais que perguntar ao usuario e que o timestamp
+do jar, e e a forma correta de fechar "será que ele testou isto mesmo?".
+
+### FATO verificado - 28/09/2026, rodada da camera livre VALIDADA EM JOGO
+
+O usuario testou em jogo e respondeu **"eu testei e esta tudo certo"**. As tres correcoes
+desta rodada (camera livre assentando no chao, mao do caido escondida na 1a pessoa, scroll
+do popup separado por regiao) estao **aprovadas pelo usuario**, e o efeito colateral de
+pulo/agachar deixar de responder na camera livre foi aceito como esta. A confirmacao e
+geral: ele nao detalhou qual dos quatro itens da lista de teste percorreu, entao o registro
+e "aprovado pelo usuario", e nao "cada item conferido individualmente". Relatorio:
+`agent/reports/2026-09-28_camera-livre-mao-caido-scroll-popup.md`; commit e tag desta
+rodada estao registrados em `GitHub/agent/VERSIONAMENTOS.md`.
