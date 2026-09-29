@@ -86,7 +86,7 @@ Raiz única `/rpg`, **sem aliases**. Todos registrados em
 | `/rpg turn finish` | **dono do turno ou o Mestre** | Encerra o turno. Quem não for o dono nem o Mestre recebe `§c[RPG] It is not your turn to finish!` | `MasterCommands.java: onRegister` (`MasterCommands.java: finishTurn`, incluindo a checagem de dono) |
 | `/rpg roll` | qualquer jogador | **Lista as perícias da ficha** com valor + atributo de cada uma (não rola nada). São as do modelo em uso: 18 no padrão, quantas o Mestre deixar | `MasterCommands.java: onRegister` (handler `listSkills: listSkills`) |
 | `/rpg roll <perícia>` | qualquer jogador | Rola `1d20 + valor_da_perícia + atributo`, mostrando a conta (`d20 (12) + 2 + 3 = 17`) | `MasterCommands.java: onRegister` (handlers `rollOrSkill: rollOrSkill`, `rollSkill: rollSkill`) |
-| `/rpg roll <fórmula>` | qualquer jogador | Rola uma fórmula de dados (`d20`, `2d6+3`, `2d6+d4+3`) | `MasterCommands.java: onRegister` (handler `rollFormula: rollFormula`, parser `rollDice: setHoverDistance`) |
+| `/rpg roll <fórmula>` | qualquer jogador | Rola uma fórmula de dados com o motor completo: `d20`, `2d6+3`, `2d6+d4+3`, keep/drop (`4d20kh2`, `4d6dl1`), explosiva (`d6!`, `d6!5`), incremento por dado (`4d6++2`), repetição (`6#4d6dl1`) e contagem (`10d6>>3`). **Perícia com cauda** (`/rpg roll Pericia 0-2`) também vale, e o sufixo se aplica só à cauda. O descartado aparece riscado. Ver [o parser de dados](#comandos-de-dados-e-ficha) | `MasterCommands.java: onRegister` (handler `rollFormula: rollFormula`); parser e aritmética em `DiceFormula.java`, formatação em `MasterCommands.java: joinParts`, `: appendTermBody`, `: repeatBody`, `: facesBody` |
 | `/rpg openroll [fórmula]` | só o Mestre | Rolagem **pública** (todos veem). Sem argumento, rola `d20` | `MasterCommands.java: onRegister` (handler `openRoll: openRoll`) |
 | `/rpg time <0-24000>` | só o Mestre | Define o horário do mundo em ticks (0 = amanhecer, 6000 = meio-dia, 18000 = meia-noite) | `MasterCommands.java: onRegister` (handler `setWorldTime: setWorldTime`) |
 | `/rpg hoverdistance <1-256>` | só o Mestre | Define, **em blocos**, a distância máxima do destaque de mob para os jogadores | `MasterCommands.java: onRegister` (handler `setHoverDistance: setWorldTime`) |
@@ -108,13 +108,37 @@ Raiz única `/rpg`, **sem aliases**. Todos registrados em
 - **`/rpg remove enemy`** sem seleção devolve
   `§c[RPG] No enemy selected. Right-click an enemy first, then run /rpg remove enemy.`
   (`MasterCommands.java: removeEnemy`).
-- **O parser de dados aceita somas e subtrações.** Um termo é um dado (`^(\d*)[dD](\d+)$`,
-  `MasterCommands.java: DICE_TERM`) ou um número inteiro positivo (`^\d+$`, `: MODIFIER_TERM`); a fórmula é
-  quebrada por `+` e por `-` (`: rollDice`, `split("(?=[+-])", -1)`). O sinal fica no início do
-  termo seguinte, então `d8-1` vale **dado menos 1**. O texto do resultado usa `" §f+ §b"`
-  ou `" §f- §b"` conforme o sinal, então aparece `d8 [5] - 1 = 4` (`appendRollTerm`, `: rollDice`).
-  **Sinal duplo é recusado** (`d8--1`, `d8+-1`).
-  Limites: 1 a 100 dados por termo e 1 a 1000 faces (`: rollDice`).
+ - **O parser de dados é o `DiceFormula.java` (29/09/2026), uma classe nova, sem Minecraft.** Antes disso a
+   rolagem vivia inteira em `MasterCommands.rollDice` e aceitava só termo simples (`4d20`) somado ou subtraído
+   (`d8-1`). O motor antigo continua em uso apenas para o texto legado; **a aritmética é a do `DiceFormula`**.
+   Um termo é `<contagem><d><faces>` seguido de sufixos opcionais; a fórmula é somada por `+` e `-`
+   (`MasterCommands.java: joinParts`). Sintaxe suportada:
+   - `4d20`, `d20`, `2d6+3`, `2d6+d4+3` — o básico, como antes;
+   - `d20kh1`, `4d6dl1`, `4d6kh3dh1` — **keep/drop** de mais ou menos. `kh`/`kl` mantêm os maiores/menores
+     `N` e o resto é descartado; `dh`/`dl` descartam os maiores/menores `N`;
+   - `d6!` — **explosiva** (a face maxima vira outra vez); `d6!5` — explosa com **condição**, só explode acima
+     de 5. A explosão **garantida** (`5d6!5`, onde a condição é a face maxima) é **recusada**;
+   - `4d6++2` / `4d6--2` — **um** `+2`/`-2` **por dado** (soma `8+8+8+8`). A cadeia explosiva conta como
+     **um** dado só, então `d6!++2` aplica `+2` uma vez no fim;
+   - `6#4d6dl1` — **repete** a fórmula 6 vezes; `>>3` conta os 3 maiores, `<<3` os 3 menores.
+ - **O descarte fica no lugar, não some da lista** (29/09/2026, pedido do jogador). Cada sufixo `kh/kl/dh/dl`
+   ordena **só os sobreviventes** e os devolve para os **mesmos slots** que ocupavam; o total e a soma só dos
+   que sobraram. É essa regra que faz `4d20kh2` → `[18,17,14,10]` e `4d6dl1` → `[1,2,3,4]`, e não
+   `[2,3,4,1]`. O comando mostra o descartado **vermelho e riscado** (`§c§m`…`§r§b`) e **não** escreve mais
+   `dropped N`; quando todos caem, todos aparecem marcados e o total é `0` (o antigo `[none]` **saiu**).
+ - **No `#`, o cabeçalho fica numa linha e cada repetição vira uma linha**, com o subtotal da volta:
+   `6#4d6dl1:` seguido de ` 4d6dl1 [1,2,3,4] = 9` e assim por diante. Limite de **20 repetições
+   exibidas**, o resto vira `...+N more` (`DiceFormula.DISPLAY_ROUNDS`), porque `100#4d6` inundaria o chat.
+   Cada linha recomeça em `§b` porque **a quebra de linha não limpa a formatação no chat do Minecraft**:
+   sem isso o `§a` do subtotal da volta anterior vazava e a volta seguinte saía verde.
+ - A **cor vive toda em `MasterCommands`** (`appendTermBody`, `repeatBody`, `facesBody`). O `DiceFormula` não
+   emite nenhum `§` e não importa Minecraft, e é por isso que dá para testar tudo com JUnit. O riscado é
+   **estilo**, não cor: precisa de `§r` antes do `§b` para desligar, senão o dado cortado fica azul **e
+   riscado**, que é o oposto do que o jogador precisa ver.
+ - **Limites** (`DiceFormula.java`): `MAX_DICE=100`, `MAX_SIDES=1000`, `MAX_REPEAT=100`,
+   `MAX_TOTAL_ROLLS=100000` (teto de segurança contra `100#100d1000`), `DISPLAY_LIMIT=20` faces mostradas
+   por dado, `DISPLAY_ROUNDS=20` repetições. O RNG é sorteado **depois** de validar a fórmula, para uma
+   rolagem inválida não consumir sorteio.
 - **`/rpg roll` sem argumento lista as perícias da ficha, que já não são uma lista fixa em código.**
   O que sai no chat é `sheet.pericias()` do jogador que executou (`MasterCommands.java: listSkills`), e o
   cabeçalho mostra a contagem por `sheet.pericias().size()` — então ele já acompanha o modelo. Num mundo sem

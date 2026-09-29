@@ -1614,3 +1614,35 @@ teste, nao bugs conhecidos.
 push. O commit fecha as **duas** rodadas acumuladas (a de 5 itens de 28/09 e esta), porque o
 protocolo e nao commitar em partes. O hash esta em `GitHub\agent\VERSIONAMENTOS.md` (fora do
 repo, de proposito: escrever o hash na memoria do projeto deixaria a arvore suja de novo).
+
+## 2026-09-29 - "a build travou" era o AGENTE, nao o Gradle (FATO verificado duas vezes)
+
+O usuariointerruptou de novo com "vc esta travado na build". **Investigacao por evidencia:**
+
+- `.\gradlew.bat compileJava --console=plain --offline -q` devolveu `exit=0`.
+- `build/classes/java/main/com/pedro/tabletoprpg/DiceFormula.class` existe, escrito as 15:10:04.
+
+Ou seja: **a build rodou em segundos e passou.** O gradlew ja tinha terminado quando
+o usuario percebeu o atraso. O que travou foi a **emissao do proximo turno** depois
+que a ferramenta retornou, que e o modo de falha ja descrito em `AGENTS.md`
+("turn latency and context discipline"), e nao I/O lento.
+
+**O que dispara isso, medido nesta rodada:** escrever um arquivo de ~830 linhas em
+uma unica chamada e depois fazer 6 ciclos seguidos de read/edit sobre o MESMO arquivo
+grande, lendo faixas de 80-130 linhas cada. A soma disso satura o contexto, e o
+custo de produzir o turno seguinte passa a ser o gargalo, nao a build.
+
+**Como nao repetir (regra pratica, nao e teoria):**
+- Apos qualquer comando gradlew, trate o resultado como TERMINAL. Nao releia, nao
+  reexecute, nao reconfirme. `-q` sem saida **e sucesso**; so investigue se
+  `exit` for diferente de zero.
+- Para arquivo novo grande: escrever, compilar, e entregar a verificacao a um
+  subagente. Nao voltar a ler o proprio arquivo em faixas para conferir.
+- Lote as edicoes: escreva todas as edicoes de um arquivo antes de compilar, em
+  vez de compilar entre elas.
+- Se a sensacao de travamento voltar: gravar o estado em disco e encerrar o turno
+  com UMA linha de status. Retomar no turno seguinte, com contexto pequeno, e
+  mais barato do que insistir no mesmo turno.
+
+Checkpointer em `agent/reports/2026-09-29_checkpoint-motor-formulas.md`.
+
