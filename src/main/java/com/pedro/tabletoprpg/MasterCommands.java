@@ -34,8 +34,6 @@ import java.util.List;
 import java.util.Random;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 public class MasterCommands {
 
@@ -418,19 +416,21 @@ public class MasterCommands {
         }
     }
 
-    private static final Pattern DICE_TERM = Pattern.compile("^(\\d*)[dD](\\d+)$");
-    private static final Pattern MODIFIER_TERM = Pattern.compile("^\\d+$");
-
     /**
      * Decide o que {@code /rpg roll <argumento>} quer dizer: o nome de uma
-     * <b>perícia</b> da ficha, ou uma fórmula de dados.
+     * <b>perícia</b> da ficha, uma perícia mais uma fórmula, ou só uma fórmula
+     * de dados.
      *
-     * <p><b>Por que as duas coisas no mesmo comando:</b> o jogador já tem
+     * <p><b>Por que as três coisas no mesmo comando:</b> o jogador já tem
      * "/rpg roll" na mão e a nova regra de perícias ({@code 1d20 + valor +
      * atributo}) é a rolagem que ele mais vai fazer. Se exigisse um comando
-     * novo, ele teria que aprender dois comandos. O nome da perícia só é
-     * reconhecido quando casa <b>exatamente</b> com o nome guardado; qualquer
-     * outra coisa cai na fórmula, então {@code d20} continua funcionando.
+     * novo, ele teria que aprender dois comandos.
+     *
+     * <p><b>Precedencia:</b> (a) o texto inteiro casa com o nome guardado, a
+     * rolagem e a de hoje; (b) um <b>prefixo</b> do texto casa com uma perícia e
+     * o que sobra depois do "+"/"-" vira fórmula, porque e assim que o jogador
+     * escreve "Fight+5+d20" na mao; (c) sem nome no inicio, o texto e fórmula
+     * pura, entao {@code d20} continua funcionando.
      */
     private static int rollOrSkill(CommandContext<CommandSourceStack> ctx) {
         String raw = StringArgumentType.getString(ctx, "formula");
@@ -442,7 +442,75 @@ public class MasterCommands {
         if (pericia != null) {
             return rollSkill(ctx, player, pericia);
         }
+        MixedRoll mixed = splitPericiaPrefix(player, raw);
+        if (mixed != null) {
+            if (mixed.tail().isEmpty()) {
+                ctx.getSource().sendFailure(Component.literal(
+                        "§cInforme o que somar, por exemplo: " + mixed.pericia().name() + "+5"));
+                return 0;
+            }
+            return rollPericia(ctx, player, mixed.pericia(), mixed.tail());
+        }
         return rollFormula(ctx, raw);
+    }
+
+    /**
+     * Perícia reconhecida no inicio do texto, e a fórmula que vem depois dela.
+     *
+     * <p><b>Por que o sinal ja vem dentro da cauda:</b> o separador digitado
+     * ("+" ou "-") e o sinal do <b>primeiro termo</b> da cauda, nao um sinal
+     * aplicado a cauda inteira. Se o comando guardasse o sinal separado e
+     * multiplicasse o total, "Pericia 0-d6+2" imprimiria "- d6 + 2" mas faria
+     * {@code pericia - (d6 + 2)}. Colocando o sinal na frente do texto que vai
+     * para o {@link DiceFormula}, cada termo recebe o sinal que o jogador
+     * digitou e o texto e o total não podem divergir.
+     */
+    private record MixedRoll(SheetData.Pericia pericia, String tail) {
+    }
+
+    /**
+     * Procura uma perícia no <b>começo</b> do texto, separada do resto por
+     * "+" ou "-", para "/rpg roll Fight+5+d20". Devolve {@code null} quando
+     * nao ha nome de pericia no inicio, e o chamador trata tudo como formula.
+     *
+     * <p><b>Por que varrer os separadores de tras para frente:</b> o nome da
+     * perícia pode ter espaco ("Pericia 0+5"), entao nao da para quebrar no
+     * primeiro espaco; varrer de tras para frente devolve o nome mais longo que
+     * casa, que e a leitura que o jogador digitou.
+     *
+     * <p>Quando o jogador digitou "-" e nao ha nada depois, o separador e
+     * devolvido como cauda vazia, para o chamador pedir o que falta em vez de
+     * tentar interpretar "-" sozinho.
+     */
+    private static MixedRoll splitPericiaPrefix(ServerPlayer player, String raw) {
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        SheetData sheet = SessionManager.getSheet(player.getUUID());
+        if (sheet == null) {
+            return null;
+        }
+        // A regra de escolher o nome mais longo e de texto puro, entao mora em
+        // DiceFormula e tem teste proprio; aqui fica so a leitura da ficha.
+        List<String> known = new ArrayList<>();
+        for (SheetData.Pericia pericia : sheet.pericias()) {
+            known.add(normalize(pericia.name()));
+        }
+        int at = DiceFormula.findNameSplitPoint(raw, known);
+        if (at < 0) {
+            return null;
+        }
+        String wanted = normalize(raw.substring(0, at));
+        for (SheetData.Pericia pericia : sheet.pericias()) {
+            if (normalize(pericia.name()).equals(wanted)) {
+                String rest = raw.substring(at + 1).trim();
+                if (rest.isEmpty()) {
+                    return new MixedRoll(pericia, "");
+                }
+                return new MixedRoll(pericia, (raw.charAt(at) == '-' ? "-" : "") + rest);
+            }
+        }
+        return null;
     }
 
     /** Sender como jogador, ou {@code null} (com a mensagem de erro ja enviada). */
@@ -480,15 +548,20 @@ public class MasterCommands {
         return null;
     }
 
-    /** Minusculas, sem acento e sem espacos extras, so para comparar nomes. */
+    /**
+     * Minusculas, sem acento e sem espacos extras, so para comparar nomes.
+     *
+     * <p>Delega para {@link DiceFormula#normalizeName} porque a divisao de
+     * "Pericia 0-2" precisa do mesmo criterio, e dois criterios em dois
+     * arquivos ja produziram nome que casava num lado e nao no outro.
+     */
     private static String normalize(String text) {
-        String plain = java.text.Normalizer.normalize(text, java.text.Normalizer.Form.NFD)
-                .replaceAll("\\p{M}", ""); // tira o acento, deixa a letra
-        return plain.trim().replaceAll("\\s+", " ").toLowerCase(java.util.Locale.ROOT);
+        return DiceFormula.normalizeName(text);
     }
 
     /**
-     * Rola a pericia: {@code 1d20 + valor + atributo}.
+     * Rola a pericia: {@code 1d20 + valor + atributo}, e opcionalmente mais uma
+     * fórmula escrita pelo jogador depois do "+"/"-".
      *
      * <p><b>Fórmula (pedido do usuario):</b> um d20, o valor da pericia (0-30) e
      * o atributo que ela soma. Ex.: "Melee 2 + FOR 3" = 1d20 + 5. O resultado
@@ -500,26 +573,44 @@ public class MasterCommands {
      *
      * <p>Visibilidade igual a {@code /rpg roll} normal: o mestre ve so para si,
      * o jogador ve para todos.
+     *
+     * <p><b>A cauda e lida antes de qualquer rolagem:</b> parsear depois do d20
+     * gastava o RNG e so entao devolvia erro, entao o jogador recebia falha sem
+     * rolagem nenhuma. A leitura da ficha e do atributo nao sorteia nada e pode
+     * ficar onde esta.
      */
-    private static int rollSkill(CommandContext<CommandSourceStack> ctx, ServerPlayer player,
-                                 SheetData.Pericia pericia) {
+    private static int rollPericia(CommandContext<CommandSourceStack> ctx, ServerPlayer player,
+                                   SheetData.Pericia pericia, String tail) {
+        DiceFormula.Outcome outcome = null;
+        if (!tail.isEmpty()) {
+            try {
+                outcome = DiceFormula.parse(tail).evaluate(sides -> RANDOM.nextInt(sides) + 1);
+            } catch (DiceFormula.SyntaxException e) {
+                ctx.getSource().sendFailure(Component.literal("§c" + e.getMessage()));
+                return 0;
+            }
+        }
+
         SheetData sheet = SessionManager.getSheet(player.getUUID());
-        // RNG do servidor (exigido pelo .docx: o cliente nao pode prever o
-        // resultado). CommandSourceStack#getRandom e MinecraftServer#getRandom
-        // nao existem nesta versao; Entity#getRandom devolve o RandomSource do
-        // level, que e exatamente o do servidor.
-        int die = 1 + player.getRandom().nextInt(20);
-        // 27/09/2026: o bonus vem por id de atributo, e o rotulo vem do modelo.
-        // Antes era pericia.attribute().field() e pericia.attribute().shortName(),
-        // dois metodos do enum SheetData.Attribute, que nao existe mais.
         int attrValue = sheet.attributeValue(pericia.attributeId());
-        long total = (long) die + pericia.value() + attrValue;
+        PericiaRoll roll = periciaTotal(player, pericia);
+        long total = roll.total();
+        int die = roll.die();
         String attrLabel = SheetModelHolder.current().attributeLabel(pericia.attributeId());
 
         String message = "§6§l" + player.getName().getString() + " §frolled §6" + pericia.name() + "§f: "
                 + "§7d20 §f(§e" + die + "§f) + §7" + pericia.value()
-                + " + §7" + attrLabel + " " + attrValue
-                + " = §e§l" + total;
+                + " + §7" + attrLabel + " " + attrValue;
+
+        if (outcome != null) {
+            message += tailText(outcome);
+            total += outcome.total();
+            if (outcome.critical()) {
+                message += " §c§l CRIT";
+            }
+        }
+
+        message += " = §e§l" + total;
 
         if (SessionManager.isMaster(player)) {
             player.sendSystemMessage(Component.literal(message));
@@ -527,6 +618,71 @@ public class MasterCommands {
             broadcast(ctx, message);
         }
         return 1;
+    }
+
+    /**
+     * O trecho da cauda: o primeiro termo com o sinal que o jogador digitou no
+     * separador, e os termos seguintes com o proprio sinal.
+     *
+     * <p>O primeiro termo nao passa por {@link #appendRollTerm} porque aquele
+     * metodo existe para resolver o primeiro termo <b>sem</b> separador, e aqui
+     * o texto ja comeca em "1d20 (X) + valor + atributo". Os demais si usam ele.
+     *
+     * <p>Os sinais vem prontos do {@link DiceFormula}, porque o separador
+     * digitado foi colocado na frente da cauda em
+     * {@link #splitPericiaPrefix}. Multiplicar o total por um sinal guardado
+     * aqui faria o texto e a conta discordarem em cauda com mais de um termo.
+     */
+    private static String tailText(DiceFormula.Outcome outcome) {
+        StringBuilder joined = new StringBuilder();
+        List<DiceFormula.Part> parts = outcome.parts();
+        for (int i = 0; i < parts.size(); i++) {
+            DiceFormula.Part part = parts.get(i);
+            // O corpo inteiro do termo, com as varias linhas do '#' inclusas, vai
+            // em UMA unica chamada: ver appendTermBody.
+            if (i > 0) {
+                appendRollTerm(joined, part.sign(), appendTermBody(part));
+            } else {
+                joined.append(part.sign() < 0 ? " §f- §b" : " §f+ §b").append(appendTermBody(part));
+            }
+        }
+        return joined.toString();
+    }
+
+    /**
+     * O d20 e o total da pericia, devolvidos juntos.
+     *
+     * <p>Devolver os dois separadamente, em vez de so o total, existe para
+     * <b>nao</b> ter que recuperar a face por subtracao
+     * ({@code total - pericia.value() - attrValue}) no chamador. A conta
+     * resolveria, mas amarra dois metodos: mexer na soma quebraria a face em
+     * silencio, e a face errada no chat e pior que uma excecao.
+     */
+    private record PericiaRoll(int die, long total) {
+    }
+
+    /**
+     * Total da pericia: um d20 + valor da pericia + valor do atributo.
+     *
+     * <p>O RNG do servidor (exigido pelo .docx: o cliente nao pode prever o
+     * resultado). CommandSourceStack#getRandom e MinecraftServer#getRandom
+     * nao existem nesta versao; Entity#getRandom devolve o RandomSource do
+     * level, que e exatamente o do servidor.
+     */
+    private static PericiaRoll periciaTotal(ServerPlayer player, SheetData.Pericia pericia) {
+        SheetData sheet = SessionManager.getSheet(player.getUUID());
+        // 27/09/2026: o bonus vem por id de atributo, e o rotulo vem do modelo.
+        // Antes era pericia.attribute().field() e pericia.attribute().shortName(),
+        // dois metodos do enum SheetData.Attribute, que nao existe mais.
+        int die = 1 + player.getRandom().nextInt(20);
+        int attrValue = sheet.attributeValue(pericia.attributeId());
+        return new PericiaRoll(die, (long) die + pericia.value() + attrValue);
+    }
+
+    /** Perícia pura, sem fórmula depois: o caminho que existia antes. */
+    private static int rollSkill(CommandContext<CommandSourceStack> ctx, ServerPlayer player,
+                                 SheetData.Pericia pericia) {
+        return rollPericia(ctx, player, pericia, "");
     }
 
     /**
@@ -669,6 +825,11 @@ public class MasterCommands {
     /**
      * Processa a fórmula de dados e devolve a mensagem pronta para o chat
      * (sem prefixo), ou {@code null} se a fórmula for inválida.
+     *
+     * <p>O texto cru vai inteiro para {@link DiceFormula}, que valida a
+     * gramatica e rola os dados; aqui fica so a traducao do resultado para cor
+     * do chat. A mensagem da {@link DiceFormula.SyntaxException} ja sai no
+     * formato do chat, por isso nao recebe prefixo de "formula invalida".
      */
     private static String rollDice(CommandContext<CommandSourceStack> ctx, String rawFormula) {
         ServerPlayer player;
@@ -684,94 +845,23 @@ public class MasterCommands {
             formula = "d20";
         }
 
-        // Split por LOOKAHEAD: cada operador fica no COMECO do termo seguinte, e
-        // assim o sinal sobrevive. "d8-1" -> ["d8","-1"]; "2d6+d4" -> ["2d6","+d4"];
-        // "-2" -> ["-2"] (o lookahead de largura zero no inicio e ignorado pelo
-        // Pattern.split, entao o sinal inicial fica no primeiro termo).
-        // NAO usar split("([+-])"): o Pattern.split do Java NAO inclui os grupos
-        // capturados no resultado, e a subtração viraria adição silenciosa --
-        // "d8-1" rolaria o dado e descartaria o -1 sem dar erro.
-        String[] terms = formula.split("(?=[+-])", -1);
-
-        // Montado no laço porque o separador precisa do sinal: juntar sempre com
-        // " + " mostraria "d8 [5] + -1".
-        StringBuilder joined = new StringBuilder();
-        int total = 0;
-
-        for (int i = 0; i < terms.length; i++) {
-            String rawTerm = terms[i];
-            int sign = 1;
-            if (rawTerm.startsWith("-")) {
-                sign = -1;
-                rawTerm = rawTerm.substring(1);
-            } else if (rawTerm.startsWith("+")) {
-                rawTerm = rawTerm.substring(1);
-            }
-            if (rawTerm.isEmpty()) {
-                // Só o primeiro termo pode ser vazio, de um sinal inicial
-                // ("+d8", "-2"). No meio é sinal duplo ("d8--1"), que nao faz
-                // sentido e e recusado.
-                if (i != 0) {
-                    ctx.getSource().sendFailure(Component.literal("§cInvalid dice formula. Example: d20+10, 2d6+d4+3"));
-                    return null;
-                }
-                continue;
-            }
-
-            Matcher diceMatcher = DICE_TERM.matcher(rawTerm);
-            Matcher modMatcher = MODIFIER_TERM.matcher(rawTerm);
-
-            if (diceMatcher.matches()) {
-                // Termo é um dado: "d20" (contagem implícita 1) ou "2d6"
-                int count = diceMatcher.group(1).isEmpty() ? 1 : Integer.parseInt(diceMatcher.group(1));
-                int sides = Integer.parseInt(diceMatcher.group(2));
-
-                if (count < 1 || count > 100 || sides < 1 || sides > 1000) {
-                    ctx.getSource().sendFailure(Component.literal("§cDice count must be 1-100 and sides 1-1000."));
-                    return null;
-                }
-
-                int[] rolls = new int[count];
-                int termSum = 0;
-                for (int r = 0; r < count; r++) {
-                    rolls[r] = RANDOM.nextInt(sides) + 1;
-                    termSum += rolls[r];
-                }
-                total += sign * termSum;
-
-                StringBuilder rollsStr = new StringBuilder();
-                for (int r = 0; r < rolls.length; r++) {
-                    if (r > 0) rollsStr.append(",");
-                    rollsStr.append(rolls[r]);
-                }
-
-                // Não mostra o "1" quando é um único dado (ex: "d20", não "1d20")
-                String countPrefix = count == 1 ? "" : String.valueOf(count);
-                appendRollTerm(joined, sign, countPrefix + "d" + sides + " [" + rollsStr + "]");
-
-            } else if (modMatcher.matches()) {
-                // Termo é um número fixo somado (ou subtraído) do total (ex: "+10")
-                int mod = Integer.parseInt(rawTerm);
-                total += sign * mod;
-                // Valor absoluto: o sinal ja vai no separador, senão o chat
-                // mostraria "d8 [5] - -1". No primeiro termo o helper recoloca o
-                // sinal, porque não há separador antes ("-2" sozinho).
-                appendRollTerm(joined, sign, String.valueOf(Math.abs(mod)));
-
-            } else {
-                ctx.getSource().sendFailure(Component.literal(
-                    "§cInvalid term: '" + rawTerm + "'. Use format like d20, 2d6, or a number."));
-                return null;
-            }
-        }
-
-        if (joined.isEmpty()) {
-            ctx.getSource().sendFailure(Component.literal("§cInvalid dice formula. Example: d20+10, 2d6+d4+3"));
+        DiceFormula.Outcome outcome;
+        try {
+            // RANDOM e a unica fonte de aleatoriedade do comando: o cliente nao
+            // pode prever a rolagem.
+            outcome = DiceFormula.parse(formula).evaluate(sides -> RANDOM.nextInt(sides) + 1);
+        } catch (DiceFormula.SyntaxException e) {
+            ctx.getSource().sendFailure(Component.literal("§c" + e.getMessage()));
             return null;
         }
 
-        return "§6§e" + player.getName().getString()
-            + " §frolled a: §b" + joined + " §f= §l§a" + total;
+        String message = "§6§e" + player.getName().getString()
+            + " §frolled a: §b" + joinParts(outcome) + " §f= §l§a" + outcome.total();
+        if (outcome.critical()) {
+            // O critico e so um marcador: o total ja saiu da somatoria.
+            message += " §c§l CRIT";
+        }
+        return message;
     }
 
     /**
@@ -786,6 +876,101 @@ public class MasterCommands {
         } else {
             joined.append(sign < 0 ? " §f- §b" : " §f+ §b").append(text);
         }
+    }
+
+    /**
+     * Monta a frase dos termos a partir das pecas do resultado, reaproveitando
+     * {@link #appendRollTerm} para os separadores de cor.
+     */
+    private static String joinParts(DiceFormula.Outcome outcome) {
+        StringBuilder joined = new StringBuilder();
+        for (DiceFormula.Part part : outcome.parts()) {
+            // Um termo, uma chamada: o corpo de um '#' tem varias linhas, e
+            // appendRollTerm decide o separador olhando se o StringBuilder esta
+            // vazio ANTES de escrever. Passar as linhas do '#' em chamadas
+            // separadas faria a segunda linha receber um " + " no meio do
+            // bloco, e o cabecalho do '#' nunca e a primeira coisa escrita.
+            appendRollTerm(joined, part.sign(), appendTermBody(part));
+        }
+        return joined.toString();
+    }
+
+    /**
+     * O corpo de um termo ja colorido, sem sinal: {@code "4d6dl1 [2,3,<s>1</s>]"},
+     * {@code "6#4d6dl1:" + uma linha por volta} ou o numero puro.
+     *
+     * <p><b>A cor mora aqui e nao no {@link DiceFormula}</b> porque e coisa de
+     * Minecraft. O que decide o que riscar e o {@code discarded} de cada face,
+     * e nao um texto ja montado: com a String unica do motor nao dava para
+     * saber onde cada face estava dentro dela.
+     */
+    private static String appendTermBody(DiceFormula.Part part) {
+        if (part.faces().isEmpty() && part.rounds().isEmpty()) {
+            return Long.toString(part.flat());
+        }
+        if (!part.rounds().isEmpty()) {
+            return repeatBody(part);
+        }
+        return part.label() + ' ' + facesBody(part.faces());
+    }
+
+    /**
+     * Termo com {@code N#}: o cabecalho numa linha e uma linha por volta.
+     *
+     * <p>O {@code \n} funciona em chat do Minecraft, entao o bloco sai inteiro
+     * como uma String so: e o que deixa {@link #appendRollTerm} resolver o
+     * separador uma vez, no cabecalho.
+     *
+     * <p><b>Por que cada linha recomeca com {@code §b}:</b> a quebra de linha
+     * NAO limpa a formatacao no chat do Minecraft. O subtotal da volta anterior
+     * termina em {@code §a}, e sem recolocar a cor o rotulo e as faces da volta
+     * seguinte saem verdes em vez de azuis, ate o proximo {@code §r§b} passar
+     * por cima. O {@code §b} logo depois do {@code \n} fixa a cor do termo,
+     * que e o que o {@link #facesBody} pressupoe.
+     */
+    private static String repeatBody(DiceFormula.Part part) {
+        StringBuilder sb = new StringBuilder();
+        sb.append(part.repeat()).append('#').append(part.label()).append(':');
+        List<DiceFormula.Round> rounds = part.rounds();
+        int shown = Math.min(rounds.size(), DiceFormula.DISPLAY_ROUNDS);
+        for (int i = 0; i < shown; i++) {
+            DiceFormula.Round round = rounds.get(i);
+            sb.append("\n§b ").append(round.label()).append(' ').append(facesBody(round.faces()))
+                    .append(" §f= §a").append(round.subtotal());
+        }
+        if (rounds.size() > shown) {
+            sb.append("\n§7 ...+").append(rounds.size() - shown).append(" more");
+        }
+        return sb.toString();
+    }
+
+    /**
+     * As faces entre colchetes, com o descartado em vermelho e riscado.
+     *
+     * <p><b>Por que {@code §r} antes do {@code §b}:</b> o riscado e um
+     * <b>estilo</b>, independente da cor. So trocar a cor para aqua deixaria o
+     * dado cortado em aqua <b>riscado ainda</b>, que e o oposto do que o
+     * jogador precisa ver. O {@code §r} zera o estilo e devolve a cor de
+     * contexto, que aqui dentro do termo ja e aqua.
+     */
+    private static String facesBody(List<DiceFormula.Face> faces) {
+        StringBuilder sb = new StringBuilder("[");
+        int shown = Math.min(faces.size(), DiceFormula.DISPLAY_LIMIT);
+        for (int i = 0; i < shown; i++) {
+            if (i > 0) {
+                sb.append(',');
+            }
+            DiceFormula.Face face = faces.get(i);
+            if (face.discarded()) {
+                sb.append("§c§m").append(face.text()).append("§r§b");
+            } else {
+                sb.append(face.text());
+            }
+        }
+        if (faces.size() > shown) {
+            sb.append(",§7...+").append(faces.size() - shown).append(" more");
+        }
+        return sb.append(']').toString();
     }
 
     private static boolean verifyMasterPermission(CommandContext<CommandSourceStack> ctx) {
