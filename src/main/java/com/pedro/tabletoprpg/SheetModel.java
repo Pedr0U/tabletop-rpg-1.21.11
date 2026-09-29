@@ -41,9 +41,21 @@ import java.util.Set;
  * ({@code pericia_N}) e a identidade, e o nome e o rotulo: renomear a pericia
  * preserva o valor e o atributo que o jogador ja tinha nela.
  *
- * <p>Todos os limites aqui existem por causa do codec de rede: um cliente
- * modificado pode mandar qualquer coisa, e um record sem teto viraria um numero
- * gigante na tela ou um {@code IndexOutOfBounds} no desenho.
+ * <p><b>Os limites de valor tambem moram aqui (28/09/2026).</b> O piso e o teto
+ * do atributo e o teto da pericia sao escolha do Mestre, entao os tres inteiros
+ * do fim do record sao <b>regra</b>, e nao seguranca do protocolo. O que corta o
+ * valor gravado e o construtor compacto de {@link SheetData}, que le estes tres
+ * campos: qualquer caminho que monte uma ficha ja sai limitado, inclusive a
+ * leitura do NBT e o {@link #align}. O {@code SheetData} tambem os carrega, para
+ * que a tela e o servidor leiam o mesmo numero sem consultar o modelo.
+ *
+ * <p>Os <b>outros</b> limites aqui (rotulo, quantidade de atributos e de
+ * pericias) existem por causa do codec de rede: um cliente modificado pode
+ * mandar qualquer coisa, e um record sem teto viraria um numero gigante na tela
+ * ou um {@code IndexOutOfBounds} no desenho. Os tres limites de valor sao o
+ * caso contrario, e por isso ficam num bloco so: sao regra de jogo, e o teto que
+ * os segura ({@link #VALUE_LIMIT_MAX}) existe apenas para que a regra do Mestre
+ * nao possa ser transformada em numero quebrado.
  */
 public record SheetModel(
         String nameLabel,
@@ -58,7 +70,10 @@ public record SheetModel(
         String xpLabel,
         XpMode xp,
         List<AttributeDef> attributes,
-        List<PericiaDef> pericias
+        List<PericiaDef> pericias,
+        int attributeValueMin,
+        int attributeValueMax,
+        int periciaValueMax
     ) {
 
     /**
@@ -113,6 +128,34 @@ public record SheetModel(
     public static final int MIN_PERICIAS = 1;
     /** Mais pericias que o Mestre pode ter (pedido do usuario). */
     public static final int MAX_PERICIAS = 30;
+
+    /**
+     * Piso padrao do valor de um atributo (decisao do Mestre, 28/09/2026).
+     *
+     * <p>E o padrao, nao um limite fixo: o Mestre muda isto no Sheet Editor.
+     */
+    public static final int DEFAULT_ATTRIBUTE_VALUE_MIN = -30;
+    /** Teto padrao do valor de um atributo. Como o piso, e editavel. */
+    public static final int DEFAULT_ATTRIBUTE_VALUE_MAX = 30;
+    /** Teto padrao do valor de uma pericia. Como o do atributo, e editavel. */
+    public static final int DEFAULT_PERICIA_VALUE_MAX = 30;
+
+    /**
+     * Teto <b>absoluto</b> de um limite de valor escolhido pelo Mestre.
+     *
+     * <p><b>Nao e regra de jogo, e a rede de seguranca do protocolo.</b> O
+     * intervalo de verdade e o que o Mestre digita no Sheet Editor, dentro deste
+     * teto; 999 e o ponto onde este numero deixa de ser uma limitacao e comeca a
+     * ser um numero que quebra a tela. O mesmo papel que {@link #MAX_ATTRIBUTES}
+     * tem para a lista de atributos: um cliente modificado pode mandar
+     * {@code Integer.MAX_VALUE}, e o resultado seria um numero gigante na tela e
+     * um {@code overflow} no {@code VAR_INT} do pacote, corrompendo a leitura de
+     * tudo que vier depois. Tres digitos cabem na caixa de valor da ficha com
+     * folga, entao o limite e invisível no uso normal.
+     */
+    public static final int VALUE_LIMIT_MAX = 999;
+    /** Piso absoluto do limite de valor do atributo (o mesmo teto, com sinal). */
+    public static final int VALUE_LIMIT_MIN = -999;
 
     // ------------------------------------------------------------------
     // SUB-REGISTROS
@@ -240,7 +283,10 @@ public record SheetModel(
                         new PericiaDef("pericia_16", "Stealth", "dexterity"),
                         new PericiaDef("pericia_17", "Survival", "wisdom"),
                         new PericiaDef("pericia_18", "Thievery", "dexterity")
-                )
+                ),
+                DEFAULT_ATTRIBUTE_VALUE_MIN,
+                DEFAULT_ATTRIBUTE_VALUE_MAX,
+                DEFAULT_PERICIA_VALUE_MAX
         );
     }
 
@@ -265,6 +311,15 @@ public record SheetModel(
      * Mestre really removeu, e nesse caso o {@link SheetModelStore} reverte a
      * operacao antes de chegar aqui. Um vazio que chega e, portanto, dado
      * corrompido — e o padrao e a resposta segura.
+     *
+     * <p><b>Os tres limites de valor entram pela mesma porta.</b> Eles vem de um
+     * payload de edicao e de um NBT editado a mao, entao sao cortados no teto
+     * absoluto ({@link #VALUE_LIMIT_MIN}/{@link #VALUE_LIMIT_MAX}) e o teto do
+     * atributo nunca fica abaixo do piso: um modelo com {@code min = 10} e
+     * {@code max = 5} deixaria o intervalo vazio, e o clamp da ficha passaria a
+     * cortar todo valor para 10 - inclusive os que ja estavam gravados. A
+     * inversao e corrigida para {@code max = min}, que e um intervalo valido de
+     * um valor so.
      */
     public SheetModel {
         nameLabel = clean(nameLabel, LABEL_MAX, "Name");
@@ -277,6 +332,15 @@ public record SheetModel(
         xpLabel = clean(xpLabel, LABEL_MAX, "XP");
         attributes = sanitizeAttributes(attributes);
         pericias = sanitizePericias(pericias);
+        attributeValueMin = clamp(attributeValueMin, VALUE_LIMIT_MIN, VALUE_LIMIT_MAX);
+        attributeValueMax = clamp(attributeValueMax, VALUE_LIMIT_MIN, VALUE_LIMIT_MAX);
+        if (attributeValueMax < attributeValueMin) {
+            attributeValueMax = attributeValueMin;
+        }
+        // A pericia tem piso 0 fixo, e so o teto e do Mestre: o valor e o
+        // investimento do jogador e um numero negativo ali seria penalidade, e
+        // penalidade pertence ao atributo.
+        periciaValueMax = clamp(periciaValueMax, 0, VALUE_LIMIT_MAX);
     }
 
     private static List<AttributeDef> sanitizeAttributes(List<AttributeDef> raw) {
@@ -404,6 +468,14 @@ public record SheetModel(
             // Sem este caso o `default` devolvia a chave crua e a ficha
             // desenhava "xptext" no lugar do rotulo.
             case "xptext" -> xpLabel;
+            // 29/09/2026: nome do jogador dono da ficha. O rotulo e um LITERAL
+            // de proposito: nao ha `playerLabel` no modelo, porque o usuario
+            // nao pediu para que este campo virasse configuravel no Sheet
+            // Editor. Ele fica aqui porque e este metodo que resolve o rotulo
+            // de todo campo da ficha - `SheetData.labelOf` so chega no seu
+            // `switch` quando o modelo devolve string vazia, e o `default`
+            // abaixo devolve a propria chave.
+            case "playername" -> "Player";
             default -> field;
         };
     }
@@ -466,27 +538,30 @@ public record SheetModel(
         return switch (field.toLowerCase(Locale.ROOT)) {
             case "charactername" -> new SheetModel(value.isEmpty() ? nameLabel : value, raceLabel,
                     raceEnabled, classLabel, backgroundLabel, hpLabel, manaLabel, manaEnabled,
-                    levelLabel, xpLabel, xp, attributes, pericias);
+                    levelLabel, xpLabel, xp, attributes, pericias, attributeValueMin,
+                    attributeValueMax, periciaValueMax);
             case "race" -> new SheetModel(nameLabel, value, raceEnabled, classLabel,
                     backgroundLabel, hpLabel, manaLabel, manaEnabled, levelLabel, xpLabel, xp,
-                    attributes, pericias);
+                    attributes, pericias, attributeValueMin, attributeValueMax, periciaValueMax);
             case "characterclass" -> new SheetModel(nameLabel, raceLabel, raceEnabled, value,
                     backgroundLabel, hpLabel, manaLabel, manaEnabled, levelLabel, xpLabel, xp,
-                    attributes, pericias);
+                    attributes, pericias, attributeValueMin, attributeValueMax, periciaValueMax);
             case "background" -> new SheetModel(nameLabel, raceLabel, raceEnabled, classLabel, value,
-                    hpLabel, manaLabel, manaEnabled, levelLabel, xpLabel, xp, attributes, pericias);
+                    hpLabel, manaLabel, manaEnabled, levelLabel, xpLabel, xp, attributes, pericias,
+                    attributeValueMin, attributeValueMax, periciaValueMax);
             case "hp" -> new SheetModel(nameLabel, raceLabel, raceEnabled, classLabel,
                     backgroundLabel, value, manaLabel, manaEnabled, levelLabel, xpLabel, xp,
-                    attributes, pericias);
+                    attributes, pericias, attributeValueMin, attributeValueMax, periciaValueMax);
             case "mana" -> new SheetModel(nameLabel, raceLabel, raceEnabled, classLabel,
                     backgroundLabel, hpLabel, value, manaEnabled, levelLabel, xpLabel, xp,
-                    attributes, pericias);
+                    attributes, pericias, attributeValueMin, attributeValueMax, periciaValueMax);
             case "level" -> new SheetModel(nameLabel, raceLabel, raceEnabled, classLabel,
                     backgroundLabel, hpLabel, manaLabel, manaEnabled, value, xpLabel, xp,
-                    attributes, pericias);
+                    attributes, pericias, attributeValueMin, attributeValueMax, periciaValueMax);
             case "xp" -> new SheetModel(nameLabel, raceLabel, raceEnabled, classLabel,
                     backgroundLabel, hpLabel, manaLabel, manaEnabled, levelLabel,
-                    value.isEmpty() ? xpLabel : value, xp, attributes, pericias);
+                    value.isEmpty() ? xpLabel : value, xp, attributes, pericias, attributeValueMin,
+                    attributeValueMax, periciaValueMax);
             default -> this;
         };
     }
@@ -498,16 +573,17 @@ public record SheetModel(
         }
         return switch (field.toLowerCase(Locale.ROOT)) {
             case "race" -> new SheetModel(nameLabel, raceLabel, enabled, classLabel, backgroundLabel,
-                    hpLabel, manaLabel, manaEnabled, levelLabel, xpLabel, xp, attributes, pericias);
+                    hpLabel, manaLabel, manaEnabled, levelLabel, xpLabel, xp, attributes, pericias,
+                    attributeValueMin, attributeValueMax, periciaValueMax);
             case "mana" -> new SheetModel(nameLabel, raceLabel, raceEnabled, classLabel,
                     backgroundLabel, hpLabel, manaLabel, enabled, levelLabel, xpLabel, xp,
-                    attributes, pericias);
+                    attributes, pericias, attributeValueMin, attributeValueMax, periciaValueMax);
             // Desligar XP e o mesmo que dar um rotulo vazio: e assim que a tela
             // faz, e mantem um unico caminho para "campo que nao aparece".
             case "xp" -> new SheetModel(nameLabel, raceLabel, raceEnabled, classLabel, backgroundLabel,
                     hpLabel, manaLabel, manaEnabled, levelLabel, xpLabel,
                     enabled ? (xp == XpMode.HIDDEN ? XpMode.NUMBER : xp) : XpMode.HIDDEN, attributes,
-                    pericias);
+                    pericias, attributeValueMin, attributeValueMax, periciaValueMax);
             default -> this;
         };
     }
@@ -516,7 +592,21 @@ public record SheetModel(
     public SheetModel withXpMode(XpMode mode) {
         return new SheetModel(nameLabel, raceLabel, raceEnabled, classLabel, backgroundLabel, hpLabel,
                 manaLabel, manaEnabled, levelLabel, xpLabel, mode == null ? XpMode.NUMBER : mode,
-                attributes, pericias);
+                attributes, pericias, attributeValueMin, attributeValueMax, periciaValueMax);
+    }
+
+    /**
+     * Copia com os tres limites de valor trocados.
+     *
+     * <p>E o unico caminho de edicao dos limites, e o construtor compacto saneia
+     * o que chega: um {@code max} abaixo do {@code min} vira {@code max = min}, e
+     * os tres sao cortados no teto absoluto. Quem chama e o Sheet Editor, que
+     * atualiza {@code staged} a cada tecla sem reconstruir os widgets.
+     */
+    public SheetModel withValueLimits(int min, int max, int periciaMax) {
+        return new SheetModel(nameLabel, raceLabel, raceEnabled, classLabel, backgroundLabel, hpLabel,
+                manaLabel, manaEnabled, levelLabel, xpLabel, xp, attributes, pericias,
+                min, max, periciaMax);
     }
 
     /** Copia com outro rotulo/nome para um atributo. */
@@ -529,7 +619,8 @@ public record SheetModel(
             out.add(def.id().equals(id) ? new AttributeDef(id, label, name) : def);
         }
         return new SheetModel(nameLabel, raceLabel, raceEnabled, classLabel, backgroundLabel, hpLabel,
-                manaLabel, manaEnabled, levelLabel, xpLabel, xp, out, pericias);
+                manaLabel, manaEnabled, levelLabel, xpLabel, xp, out, pericias, attributeValueMin,
+                attributeValueMax, periciaValueMax);
     }
 
     /**
@@ -568,7 +659,8 @@ public record SheetModel(
         List<AttributeDef> out = new ArrayList<>(attributes);
         out.add(new AttributeDef(id, "AT" + out.size(), "Attribute " + out.size()));
         return new SheetModel(nameLabel, raceLabel, raceEnabled, classLabel, backgroundLabel,
-                hpLabel, manaLabel, manaEnabled, levelLabel, xpLabel, xp, out, pericias);
+                hpLabel, manaLabel, manaEnabled, levelLabel, xpLabel, xp, out, pericias,
+                attributeValueMin, attributeValueMax, periciaValueMax);
     }
 
     /**
@@ -629,7 +721,8 @@ public record SheetModel(
                     : def);
         }
         return new SheetModel(nameLabel, raceLabel, raceEnabled, classLabel, backgroundLabel, hpLabel,
-                manaLabel, manaEnabled, levelLabel, xpLabel, xp, out, newPericias);
+                manaLabel, manaEnabled, levelLabel, xpLabel, xp, out, newPericias, attributeValueMin,
+                attributeValueMax, periciaValueMax);
     }
 
     /**
@@ -663,7 +756,8 @@ public record SheetModel(
         List<PericiaDef> out = new ArrayList<>(pericias);
         out.add(new PericiaDef(freshPericiaId(out), "Skill " + n, firstAttributeId()));
         return new SheetModel(nameLabel, raceLabel, raceEnabled, classLabel, backgroundLabel, hpLabel,
-                manaLabel, manaEnabled, levelLabel, xpLabel, xp, attributes, out);
+                manaLabel, manaEnabled, levelLabel, xpLabel, xp, attributes, out, attributeValueMin,
+                attributeValueMax, periciaValueMax);
     }
 
     /**
@@ -691,17 +785,24 @@ public record SheetModel(
             return this;
         }
         return new SheetModel(nameLabel, raceLabel, raceEnabled, classLabel, backgroundLabel, hpLabel,
-                manaLabel, manaEnabled, levelLabel, xpLabel, xp, attributes, out);
+                manaLabel, manaEnabled, levelLabel, xpLabel, xp, attributes, out, attributeValueMin,
+                attributeValueMax, periciaValueMax);
     }
 
     /**
      * Copia com outro nome (ou outro atributo padrao) para a pericia de este
      * <b>id</b>, <b>preservando o id</b>.
      *
-     * <p>Continua recusando um nome ja usado por outra pericia: o id resolveu o
-     * problema do renomear, nao a UX de duas linhas com o mesmo texto, e essa
-     * recusa e o que impede o Mestre de digitar um nome que ja existe. Comparacao
-     * exata de id, e o {@code id} vazio devolve a ficha intacta.
+     * <p><b>28/09/2026: so o nome vazio volta o modelo intacto.</b> Antes o nome
+     * ja usado por outra pericia era recusado aqui, e a tela devolvia o texto
+     * antigo na caixa: o efeito era o Mestre nao conseguir nem digitar o nome.
+     * Nome repetido <b>entra</b> - quem barra e a tela, com o Salvar desligado e o
+     * aviso de nome repetido, e nao este metodo. O {@code id} e a identidade, e
+     * duas linhas com o mesmo nome sao justamente duas pericias diferentes. O
+     * nome vazio continua fora: {@code sanitizePericias} descarta a pericia de
+     * nome vazio, e a lista toda vazia volta as padrao, o que deslocaria as
+     * linhas seguintes. Comparacao exata de id, e o {@code id} vazio devolve a
+     * ficha intacta.
      */
     public SheetModel withPericiaText(String id, String newName, String attributeId) {
         PericiaDef def = periciaById(id);
@@ -709,10 +810,10 @@ public record SheetModel(
             return this;
         }
         String target = newName == null ? "" : clean(newName, LABEL_MAX);
-        // Renomear para o nome de outra pericia deixaria duas linhas com o mesmo
-        // nome, e o nome e o que o Mestre le: a recusa e de UX (e o que a tela
-        // usa para avisar), e nao de identidade - a identidade agora e o id.
-        if (target.isEmpty() || (!target.equalsIgnoreCase(def.name()) && periciaByName(target) != null)) {
+        // Nome repetido passa: a recusa vivia aqui e na tela, e enquanto ela
+        // existir o Mestre nao consegue digitar o nome que ja existe. O que impede
+        // de gravar duas linhas iguais e a tela, nao o modelo.
+        if (target.isEmpty()) {
             return this;
         }
         String attr = attributeId != null && attribute(attributeId) != null ? attributeId : def.attributeId();
@@ -721,7 +822,8 @@ public record SheetModel(
             out.add(current.id().equals(def.id()) ? new PericiaDef(def.id(), target, attr) : current);
         }
         return new SheetModel(nameLabel, raceLabel, raceEnabled, classLabel, backgroundLabel, hpLabel,
-                manaLabel, manaEnabled, levelLabel, xpLabel, xp, attributes, out);
+                manaLabel, manaEnabled, levelLabel, xpLabel, xp, attributes, out, attributeValueMin,
+                attributeValueMax, periciaValueMax);
     }
 
     /**
@@ -748,14 +850,17 @@ public record SheetModel(
      * A pericia com este nome, ou {@code null}.
      *
      * <p><b>28/09/2026: o nome NAO e mais a identidade</b> - e o {@code id} (ver
-     * {@link #periciaById}). Esta busca continua porque o {@code MasterCommands}
-     * (/rpg roll) resolve por nome digitado e porque o editor recusa um nome ja
-     * usado: as duas coisas sao interface com a pessoa, nao armazenamento.
+     * {@link #periciaById}). Esta busca continua porque o modelo precisa de um
+     * nome livre quando <b>gera</b> um: {@link #addPericia} procura o proximo
+     * "Skill N" e {@link #nextFreshAttributeIndex()} nao pode colidir com um nome
+     * de pericia.
      *
-     * <p>A comparacao ignora caixa porque o nome e o que aparece na linha. <b>Publico
-     * desde 27/09/2026</b>: a tela do Sheet Editor precisa reencontrar a pericia
-     * de uma linha para devolver o texto a caixa quando o Mestre digita um nome
-     * vazio ou ja usado.
+     * <p>Ela <b>nao</b> barra mais nada: o rename aceita um nome repetido e o
+     * editor tambem (ver {@link #withPericiaText}), porque o nome e o que o
+     * Mestre le, e duas linhas iguais sao duas pericias com ids diferentes. O
+     * comando de rolagem por nome continua achando a primeira delas.
+     *
+     * <p>A comparacao ignora caixa porque o nome e o que aparece na linha.
      */
     public PericiaDef periciaByName(String name) {
         if (name == null) {
@@ -814,6 +919,13 @@ public record SheetModel(
      * prendia a ficha a lista de codigo. O comportamento e o mesmo — a ficha
      * sempre tem exatamente as pericias do sistema — mas a lista passou a vir
      * do Mestre.
+     *
+     * <p><b>O align tambem reescreve os tres limites de valor (28/09/2026).</b>
+     * E o que faz a mudanca de limite do Mestre chegar as fichas ja salvas: o
+     * construtor compacto do {@code SheetData} corta cada valor no intervalo novo
+     * quando esta linha monta a ficha, entao baixar o teto no editor corta os
+     * valores que Passavam dele. {@code SessionManager.realignAllSheets} e o que
+     * chama isto para todas as fichas carregadas.
      */
     public SheetData align(SheetData sheet) {
         if (sheet == null) {
@@ -849,8 +961,14 @@ public record SheetModel(
             newPericias.add(new SheetData.Pericia(def.id(), def.name(),
                     found == null ? 0 : found.value(), attrId));
         }
+        // Os tres limites vao junto, e nao sao copiados da ficha: o align e o
+        // caminho que propaga a mudanca de limite do Mestre para as fichas de todo
+        // mundo, e o construtor do SheetData corta o que sobrou acima do novo teto
+        // (ou abaixo do novo piso). Por isso baixar o teto no editor tambem corta
+        // valores ja salvos, que e o que o Mestre espera ao mudar a regra.
         return new SheetData(sheet.identity(), sheet.vitals(), sheet.progress(),
-                new SheetData.Attributes(values), sheet.skills(), newPericias);
+                new SheetData.Attributes(values), sheet.skills(), newPericias,
+                attributeValueMin, attributeValueMax, periciaValueMax);
     }
 
     // ------------------------------------------------------------------
@@ -868,6 +986,11 @@ public record SheetModel(
     private static String clean(String text, int max, String fallback) {
         String value = clean(text, max);
         return value.isEmpty() ? fallback : value;
+    }
+
+    /** Corta no intervalo dado; o mesmo {@code Math.max/Math.min} do {@code SheetData}. */
+    private static int clamp(int value, int min, int max) {
+        return Math.max(min, Math.min(value, max));
     }
 
     // ------------------------------------------------------------------
@@ -888,7 +1011,16 @@ public record SheetModel(
             Codec.STRING.xmap(XpMode::decode, XpMode::name)
                     .optionalFieldOf("xp", XpMode.NUMBER).forGetter(SheetModel::xp),
             Codec.list(AttributeDef.CODEC).optionalFieldOf("attributes", List.of()).forGetter(SheetModel::attributes),
-            Codec.list(PericiaDef.CODEC).optionalFieldOf("pericias", List.of()).forGetter(SheetModel::pericias)
+            Codec.list(PericiaDef.CODEC).optionalFieldOf("pericias", List.of()).forGetter(SheetModel::pericias),
+            // Os tres limites de valor (28/09/2026). Todos opcionais com o padrao:
+            // um modelo salvo antes deles nao pode falhar de ler, e a ausencia
+            // significa "o Mestre ainda nao mudou a regra", que e o padrao.
+            Codec.INT.optionalFieldOf("attributeValueMin", DEFAULT_ATTRIBUTE_VALUE_MIN)
+                    .forGetter(SheetModel::attributeValueMin),
+            Codec.INT.optionalFieldOf("attributeValueMax", DEFAULT_ATTRIBUTE_VALUE_MAX)
+                    .forGetter(SheetModel::attributeValueMax),
+            Codec.INT.optionalFieldOf("periciaValueMax", DEFAULT_PERICIA_VALUE_MAX)
+                    .forGetter(SheetModel::periciaValueMax)
     ).apply(i, SheetModel::new));
 
     // ------------------------------------------------------------------
@@ -904,7 +1036,7 @@ public record SheetModel(
      * Escrito campo a campo, e nao com {@code composite}.
      *
      * <p><b>Por que:</b> {@code StreamCodec.composite} tem overloads ate 6
-     * campos, e este record tem 13. Um {@code StreamCodec.of} com encoder e
+     * campos, e este record tem 16. Um {@code StreamCodec.of} com encoder e
      * decoder proprios nao tem esse limite e, ao contrario do composite, aceita
      * listas com tamanho variavel.
      */
@@ -933,6 +1065,12 @@ public record SheetModel(
         ByteBufCodecs.VAR_INT.encode(buf, model.xp().ordinal());
         ATTRIBUTES_CODEC.encode(buf, model.attributes());
         PERICIAS_CODEC.encode(buf, model.pericias());
+        // Os tres limites de valor, DEPOIS das listas e nesta ordem: o mesmo
+        // contrato do bloco abaixo. O construtor compacto ja os sanitize, entao o
+        // que entra no pacote e sempre um valor em faixa.
+        ByteBufCodecs.VAR_INT.encode(buf, model.attributeValueMin());
+        ByteBufCodecs.VAR_INT.encode(buf, model.attributeValueMax());
+        ByteBufCodecs.VAR_INT.encode(buf, model.periciaValueMax());
     };
 
     private static final StreamDecoder<FriendlyByteBuf, SheetModel> DECODER = buf -> new SheetModel(
@@ -948,7 +1086,10 @@ public record SheetModel(
             ByteBufCodecs.stringUtf8(LABEL_MAX).decode(buf),
             XpMode.byOrdinal(ByteBufCodecs.VAR_INT.decode(buf)),
             ATTRIBUTES_CODEC.decode(buf),
-            PERICIAS_CODEC.decode(buf)
+            PERICIAS_CODEC.decode(buf),
+            ByteBufCodecs.VAR_INT.decode(buf),
+            ByteBufCodecs.VAR_INT.decode(buf),
+            ByteBufCodecs.VAR_INT.decode(buf)
     );
 
     public static final StreamCodec<FriendlyByteBuf, SheetModel> STREAM_CODEC =

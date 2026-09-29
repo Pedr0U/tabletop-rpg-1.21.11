@@ -53,7 +53,7 @@ import java.util.UUID;
  *   <li>{@link SheetQueryPayload} (C2S): abre a ficha de um jogador (nome vazio = a própria).</li>
  *   <li>{@link SheetStatePayload} (S2C): conteúdo de uma ficha + se o destinatário pode editá-la.</li>
  *   <li>{@link SheetFieldPayload} (C2S): edição de um campo da ficha (texto ou número).</li>
- *   <li>{@link SheetSkillPayload} (C2S): adiciona/remove uma habilidade da ficha.</li>
+ *   <li>{@link SheetSkillPayload} (C2S): adiciona/remove/reordena/edita uma skill da ficha.</li>
  * </ul>
  */
 public final class RpgNetworking {
@@ -582,33 +582,51 @@ public final class RpgNetworking {
     }
 
     /**
-     * Cliente -&gt; Servidor: adiciona ou remove uma <b>skill</b> (nome + descrição).
+     * Cliente -&gt; Servidor: adiciona, remove, reordena ou <b>edita</b> uma
+     * <b>skill</b> (nome + descrição).
      *
      * <p>A skill é a lista <b>live</b> da ficha: o jogador monta do zero o que
      * ele sabe fazer. Por isso este payload não viaja valor nem atributo — o que
      * uma perícia soma na rolagem é assunto da {@link SheetPericiaPayload}.
      * Os dois são pacotes diferentes justamente para que mexer na lista de
      * perícias não possa alterar a lista de skills (e vice-versa).
+     *
+     * <p><b>29/09/2026 - o campo {@code index}.</b> Ele e' o que o
+     * {@link SheetData.SkillOp#UPDATE} usa: o botao Edit da tela de Skills
+     * salva <b>no mesmo lugar</b> da lista, e "no mesmo lugar" so pode ser
+     * dito por posicao - o nome sozinho nao sobrevive a uma reordenacao feita
+     * entre a selecao e o "Save". Nas outras operacoes o campo e' ignorado e
+     * vale 0.
+     *
+     * <p><b>Por que um {@code int} cru e nao um indice validado aqui:</b> o
+     * payload nao valida nada; quem valida e' o servidor, no receptor (ver
+     * {@code updateSkill}), que so grava quando o indice esta na faixa E o
+     * nome em diante bate com a skill que esta la.
      */
     public record SheetSkillPayload(String targetName, String skill, SheetData.SkillOp op,
-                                    String description) implements CustomPacketPayload {
+                                    String description, int index) implements CustomPacketPayload {
         public static final Type<SheetSkillPayload> TYPE = new Type<>(TabletopRpg.id("sheet_skill"));
         public static final StreamCodec<FriendlyByteBuf, SheetSkillPayload> STREAM_CODEC = StreamCodec.composite(
                 ByteBufCodecs.stringUtf8(64), SheetSkillPayload::targetName,
                 ByteBufCodecs.stringUtf8(SheetData.SKILL_MAX), SheetSkillPayload::skill,
                 SheetData.SkillOp.STREAM_CODEC, SheetSkillPayload::op,
                 ByteBufCodecs.stringUtf8(SheetData.SKILL_DESC_MAX), SheetSkillPayload::description,
+                // O indice por ULTIMO, como os tres limites de SheetData: os
+                // campos antigos ficam nas mesmas posicoes, e o decode
+                // (StreamCodec.composite monta encoder e decoder juntos) le
+                // nesta mesma ordem.
+                ByteBufCodecs.VAR_INT, SheetSkillPayload::index,
                 SheetSkillPayload::new
         );
 
         /** Atalho: criar a skill, ou atualizar a descrição se o nome já existir. */
         public static SheetSkillPayload add(String targetName, String skill, String description) {
-            return new SheetSkillPayload(targetName, skill, SheetData.SkillOp.ADD, description);
+            return new SheetSkillPayload(targetName, skill, SheetData.SkillOp.ADD, description, 0);
         }
 
         /** Atalho: remover a skill pelo nome (só o nome importa). */
         public static SheetSkillPayload remove(String targetName, String skill) {
-            return new SheetSkillPayload(targetName, skill, SheetData.SkillOp.REMOVE, "");
+            return new SheetSkillPayload(targetName, skill, SheetData.SkillOp.REMOVE, "", 0);
         }
 
         /**
@@ -618,7 +636,19 @@ public final class RpgNetworking {
          * livre nesta operacao: {@code delta = -1} sobe, {@code +1} desce.
          */
         public static SheetSkillPayload move(String targetName, String skill, int delta) {
-            return new SheetSkillPayload(targetName, skill, SheetData.SkillOp.MOVE, Integer.toString(delta));
+            return new SheetSkillPayload(targetName, skill, SheetData.SkillOp.MOVE, Integer.toString(delta), 0);
+        }
+
+        /**
+         * Atalho: salvar a edicao da skill que esta no indice, no mesmo lugar da
+         * lista (botao "Save" do modo de edicao da tela de Skills).
+         *
+         * <p>Alem do indice, o nome em diante tambem viaja: e' a trava que
+         * impede um "Save" atrasado de sobrescrever a skill que o jogador
+         * passou a ter naquela posicao enquanto ele editava.
+         */
+        public static SheetSkillPayload update(String targetName, int index, String skill, String description) {
+            return new SheetSkillPayload(targetName, skill, SheetData.SkillOp.UPDATE, description, index);
         }
 
         @Override
@@ -988,6 +1018,7 @@ public final class RpgNetworking {
                 case ADD -> current.withSkill(payload.skill(), payload.description());
                 case REMOVE -> current.withoutSkill(payload.skill());
                 case MOVE -> moveSkill(current, payload);
+                case UPDATE -> updateSkill(current, payload);
                 // Pacote corrompido: melhor não fazer nada do que transformar
                 // um índice inválido em "criar skill".
                 case INVALID -> current;
@@ -1050,9 +1081,15 @@ public final class RpgNetworking {
             // Re-alinhar aqui e o que faz o valor de quem sobreviveu a edicao
             // continuar no lugar, em vez da ficha precisar recarregar.
             int realinhadas = SessionManager.realignAllSheets();
+            // Os limites entram no log (28/09/2026) pelo mesmo motivo dos nomes:
+            // e a unica pista que fica no console de QUANTO o Mestre autorizou,
+            // depois que a tela ja fechou. Sem isso, um valor cortado e um bug
+            // de clamp ficam indistinguiveis de um valor que o Mestre digitou.
             TabletopRpg.LOGGER.info("[TabletopRPG] Mestre {} editou o modelo: {} atributo(s), {} pericia(s), "
-                            + "{} ficha(s) realinhada(s).", sender.getName().getString(),
-                    next.attributeCount(), next.periciaCount(), realinhadas);
+                            + "atributo {}..{}, pericia 0..{}, {} ficha(s) realinhada(s).",
+                    sender.getName().getString(), next.attributeCount(), next.periciaCount(),
+                    next.attributeValueMin(), next.attributeValueMax(), next.periciaValueMax(),
+                    realinhadas);
 
             broadcastSheetModel(server, next);
             // As fichas mudaram de forma (podem ter gained/lost linhas), entao
@@ -1092,6 +1129,49 @@ public final class RpgNetworking {
             return current;
         }
         return current.withSkillMoved(payload.skill(), delta);
+    }
+
+    /**
+     * Aplica o {@code SkillOp.UPDATE}: troca nome e descricao da skill que esta
+     * no indice do payload, <b>no mesmo lugar</b> da lista.
+     *
+     * <p><b>Quatro testes, e o quarto e' o que segura a lista inteira:</b>
+     * <ul>
+     *   <li>indice dentro da faixa {@code [0, skills.size())};</li>
+     *   <li>nome nao vazio (a skill continua tendo nome) e dentro do teto
+     *       {@link SheetData#SKILL_MAX};</li>
+     *   <li>descricao dentro do teto {@link SheetData#SKILL_DESC_MAX} (descricao
+     *       vazia e valida: a skill so deixa de abrir popup);</li>
+     *   <li><b>o nome em diante tem de ser o nome da skill que esta naquele
+     *       indice.</b> E' o teste que segura o caso "alguem reordenou ou
+     *       removeu a lista enquanto eu editava": sem ele, o Save gravaria por
+     *       cima da skill que passou a estar naquela posicao, e o jogador
+     *       perderia a descricao dela sem nenhum aviso.</li>
+     * </ul>
+     *
+     * <p>Qualquer teste reprovado devolve a ficha intacta: o receptor ve
+     * {@code updated == current} e sai sem gravar nem transmitir, entao nao ha
+     * erro nem estouro - o pedido simplesmente nao aconteceu. E o mesmo
+     * tratamento que o receptor ja dava a "skill inexistente no REMOVE".
+     *
+     * <p>A comparacao de nome e' sem diferenciar caixa, igual a
+     * {@link SheetData#withoutSkill} e {@link SheetData#withSkillMoved}.
+     */
+    private static SheetData updateSkill(SheetData current, SheetSkillPayload payload) {
+        int index = payload.index();
+        if (index < 0 || index >= current.skills().size()) {
+            return current;
+        }
+        String name = payload.skill() == null ? "" : payload.skill().trim();
+        String description = payload.description() == null ? "" : payload.description();
+        if (name.isEmpty() || name.length() > SheetData.SKILL_MAX
+                || description.length() > SheetData.SKILL_DESC_MAX) {
+            return current;
+        }
+        if (!current.skills().get(index).name().equalsIgnoreCase(name)) {
+            return current;
+        }
+        return current.withSkill(index, name, description);
     }
 
     /**

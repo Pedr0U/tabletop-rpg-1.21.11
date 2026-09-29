@@ -57,8 +57,6 @@ public abstract class CharacterSheetScreen extends Screen {
     /** Largura do painel: acompanha a janela, com teto. */
     protected static final int MIN_PANEL_W = 200;
     protected static final int MAX_PANEL_W = 360;
-    /** Lado dos botoes de seta. */
-    protected static final int ARROW_SIZE = 20;
     /**
      * <b>DECISAO PROVISORIA:</b> quanto cada clique da seta muda o valor.
      * O usuario nao especificou; 1 por clique foi a escolha inicial e esta
@@ -341,6 +339,17 @@ public abstract class CharacterSheetScreen extends Screen {
      * <p>O valor exibido e otimista ({@link #numericValue}) para que cliques
      * rapidos nao se percam; o servidor reenvia a ficha e o valor autoritativo
      * assume.
+     *
+     * <p><b>29/09/2026 (bug do valor otimista no HP/Mana):</b> o passo passou a
+     * ser CLAMPADO ao piso e ao teto do <b>proprio campo</b>
+     * ({@link #numericFloor}/{@link #numericCeiling}), e nao ao intervalo do
+     * atributo. Sem isto, um passo grande tornava o bug alcancavel em UM clique:
+     * com a Mana em 0, o botao de -10 gravava o pendente -10, o servidor cortava
+     * para 0 e o eco trazia 0; como -10 != 0 e -10 estava dentro de [-30, 30], o
+     * pendente sobrevivia a regra do eco e a tela ficava presa mostrando "-10"
+     * com a barra vazia. O clamp no ponto de origem resolve: no limite o passo
+     * vira no-op (nem pendente, nem envio), entao nao ha valor otimista invalido
+     * para a regra do eco segurar.
      */
     protected void stepNumeric(String field, int delta) {
         if (!canEdit || sheet == null) {
@@ -349,10 +358,34 @@ public abstract class CharacterSheetScreen extends Screen {
         int base = pendingNumeric.containsKey(field)
                 ? pendingNumeric.get(field)
                 : sheet.getNumeric(field);
-        int next = saturatingAdd(base, delta);
+        int next = Math.max(numericFloor(field),
+                Math.min(numericCeiling(field), saturatingAdd(base, delta)));
+        if (next == base) {
+            return; // ja no limite do proprio campo: nao ha o que enviar
+        }
         pendingNumeric.put(field, next);
         ClientPlayNetworking.send(new RpgNetworking.SheetFieldPayload(
                 targetName, field, Integer.toString(next)));
+    }
+
+    /**
+     * Piso legal do <b>proprio campo</b>, usado pelo clamp de
+     * {@link #stepNumeric}.
+     *
+     * <p>29/09/2026: o padrao e "sem piso" de proposito. Quem ja tinha limite
+     * proprio (o atributo, com piso e teto definidos pelo Mestre) e limitado em
+     * outro lugar -- {@code StatusScreen} e o responsavel -- e nenhum outro
+     * campo da base pode ser mudado aqui. A vida e a Mana sao os unicos com
+     * piso fixo, e e o {@code StatusScreen} que sobrescreve este metodo (e o
+     * do teto) para eles.
+     */
+    protected int numericFloor(String field) {
+        return Integer.MIN_VALUE;
+    }
+
+    /** Teto legal do campo; ver {@link #numericFloor}. */
+    protected int numericCeiling(String field) {
+        return Integer.MAX_VALUE;
     }
 
     /** Valor a exibir: o otimista se houver, senao o do servidor. */
@@ -409,13 +442,16 @@ public abstract class CharacterSheetScreen extends Screen {
      * campo a campo. E o eco do estado ({@link #onSheetState}); os resets
      * legitimos (modelo novo, tela recriada) limpam o mapa inteiro na mao.
      *
-     * <p>A faixa legal e a do atributo
-     * ({@link SheetData.Attributes#VALUE_MIN}/{@code VALUE_MAX}), que e o
-     * campo que a rajada escreve. Para os outros campos do mesmo mapa (HP e
-     * Mana, que nao tem teto na tela) um pendente fora dessa faixa e
-     * simplesmente descartado e o valor autoritativo aparece: e a direcao
-     * segura, e nao muda nada no uso normal, porque o eco do proprio clique traz
-     * o mesmo numero.
+     * <p><b>28/09/2026:</b> a faixa legal deixou de ser a constante e passou a ser
+     * <b>o intervalo que o Mestre definiu</b> e que veio na propria ficha
+     * ({@code sheet.attributeValueMin/Max}). E o que mantem o eco coerente
+     * depois de uma mudanca de limite: se o Mestre baixar o teto para 20 com um
+     * valor otimista de 25 pendente, o 25 sai do mapa e o numero autoritativo
+     * aparece, em vez de a tela ficar mostrando um valor que a ficha ja nao
+     * aceita. Para os outros campos do mesmo mapa (HP e Mana, que nao tem teto
+     * na tela) um pendente fora dessa faixa e simplesmente descartado: e a
+     * direcao segura, e nao muda nada no uso normal, porque o eco do proprio
+     * clique traz o mesmo numero.
      */
     private void reconcilePendingNumeric() {
         if (sheet == null) {
@@ -424,15 +460,15 @@ public abstract class CharacterSheetScreen extends Screen {
         }
         pendingNumeric.entrySet().removeIf(entry -> !keepPending(entry.getValue(),
                 sheet.getNumeric(entry.getKey()),
-                SheetData.Attributes.VALUE_MIN, SheetData.Attributes.VALUE_MAX));
+                sheet.attributeValueMin(), sheet.attributeValueMax()));
     }
 
     /**
      * Soma que trava no limite do {@code int} em vez de dar a volta.
      *
-     * <p><b>Por que importa aqui:</b> os atributos tem teto 30 e piso -30
-     * ({@code SheetData.Attributes.VALUE_MAX/VALUE_MIN}), e o valor de uma
-     * pericia tem piso 0. Com {@code base + delta} simples, um valor em
+     * <p><b>Por que importa aqui:</b> os atributos tem teto e piso definidos pelo
+     * Mestre (28/09/2026, vindos na ficha), e o valor de uma pericia tem piso 0.
+     * Com {@code base + delta} simples, um valor em
      * {@code Integer.MAX_VALUE} mais um clique viraria {@code MIN_VALUE} e esse
      * numero negativo seria gravado na ficha do servidor.
      *

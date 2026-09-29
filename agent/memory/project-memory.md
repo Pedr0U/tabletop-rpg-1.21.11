@@ -1370,3 +1370,247 @@ geral: ele nao detalhou qual dos quatro itens da lista de teste percorreu, entao
 e "aprovado pelo usuario", e nao "cada item conferido individualmente". Relatorio:
 `agent/reports/2026-09-28_camera-livre-mao-caido-scroll-popup.md`; commit e tag desta
 rodada estao registrados em `GitHub/agent/VERSIONAMENTOS.md`.
+
+### FATO verificado - 28/09/2026: limites de valor viraram dado do modelo (rodada dos 5 itens)
+
+Rodada dos cinco itens de UI que o usuario pediu. Relatorio completo, com o que ficou
+pendente: `agent/reports/2026-09-28_cinco-mudancas-ficha-skills-sheet-editor.md`. Estado
+ao pausar: **itens 2, 4 e 5 prontos e com build verde; itens 1 e 3 NAO implementados; nada
+commitado** (o C05 continua sendo o ultimo checkpoint). Antes de mexer nesses arquivos,
+ler o relatorio: os itens 1 e 3 tem especificacao pronta.
+
+Duraveis desta rodada:
+
+- **FATO:** `StreamCodec.composite` tem **teto de 6 campos**. `SheetData` passou de 6 para 9
+  componentes e virou encoder/decoder manual, igual ao `SheetModel`, que ja era manual
+  porque tem 16. O Javadoc do `SheetModel` avisa que encoder e decoder sao lambdas
+  independentes: acrescentar em um lado so **compila** e quebra em runtime. Conferir os dois
+  lados com grep (`VAR_INT`) depois de mexer.
+- **FATO:** o clamp mais barato num record do Minecraft fica no **construtor compacto do
+  record EXTERNO**, nao no de cada record interno. Como os limites (`attributeValueMin`,
+  `attributeValueMax`, `periciaValueMax`) agora sao campos do `SheetData`, todo caminho que
+  reconstroi a ficha fica limitado de uma vez: `withField`, `withPericiaValue`,
+  `mutatePericia`, `align` e a leitura de NBT de mundo velho. Os records internos
+  (`AttributeValue`, `Pericia`) ficaram so com teto absoluto largo (-999..999 e 0..999).
+- **FATO:** baixar o teto no editor **corta valores ja salvos**, porque `SheetModel.align`
+  reescreve os limites na ficha que reconstroi e o construtor do `SheetData` aplica o clamp.
+  Os limites tambem passam a ser gravados no NBT de cada jogador (3 chaves
+  `optionalFieldOf`), entao o modelo e a fonte e o NBT da ficha e uma copia.
+- **FATO:** `SheetModel.sanitizePericias` deduplica por **id**, nao por nome. Dois nomes
+  iguais com ids diferentes ja coexistiam; o unico obstaculo era a recusa em
+  `withPericiaText` mais a reversao da caixa em `SheetEditorScreen.periciaRow`. Por isso
+  "deixar digitar nome repetido e travar o Save" foi mudanca pequena.
+- **FATO:** com dois nomes de pericia iguais, `/rpg roll <pericia>` rola **a primeira** das
+  duas, porque `MasterCommands.findPericia` (`MasterCommands.java:466-481`, circa de
+  466-481 antes desta rodada) faz o proprio laco e devolve o primeiro nome normalizado.
+  Consequencia aceita, nao corrigida.
+- **FATO:** as telas da ficha (`StatusScreen`, `CharacterSheetScreen`) **nao usam chave de
+  traducao**: todo texto e literal em ingles no Java. So o `SheetEditorScreen` tem chaves
+  `screen.tabletoprpg.sheet_editor.*`, em `assets/tabletop-rpg/lang/en_us.json` (o unico
+  arquivo de lang do projeto).
+- **FATO:** a ficha **nao tem `EditBox` de nome de pericia nem de atributo**. O primeiro
+  campo e o nome do personagem, com rotulo configuravel (default "Name"); o bloco se chama
+  `Identity` no `SheetData`, e `SheetData.defaultSheet(playerName)` ja coloca o **nome do
+  jogador** no campo de nome do personagem. Atributo e pericia usam botoes `-`/`+`.
+- **FATO:** `Codec.encodeStart` devolve `DataResult<Tag>`, e so o `parse` aceita `Tag`.
+  Declarar `CompoundTag` no resultado de `encodeStart` nao compila; o `CompoundTag` e o
+  tipo concreto do NBT gravado, nao o tipo do retorno.
+- **HIPOTESE:** a cor nova `COL_DESC_BG = 0xF2090A0E` contra o painel `0xF216161C` deve
+  ficar perceptivel (mais escuro no canal azul). So o jogo confirma; se ficar chapado,
+  desce para perto de `0xF2090A0E` com mais alpha ou apaga a moldura.
+
+### 2026-09-28 (tarde) - itens 1 e 3 implementados, catalogo e build verdes
+
+**CORRECAO do bloco anterior:** os itens **1** (campo Player) e **3** (botao Edit na skill)
+tambem foram implementados depois do corte do turno. O estado "3 de 5" que ficou escrito
+no relatorio e na memoria **nao e mais o estado atual**. Build final com os 5 itens:
+**BUILD SUCCESSFUL em 19s**, `scanEncoding` OK em 96 arquivos, 20 testes sem falha, e
+`check-catalogo.ps1` sem divergencia. Nada commitado: o C05 (`d29d5ee`) continua sendo o
+ultimo checkpoint, por decisao do usuario.
+
+- **FATO:** acrescentar um campo **no fim** de um `StreamCodec.composite` e simetrico por
+  construcao, porque `composite` pareia encoder e decoder posicao a posicao. O aviso de
+  "encoder e decoder sao lambdas independentes" vale para os `VAR_INT` manuais do
+  `SheetModel`/`SheetData`, **nao** para o `composite` do `SheetSkillPayload` nem para o
+  `STREAM_CODEC` do `Identity`. Ainda assim, campo no fim e a unica ordem que sobrevive a
+  uma base ja em uso: qualquer campo no meio desloca os seguintes.
+- **FATO:** `Identity.playerName` e o **quinto** componente do record, no fim, com
+  `clean(..., MAX_NAME, "")`; vazio e valor legitimo. Persistencia por
+  `optionalFieldOf(..., "")`, que mantem a leitura das fichas salvas antes da mudanca.
+- **FATO:** `SheetData.labelOf` pergunta ao **modelo** primeiro, e o `default` do
+  `SheetModel.labelOf` devolve a **propria chave** (`playername` -> "playername"). Como a
+  ficha nao usa chave de traducao, o caso novo devolve o literal "Player" **no modelo** e
+  nao no `SheetData`: um caso novo em `SheetData.labelOf` seria codigo morto.
+- **FATO:** o `SkillsScreen` guarda a selecao por **nome** e reencora o **indice** pelo
+  nome a cada ficha recebida (`onSheetReceived`). Sem isso, apos um add/remove/move o
+  `Edit` carregava e o `Save` gravava na skill que deslizou de posicao.
+- **FATO:** o servidor recusa em silencio o `update` de skill quando o indice esta fora da
+  faixa **ou** quando o nome em diante nao bate com a skill naquele indice
+  (`RpgNetworking.updateSkill`). E a defesa contra reordenacao entre o clique e o Save; a
+  recusa silenciosa segue o padrao do resto do receptor.
+- **FATO:** `SheetData.withSkill(int, String, String)` **recusa** renomear para um nome que
+  outra skill ja usa, porque `sanitizePericias`/`sanitizeSkills` mantem a primeira e o
+  resultado viraria dependente da ordem da lista.
+- **FATO:** o modo de edicao do `SkillsScreen` **nao sobrevive a um `init()`**. E
+  deliberado: um `Save` sobre texto que o jogador nao digitou e pior do que voltar ao modo
+  `Add`. O `Save` em modo edicao tambem nao limpa as caixas, porque a saida vem do estado
+  autoritativo do servidor.
+- **FATO (corrige a skill `catalogo-sync`):** `FUNCIONALIDADES-E-COMANDOS.md` **esta
+  versionado** neste repositorio (`git status` mostra ` M` nas edicoes desta rodada). A
+  skill afirma que o arquivo nao esta no git e que nao ha como recuperar a versao anterior.
+  Aqui da para recuperar pelo git, entao o cuidado e menor do que a skill sugere.
+- **HIPOTESE:** o campo `Player` com meia largura e piso de 60px (`max(60, boxW / 2)`) fica
+  legivel, e o `neededRows + 1` so aumenta a rolagem da coluna, sem quebrar layout, mesmo
+  em resolucao baixa. So o jogo confirma.
+
+### 2026-09-29 - teste em jogo dos 5 itens e o titulo da secao
+
+- **FATO:** o usuario **testou em jogo os 5 itens** desta rodada e disse que "o restante ta
+  funcionando normal". O unico problema relatado foi o titulo da secao da ficha, que
+  aparecia como `Name` e ele queria `Identity`.
+- **FATO (corrige o relato, nao o codigo):** **nao existe literal `"Identity"` no codigo**,
+  nem no `HEAD`. O titulo da primeira secao da ficha era
+  `addSection(model.nameLabel(), ...)` em `StatusScreen.buildPanel`, e o default de
+  `nameLabel` e `"Name"` (`SheetModel.java: SheetModel`, tanto no construtor compacto quanto
+  no `optionalFieldOf("nameLabel", "Name")` do codec). **A linha nao estava no diff desta
+  rodada**, entao o campo Player nao causou a troca. Os outros tres titulos (`Vitals`,
+  `Progress`, `Attributes`) ja eram literais: aquele era o unico que punha o rotulo do
+  **campo** no lugar do nome da **secao**, e com modelo padrao a ficha mostrava `Name` como
+  titulo e `Name:` como primeiro campo.
+- **FATO (correcao aplicada):** o titulo virou o literal `"Identity"`, igual aos outros tres.
+  O que continua vindo do modelo e o rotulo do **campo** (`SheetData.labelOf`), que e o que o
+  Mestre renomeia no Sheet Editor. **Titulo de secao e rotulo de campo nao sao a mesma
+  coisa** — essa confusao ja produziu um relato de bug com causa attribution errada.
+- **FATO:** `model.nameLabel()` segue em uso na ficha para o **rotulo do campo**
+  `characterName` (`StatusScreen.java: addField`, via `SheetData.labelOf`). Se um dia o titulo
+  da secao virar configuravel, o caminho e um rotulo novo no `SheetModel`, e nao reaproveitar
+  o `nameLabel`.
+- **Pendente de teste em jogo:** a correcao do titulo (mudanca de literal, build verde, risco
+  baixo) e a lista da secao "Proximos passos" deste bloco. O catalogo nao precisou mudar,
+  porque nao documentava a origem do titulo.
+
+### 2026-09-29 - bloco de vida/mana em 3 linhas e renome para Player Sheet
+
+O usuario pediu mudanca maior de layout: o bloco de vida passou a 3 linhas por recurso
+(titulo do modelo | teto + barra maior | 6 botoes de passo) e o botao `Status` do menu virou
+`Player Sheet`. Nada commitado; aprovado por ele, validado so por build, testes e revisao.
+
+- **FATO (o bug mais importante da rodada):** uma contagem de linhas de layout que so aparece
+  em `optionalRows` como **subtracao**, e nunca na base, fica curta **pelo valor subtraido** —
+  e o erro vale **nos dois casos**, com a feature ligada e desligada. Em `StatusScreen.buildPanel`
+  as 3 linhas da Mana entravam so como `isEnabled("mana") ? 0 : 3`, entao `neededRows` era 3
+  linhas curto, `maxLeftScroll` ficava curto, e os ultimos atributos ficavam **inalcancaveis** e
+  ainda desenhados fora do painel, disputando espaco com o `Back`. **Build, 20 testes,
+  `scanEncoding` e `check-catalogo.ps1` aprovavam com o defeito.** So a revisao de codigo achou.
+  Conta correta: `3 + 5 + 3 + 3 + 2 + attrRowCount` (3 titulos + 5 campos de identidade +
+  3 de HP + 3 de Mana + 2 de Progress + `attrRowCount`).
+- **FATO:** `CharacterSheetScreen.reconcilePendingNumeric` valida os pendentes de
+  `pendingNumeric` contra `sheet.attributeValueMin()/attributeValueMax()`, o intervalo do
+  **ATRIBUTO**, e nao contra o piso do recurso. Com um botao de passo de 10 isso vira
+  alcancavel em **um clique**: Mana 0 -> pendente -10 -> servidor corta para 0 -> eco traz 0 ->
+  `-10 != 0` e -10 esta em [-30,30] -> o pendente sobrevive e a tela fica presa mostrando
+  "-10" com a barra vazia. **A correcao certa e clampar na origem** (`stepNumeric`, antes de
+  gravar e enviar, com `if (next == base) return;`), nao mexer na reconciliacao: passo que nao
+  muda nada nao vira pendente. Os ganchos `numericFloor`/`numericCeiling` com default
+  ilimitado evitam endurecer o caso comum.
+- **FATO:** o padrao de rolagem da `StatusScreen` ja existia para a coluna de pericias —
+  `perScroll` + `clampPerScroll` + `isOverPericiaColumn` + `rebuildWidgets()` dentro de
+  `mouseScrolled`, com `int step = scrollY < 0 ? 1 : -1;`. A coluna esquerda replicou o mesmo
+  (`leftScroll`, `maxLeftScroll`, `clampLeftScroll`, `isOverLeftPanel`) e **nao** foi preciso
+  inventar scroll nem barra visual: quem rola e so com o cursor em cima da coluna, e o offset
+  so e construido quando `maxLeftScroll > 0`. Rolar recria widgets, entao ha um guarda de
+  campo com foco (`isEditingField`) que trava a rolagem para nao matar texto em digitacao.
+- **FATO:** `check-catalogo.ps1` **nao** pega referencia a simbolo morto nem texto
+  descritivo desatualizado. Ele compara comando executavel, contagem de linhas da tabela de
+  teclas e nome de tela. As tres referencias a `addResourceRow` (metodo removido nesta rodada)
+  so apareceram por leitura do documento.
+- **FATO:** o titulo do bloco de vida vem do modelo (`model.hpLabel()` / `model.manaLabel()`,
+  defaults `HP`/`Mana`, ja editaveis no Sheet Editor), entao **nenhum campo novo** foi criado
+  em `SheetModel`, codec, NBT ou payload. O cabecalho `Vitals` foi **removido** e substituido
+  pelo titulo do recurso.
+- **FATO (corrige o rotulo):** `RpgMenuScreen.java: buildMenu` tem o literal do botao da
+  ficha; era `Status` e virou `Player Sheet` em 29/09/2026. A **classe** continua
+  `StatusScreen` e o titulo desenhado no topo da ficha continua `Sheet: <jogador>`
+  (`CharacterSheetScreen.java: titleText`) — o usuario decided renomear **so** o botao. Nao ha
+  chave de traducao envolvida: `en_us.json` nao tem nenhuma ocorrencia de "status".
+- **HIPOTESE:** `rowH` no piso de 12 continua legivel com 3 linhas por recurso, e a barra com
+  `rowH - 2` de altura comporta o texto de 8px sem sair das bordas. So o jogo confirma.
+  **29/09/2026: confirmado pelo usuario** — a legibilidade passou, o bloco de 3 linhas e os 6
+  botoes funcionaram.
+- **FATO (bug achado pelo usuario no primeiro teste, 29/09/2026):** `drawY` so cortava as
+  linhas **acima** do topo (`y + rowH <= contentTop`); as linhas **abaixo** da janela visivel
+  eram montadas no Y real e apareciam sobre o rodape e o botao `Back`. `maxLeftScroll` limita
+  o quanto rola, mas nao esconde o que esta fora da janela — as duas metades do problema. O
+  corte de baixo tem que usar **`leftBottom`** (e nao `contentBottom`), porque e o mesmo par
+  que `maxLeftScroll` usa em `visible = (leftBottom - leftTop) / rowH`: com o mesmo criterio
+  nas duas contas, `maxLeftScroll = leftTotalRows - visiveis` garante a ultima linha exata.
+  Corrigido para `foraDoTopo || foraDoFundo` mandando a linha para `this.height + 64`.
+- **FATO (padrao que vale para qualquer rolagem por linhas):** a coluna de pericias nunca teve
+  esse bug porque **nao constroi** a linha que nao cabe — o laco vai ate `perVisibleCount`. A
+  coluna esquerda constroi tudo e esconde o que nao cabe. Prefira **nao construir** a
+  esconder; quando nao der, o corte tem que ser nas **duas** pontas e com a **mesma** conta do
+  `maxScroll`. O sintoma (texto sobre o `Back`) e indistinguivel do bug de `neededRows` curto:
+  nos dois casos e transbordo de layout, e nenhum build, teste unitario ou detector de
+  catalogo pega transbordo — so o jogo. **Nao valide layout por aritmetica de constantes.**
+- **FATO (29/09/2026, asimetria entre as colunas):** duas colunas no mesmo painel so parecem
+  iguais se **o topo vem da mesma variavel** e **o rodape e o mesmo resto de linha**. A
+  `StatusScreen` tinha as duas falhas: `perTitleH` era `rowHOrDefault` (divisao por **12 linhas
+  fixas**) contra o `rowH` real de `fitRowHeight` (divisao pelas ~19 linhas reais), e a coluna
+  de pericias **estica** (`perAvail / perCount`) enquanto a esquerda terminava numa fronteira
+  de `rowH`. As duas so coincidiam por acaso, quando ambas batiam no `MAX_ROW_H` de 20 — por
+  isso o desalinhamento so aparecia em janela baixa, e valia ate **8px** no topo e **11px** no
+  rodape. Correcao: `perTitleH = rowH` (topo igual **por construcao**) e
+  `rowH = disponivel / linhasVisiveis` na esquerda (mesma conta de preenchimento da direita),
+  com o clamp da rolagem **depois** do ajuste. Sem risco de passar a rolar: quando cabe,
+  `linhasVisiveis >= leftTotalRows` e o novo `rowH` fica <= o antigo.
+- **FATO (mesmo caminho, bug latente):** `perVisibleCount()` usava `contentTop`/
+  `contentBottom` (externos, PANEL_PAD a mais) enquanto o `buildPanel` desenha em
+  `leftTop`/`leftBottom` (internos). A conta superestimava as pericias visiveis, `maxPerScroll`
+  ficava curto e a ultima pericia podia ficar inalcancavel. **E a terceira vez** que a mesma
+  classe de bug aparece nesta tela: `neededRows` curto, `drawY` sem corte de baixo, e contagem
+  com os limites errados. **Nenhum dos tres foi pego por build, teste unitario, `scanEncoding`
+  ou `check-catalogo`** — todos os tres so apareceram em revisao de codigo ou no jogo.
+- **FATO (aprendizado de metodo):** "as colunas estao desigual" e um sintoma de **duas**
+  assimetrias possiveis (topo e rodape), e cada uma tem uma correcao diferente. Vale ler a
+  geometria dos dois lados antes de propor ajuste, e perguntar o alvo quando as correcoes tem
+  consequencias visuais diferentes — aqui grow de `rowH` em 1-2px. O que ajudou a decidir foi
+  numeros: `rowHOrDefault`/`12` vs `fitRowHeight`/`19` com `MIN_ROW_H=12` e `MAX_ROW_H=20`
+  dao a diferenca maxima exata, e ela so aparece abaixo da faixa em que as duas batem no teto.
+  **CONFIRMADO EM JOGO pelo usuario em 29/09/2026:** a diferenca de altura ficou normal.
+- **FATO (29/09/2026, ORDEM DE DESENHO — o mais facil de errar desta tela):** em
+  `CharacterSheetScreen.render` a ordem e titulo -> `super.render()` (linha 930, **desenha os
+  widgets**) -> "Editable" -> `renderTopLeft` -> `textLines` -> `renderContent` (linha 954).
+  Portanto **qualquer coisa que um WIDGET mostra tem que estar pronta antes do primeiro
+  `super.render()`**, ou seja no `init()`/`buildPanel`/`applyExtraState` — nunca no
+  `renderContent`. O sintoma e um **frame em branco** que so aparece quando os widgets sao
+  recriados (scroll, resize, troca de modelo), entao parece "pisca" e e facil de culpar a coluna
+  errada. Foi exatamente assim com a sigla do botao de atributo da pericia: nascia
+  `Component.literal("")` e era escrita em `drawPericias` (dentro de `renderContent`), um frame
+  atras. `applyExtraState()` roda no fim do `init()` (via `applySheetToWidgets`), e e por isso
+  que o `active` dos botoes nunca piscou — so o `message` piscava. **Regra:** `active` e
+  `message` de um widget tem origens diferentes no ciclo de vida; tratar as duas juntas.
+- **FATO (mesmo caminho, por que as DUAS colunas piscavam):** `mouseScrolled` chama
+  `rebuildWidgets()` nos dois ramos, e ele limpa a lista de filhos e refaz o `init()` inteiro —
+  entao rolar a coluna esquerda recria os widgets da coluna de pericias tambem. **Consequencia
+  mais grave que o pisca:** o texto em digitacao e a rajada de `HoldStepButton` morrem a cada
+  rolagem (da para a rolagem estar bloqueada com um campo em foco, e nao com rajada ativa).
+  Isolar as colunas exigiria mexer no `init()` compartilhado com o `SkillsScreen` — mudanca de
+  arquitetura de tela, **nao feita**; o usuario so pediu o sintoma e ele foi corrigido na origem.
+
+### 2026-09-29 - rodada fechada em jogo e checkpoint
+
+O usuario testou em jogo, nesta ordem, e as tres correcoes passaram: o corte de baixo do
+`drawY` ("deu certo, mas so uma coisa"), o alinhamento das duas colunas ("a questao da
+diferenca de altura esta normal agora") e o pisca do botao de atributo ("perfeito"). **As
+hipoteses que sobraram nesta tela tambem foram confirmadas na pratica**: `rowH` no piso de 12
+fica legivel com 3 linhas por recurso, e a barra com `rowH - 2` comporta o texto de 8px.
+
+**Nao exercitado por ele, e portanto sem validacao em jogo:** Mana **desligada** pelo Mestre,
+modelo com 30 pericias, janela mais baixa que a que ele usou, e persistencia de vida/mana
+depois de fechar e reabrir o jogo. Nada disso quebrou build ou catalogo; sao lacunas de
+teste, nao bugs conhecidos.
+
+**Checkpoint:** tag `checkpoint-20260929-1030-bloco-vida-mana-ficha`, na branch `main`, sem
+push. O commit fecha as **duas** rodadas acumuladas (a de 5 itens de 28/09 e esta), porque o
+protocolo e nao commitar em partes. O hash esta em `GitHub\agent\VERSIONAMENTOS.md` (fora do
+repo, de proposito: escrever o hash na memoria do projeto deixaria a arvore suja de novo).
