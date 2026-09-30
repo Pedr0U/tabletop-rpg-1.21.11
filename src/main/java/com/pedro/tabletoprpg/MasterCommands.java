@@ -605,12 +605,12 @@ public class MasterCommands {
         if (outcome != null) {
             message += tailText(outcome);
             total += outcome.total();
-            if (outcome.critical()) {
-                message += " §c§l CRIT";
+            if (outcome.critical() && !hasGrid(outcome)) {
+            message += " §c§l CRIT";
             }
         }
 
-        message += " = §e§l" + total;
+        message += outcome != null && hasGrid(outcome) ? "\n§6§eTOTAL §f= §l§a" + total : " = §e§l" + total;
 
         if (SessionManager.isMaster(player)) {
             player.sendSystemMessage(Component.literal(message));
@@ -855,9 +855,12 @@ public class MasterCommands {
             return null;
         }
 
+        // Com '#' o total vai para a linha propria: colado no fim da ultima volta
+        // ele se confunde com o subtotal dela (30/09/2026, pedido do jogador).
+        String totalPrefix = hasGrid(outcome) ? "\n§6§eTOTAL §f= §l§a" : " §f= §l§a";
         String message = "§6§e" + player.getName().getString()
-            + " §frolled a: §b" + joinParts(outcome) + " §f= §l§a" + outcome.total();
-        if (outcome.critical()) {
+                + " §frolled a: §b" + joinParts(outcome) + totalPrefix + outcome.total();
+        if (outcome.critical() && !hasGrid(outcome)) {
             // O critico e so um marcador: o total ja saiu da somatoria.
             message += " §c§l CRIT";
         }
@@ -935,8 +938,28 @@ public class MasterCommands {
         int shown = Math.min(rounds.size(), DiceFormula.DISPLAY_ROUNDS);
         for (int i = 0; i < shown; i++) {
             DiceFormula.Round round = rounds.get(i);
-            sb.append("\n§b ").append(round.label()).append(' ').append(facesBody(round.faces()))
-                    .append(" §f= §a").append(round.subtotal());
+            // Volta com formula dentro (4#2d20+2d6): os termos vao um por um,
+            // com o mesmo separador de cor da rolagem sem grade, para cada tipo
+            // de dado ficar no seu proprio colchete. Volta sem termo interno nao
+            // tem o que separar, e continua no rotulo + faces achatadas.
+            StringBuilder body = new StringBuilder();
+            if (round.parts().isEmpty()) {
+                body.append(round.label()).append(' ').append(facesBody(round.faces()));
+            } else {
+                for (DiceFormula.Part inner : round.parts()) {
+                    appendRollTerm(body, inner.sign(), appendTermBody(inner));
+                }
+            }
+            sb.append("\n§b ").append(body)
+                    .append(" §f= §a").append(round.critical() ? "§l" : "").append(round.subtotal());
+            if (round.critical()) {
+                // A volta que teve dado critico ganha o subtotal em negrito e o
+                // marcador CRIT. O §r§b fecha a volta porque o §r desliga o
+                // estilo, e sem isso o negrito vaza para o rotulo da linha
+                // seguinte. O CRIT do fim da mensagem NAO vale na grade, porque
+                // quem marca o critico aqui e a propria linha.
+                sb.append(" §c§l CRIT").append("§r§b");
+            }
         }
         if (rounds.size() > shown) {
             sb.append("\n§7 ...+").append(rounds.size() - shown).append(" more");
@@ -944,14 +967,34 @@ public class MasterCommands {
         return sb.toString();
     }
 
+/**
+     * A rolagem tem grade quando alguma peca foi repetida.
+     *
+     * <p>Nao procura o {@code #} no texto: quem carrega o {@code #} e a peca, e o
+     * texto da cauda pode ter o caractere sem ser grade.
+     *
+     * @param outcome resultado da rolagem, que pode ser nulo quando nao ha cauda
+     */
+    private static boolean hasGrid(DiceFormula.Outcome outcome) {
+        for (DiceFormula.Part part : outcome.parts()) {
+            if (part.repeat() > 1) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /**
-     * As faces entre colchetes, com o descartado em vermelho e riscado.
+     * As faces entre colchetes, com o descartado em vermelho e riscado e o
+     * critico mantido em amarelo.
      *
      * <p><b>Por que {@code §r} antes do {@code §b}:</b> o riscado e um
      * <b>estilo</b>, independente da cor. So trocar a cor para aqua deixaria o
      * dado cortado em aqua <b>riscado ainda</b>, que e o oposto do que o
      * jogador precisa ver. O {@code §r} zera o estilo e devolve a cor de
-     * contexto, que aqui dentro do termo ja e aqua.
+     * contexto, que aqui dentro do termo ja e aqua. O mesmo vale para o
+     * amarelo do critico, que precisa devolver o aqua para o proximo dado da
+     * lista nao sair amarelo sem ser critico.
      */
     private static String facesBody(List<DiceFormula.Face> faces) {
         StringBuilder sb = new StringBuilder("[");
@@ -963,6 +1006,8 @@ public class MasterCommands {
             DiceFormula.Face face = faces.get(i);
             if (face.discarded()) {
                 sb.append("§c§m").append(face.text()).append("§r§b");
+            } else if (face.critical()) {
+                sb.append("§e§l").append(face.text()).append("§r§b");
             } else {
                 sb.append(face.text());
             }

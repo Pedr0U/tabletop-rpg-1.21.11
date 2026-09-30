@@ -199,20 +199,27 @@ public final class DiceFormula {
     }
 
     /**
-     * Um dado como saiu no chat, e se ele foi cortado por {@code kh}/{@code kl}/
-     * {@code dh}/{@code dl}.
+     * Um dado como saiu no chat, se ele foi cortado por {@code kh}/{@code kl}/
+     * {@code dh}/{@code dl} e se ele foi critico.
      *
      * <p><b>O descartado continua na lista, no slot em que caiu:</b> o jogador
      * precisa ver <b>o proprio dado que rolou</b> riscado, e nao uma contagem
      * ("dropped 1"), que nao diz <b>qual</b> foi.
+     *
+     * <p><b>O {@code critical} e o do dado, e o chat combina com o
+     * {@link #discarded}:</b> quem decide a cor e o {@code MasterCommands}, e ele
+     * so pinta de amarelo o critico que <b>sobrou</b>. O asterisco do
+     * {@link #text()} ja segue a mesma regra, para texto e cor nunca discordarem.
      */
     public static final class Face {
         private final String text;
         private final boolean discarded;
+        private final boolean critical;
 
-        private Face(String text, boolean discarded) {
+        private Face(String text, boolean discarded, boolean critical) {
             this.text = text;
             this.discarded = discarded;
+            this.critical = critical;
         }
 
         /** A face como saiu: {@code "6"}, {@code "6!6!2"}, {@code "3(+2)"}, {@code "18*"}. */
@@ -224,21 +231,30 @@ public final class DiceFormula {
         public boolean discarded() {
             return discarded;
         }
+
+        /** {@code true} quando o dado passou do limiar de {@code cN} ou saiu no maximo. */
+        public boolean critical() {
+            return critical;
+        }
     }
 
     /** Uma volta do operador {@code N#}: os dados dela e o subtotal da linha. */
     public static final class Round {
         private final String label;
         private final List<Face> faces;
+        private final List<Part> parts;
         private final long subtotal;
+        private final boolean critical;
 
-        private Round(String label, List<Face> faces, long subtotal) {
+        private Round(String label, List<Face> faces, List<Part> parts, long subtotal, boolean critical) {
             this.label = label;
             this.faces = List.copyOf(faces);
+            this.parts = List.copyOf(parts);
             this.subtotal = subtotal;
+            this.critical = critical;
         }
 
-        /** O rotulo do dado repetido, como o jogador escreveu. */
+        /** O rotulo do grupo repetido, como o jogador escreveu. */
         public String label() {
             return label;
         }
@@ -248,9 +264,29 @@ public final class DiceFormula {
             return faces;
         }
 
+        /**
+         * Os termos internos da volta, um por peca, na ordem em que foram
+         * rolados; lista vazia quando a volta repetida e um dado so.
+         *
+         * <p><b>Por que existe ao lado de {@link #faces()}:</b> a lista de
+         * faces achata todos os tipos num colchete so, e a linha da volta perde
+         * a informacao de qual face e de qual dado. Quem monta a mensagem
+         * precisa dos termos separados para dar um colchete proprio a cada um.
+         * {@link #faces()} continua igual, porque e ela que alimenta o critico
+         * da volta.
+         */
+        public List<Part> parts() {
+            return parts;
+        }
+
         /** O que entra no {@code " = 9"} do fim da linha. */
         public long subtotal() {
             return subtotal;
+        }
+
+        /** {@code true} quando algum dado <b>mantido</b> da volta foi critico. */
+        public boolean critical() {
+            return critical;
         }
     }
 
@@ -274,7 +310,7 @@ public final class DiceFormula {
             return parts;
         }
 
-        /** Verdadeiro quando algum dado <b>mantido</b> atingiu o limiar de {@code cN}. */
+        /** Verdadeiro quando algum dado <b>mantido</b> foi critico (limiar {@code cN} ou face maxima). */
         public boolean critical() {
             return critical;
         }
@@ -316,31 +352,64 @@ public final class DiceFormula {
     }
 
     /**
-     * Corpo de um termo: um dado (repetido N vezes) ou um numero fixo.
-     * Exatamente um dos dois e preenchido.
+     * Corpo de um termo: um dado (repetido N vezes), um numero fixo ou uma
+     * formula entre parenteses. Exatamente um dos tres e preenchido.
+     *
+     * <p><b>Por que uma formula inteira pode ser corpo de um termo:</b> o
+     * {@code N#} passou a valer para o que vem depois dele, e nao so para o
+     * primeiro dado. Sem este campo, {@code 2#d20+5} so poderia repetir o
+     * {@code d20} -- a constante de fora contaria uma vez, que e a leitura que o
+     * jogador nao fez ao digitar o "#" no comeco.
      */
     public static final class Group {
         private final int repeat;
         private final Dice dice;
         private final long flat;
+        private final String formulaLabel;
+        private final List<Term> terms;
 
         Group(int repeat, Dice dice, long flat) {
+            this(repeat, dice, flat, "", List.of());
+        }
+
+        Group(int repeat, Dice dice, long flat, String formulaLabel, List<Term> terms) {
             this.repeat = repeat;
             this.dice = dice;
             this.flat = flat;
+            this.formulaLabel = formulaLabel;
+            this.terms = List.copyOf(terms);
         }
 
         public int repeat() {
             return repeat;
         }
 
-        /** O dado, ou {@code null} se o termo for um numero fixo. */
+        /** O dado, ou {@code null} se o termo for um numero fixo ou uma formula. */
         public Dice dice() {
             return dice;
         }
 
         public long flat() {
             return flat;
+        }
+
+        /** Formula entre parenteses, ou lista vazia quando o termo nao tem uma. */
+        boolean formula() {
+            return !terms.isEmpty();
+        }
+
+        List<Term> terms() {
+            return terms;
+        }
+
+        /**
+         * O texto que o jogador escreveu para a formula do grupo, que e o que a
+         * linha da repeticao mostra. Guardar o trecho digitado, em vez de
+         * remontar a formula a partir das pecas, mantem o rotulo igual ao que
+         * foi digitado.
+         */
+        String formulaLabel() {
+            return formulaLabel;
         }
     }
 
@@ -503,6 +572,11 @@ public final class DiceFormula {
      * o argumento como o jogador digitou: {@code 4d6 kh3} e {@code 4d6kh3}
      * precisam dar a mesma coisa.
      *
+     * <p><b>A gramatica do {@code N#} cobre a formula inteira:</b> depois do
+     * {@code #} vem um grupo, e o grupo sem parenteses vai ate o fim da formula
+     * no nivel corrente. E por isso que {@code 2#d20+5} vale {@code 2 x (d20+5)}:
+     * o que o jogador digitou depois do {@code #} e o que se repete.
+     *
      * @throws SyntaxException se a formula nao bater com a gramatica, se
      *                         ultrapassar um teto, ou se pedir explosao
      *                         garantida
@@ -517,30 +591,10 @@ public final class DiceFormula {
         }
 
         Cursor cursor = new Cursor(source);
-        List<Term> terms = new ArrayList<>();
-        while (true) {
-            int sign = 1;
-            if (cursor.peek() == '+') {
-                cursor.next();
-            } else if (cursor.peek() == '-') {
-                sign = -1;
-                cursor.next();
-            }
-            terms.add(new Term(sign, parseGroup(cursor)));
-
-            if (cursor.atEnd()) {
-                break;
-            }
-            char next = cursor.peek();
-            if (next != '+' && next != '-') {
-                throw new SyntaxException("unexpected '" + next + "' at position " + (cursor.i + 1)
-                        + " in '" + source + "'");
-            }
-            // O sinal do proximo termo NAO e consumido aqui: o topo do laco e
-            // quem le '+' ou '-' e monta o sinal do Term. Consumir aqui
-            // destruiria o sinal e "d8-1" viraria "d8+1". O unico detalhe e
-            // garantir que sobra um caractere so: se fosse "++", o sufixo por
-            // dado ja teria comido os dois.
+        List<Term> terms = parseTerms(cursor, false);
+        if (!cursor.atEnd()) {
+            throw new SyntaxException("unexpected '" + cursor.peek() + "' at position " + (cursor.i + 1)
+                    + " in '" + source + "'");
         }
 
         Formula formula = new Formula(source, terms);
@@ -559,6 +613,97 @@ public final class DiceFormula {
         return sb.toString();
     }
 
+    /**
+     * Le uma sequencia de termos ate onde o <b>nivel corrente</b> acaba: no fim
+     * do texto, no {@code )} que fecha o parenteses ou no proximo {@code N#}.
+     *
+     * <p><b>Por que o proximo {@code N#} fecha o grupo:</b> e o que faz
+     * {@code 2#d20+3#d4} valer {@code 2 x d20 + 3 x d4}. Sem esta parada o
+     * primeiro {@code #} engoliria o segundo, e o jogador veria uma unica
+     * repeticao de um dado que ele nunca pediu.
+     *
+     * <p>O sinal do proximo termo NAO e consumido antes de olhar o {@code #}: o
+     * topo do laco e quem le {@code +} ou {@code -}. Sem o rebobinamento aqui,
+     * consumir o sinal e desistir do termo deixaria o sinal orfao na frente do
+     * {@code #}, e {@code 2#d20+3#d4} viraria {@code 2 x d20 - 3 x d4}.
+     *
+     * <p><b>O primeiro termo do grupo nunca e o {@code #} que fecha o grupo:</b>
+     * quem chamou esta funcao ja leu o proprio {@code N#}, e o {@code #} do
+     * primeiro termo abre um grupo dentro do grupo -- e por isso que
+     * {@code 2#(1#d6+2)} repete um {@code #} dentro de outro.
+     */
+    private static List<Term> parseTerms(Cursor cursor, boolean insideGroup) throws SyntaxException {
+        List<Term> terms = new ArrayList<>();
+        while (true) {
+            int sign = 1;
+            int signMark = cursor.i;
+            if (cursor.peek() == '+') {
+                cursor.next();
+            } else if (cursor.peek() == '-') {
+                sign = -1;
+                cursor.next();
+            }
+            if (insideGroup && !terms.isEmpty() && startsRepeat(cursor)) {
+                cursor.i = signMark;
+                break;
+            }
+            terms.add(new Term(sign, parseGroup(cursor)));
+
+            if (cursor.atEnd()) {
+                break;
+            }
+            char next = cursor.peek();
+            if (next == ')') {
+                break;
+            }
+            if (next != '+' && next != '-') {
+                throw new SyntaxException("unexpected '" + next + "' at position " + (cursor.i + 1)
+                        + " in '" + cursor.text() + "'");
+            }
+            // O sinal do proximo termo NAO e consumido aqui: o topo do laco e
+            // quem le '+' ou '-' e monta o sinal do Term. Consumir aqui
+            // destruiria o sinal e "d8-1" viraria "d8+1". O unico detalhe e
+            // garantir que sobra um caractere so: se fosse "++", o sufixo por
+            // dado ja teria comido os dois.
+        }
+        return terms;
+    }
+
+    /** O que vem a seguir e um {@code N#}, que abre um grupo repetido. */
+    private static boolean startsRepeat(Cursor cursor) {
+        int mark = cursor.i;
+        boolean digits = false;
+        while (!cursor.atEnd() && Character.isDigit(cursor.peek())) {
+            digits = true;
+            cursor.next();
+        }
+        boolean repeat = digits && cursor.peek() == '#';
+        cursor.i = mark;
+        return repeat;
+    }
+
+    /**
+     * Le {@code ( Formula )}, com aninhamento: o mesmo {@link Cursor} continua
+     * andando, entao o grupo interno tem os mesmos sinais, numeros e sufixos do
+     * texto de fora.
+     *
+     * @param openMark posicao do {@code (}, usada para a mensagem de erro
+     */
+    private static List<Term> parseParenthesized(Cursor cursor, int openMark) throws SyntaxException {
+        cursor.next();
+        List<Term> terms = parseTerms(cursor, true);
+        if (cursor.peek() != ')') {
+            throw new SyntaxException("missing ')' for the '(' at position " + (openMark + 1)
+                    + " in '" + cursor.text() + "'");
+        }
+        cursor.next();
+        if (terms.isEmpty()) {
+            throw new SyntaxException("nothing to roll between the parentheses at position "
+                    + (openMark + 1) + " in '" + cursor.text() + "'");
+        }
+        return terms;
+    }
+
     private static Group parseGroup(Cursor cursor) throws SyntaxException {
         // Prefixo de repeticao: "N#".
         int repeatMark = cursor.i;
@@ -572,6 +717,25 @@ public final class DiceFormula {
             }
         } else {
             cursor.i = repeatMark;
+        }
+
+        // Parentheses: "(...)", com ou sem o prefixo "N#".
+        int openMark = cursor.i;
+        if (cursor.peek() == '(') {
+            List<Term> terms = parseParenthesized(cursor, openMark);
+            return new Group(repeat, null, 0L, cursor.slice(openMark + 1, cursor.i - 1), terms);
+        }
+
+        if (repeat != 1) {
+            // Sem parenteses o grupo e tudo o que vem ate o proximo "N#" ou o
+            // fim do nivel corrente, para que "2#d20+5" repita a constante tambem.
+            int groupMark = cursor.i;
+            List<Term> terms = parseTerms(cursor, true);
+            if (terms.isEmpty()) {
+                throw new SyntaxException("'" + repeat
+                        + "#' must be followed by dice or a formula, like 6#4d6dl1");
+            }
+            return new Group(repeat, null, 0L, cursor.slice(groupMark, cursor.i), terms);
         }
 
         // Corpo: NdM com sufixos, ou numero fixo.
@@ -594,9 +758,6 @@ public final class DiceFormula {
         }
 
         cursor.i = countMark;
-        if (repeat != 1) {
-            throw new SyntaxException("'" + repeat + "#' must be followed by dice, like 6#4d6dl1");
-        }
         return new Group(1, null, cursor.requireInt("a number or a dice term"));
     }
 
@@ -765,16 +926,13 @@ public final class DiceFormula {
          * total de rolagens e exatamente a soma de {@code count * repeat}, e da
          * para recusar na hora. Quando ha explosao esse numero nao tem limite
          * fechado, e quem barra e o orcamento em tempo de execucao.
+         *
+         * <p>Os parenteses entram na conta com o {@code repeat} de fora: e o que
+         * impede {@code 100#(100d6)} de passar por baixo do teto so porque cada
+         * volta, sozinha, cabe nele.
          */
         void checkStaticBudget() throws SyntaxException {
-            long declared = 0;
-            for (Term term : terms) {
-                Dice dice = term.group.dice;
-                if (dice == null) {
-                    continue;
-                }
-                declared += (long) dice.count() * term.group.repeat();
-            }
+            long declared = countRolls(terms);
             if (declared > MAX_TOTAL_ROLLS) {
                 throw new SyntaxException("this formula asks for " + declared
                         + " dice; the limit is " + MAX_TOTAL_ROLLS);
@@ -790,63 +948,165 @@ public final class DiceFormula {
          * @throws SyntaxException se estourar o orcamento de rolagens
          */
         public Outcome evaluate(IntUnaryOperator roller) throws SyntaxException {
-            long total = 0;
-            boolean critical = false;
-            List<Part> parts = new ArrayList<>();
             Budget budget = new Budget();
-
-            for (Term term : terms) {
-                Group group = term.group;
-                Dice dice = group.dice;
-                if (dice == null) {
-                    long value = group.flat();
-                    total += term.sign() * value;
-                    parts.add(Part.fixed(term.sign(), Math.abs(value)));
-                    continue;
-                }
-
-                long groupTotal;
-                if (group.repeat() > 1) {
-                    // Com repeticao o detalhamento que importa e o subtotal de
-                    // cada volta, linha a linha; a lista corrida de 24 faces nao
-                    // ajuda ninguem. O texto puro ainda resume em uma linha.
-                    List<Round> rounds = new ArrayList<>(group.repeat());
-                    groupTotal = 0;
-                    for (int round = 0; round < group.repeat(); round++) {
-                        List<DieResult> list = rollPool(dice, roller, budget);
-                        applyKeepDrop(dice, list);
-                        long subtotal = reduce(dice, list);
-                        markCritical(list, budget);
-                        rounds.add(new Round(dice.label(), facesOf(dice, list), subtotal));
-                        groupTotal += subtotal;
-                    }
-                    parts.add(Part.repeated(term.sign(), dice.label(), rounds));
-                } else {
-                    // O rotulo do dado ("d20", "4d6kh3") vem antes das faces.
-                    // Sem ele o chat mostraria so "[7]" e o jogador nao
-                    // saberia o que rolou, que era o formato antigo.
-                    List<DieResult> list = rollPool(dice, roller, budget);
-                    applyKeepDrop(dice, list);
-                    groupTotal = reduce(dice, list);
-                    markCritical(list, budget);
-                    parts.add(Part.rolled(term.sign(), dice.label(), facesOf(dice, list)));
-                }
-
-                total += term.sign() * groupTotal;
-                critical |= budget.groupCritical;
-            }
-
-            return new Outcome(total, parts, critical);
+            List<Part> parts = new ArrayList<>();
+            long total = rollTerms(terms, parts, roller, budget);
+            return new Outcome(total, parts, budget.groupCritical);
         }
+    }
+
+    /**
+     * Dados declarados pela formula, contando o {@code repeat} em cada nivel.
+     *
+     * <p>Satura em {@link #MAX_TOTAL_ROLLS} + 1 porque so interessa saber se o
+     * orcamento estourou, e porque {@code 100#(100#(100#d6))} multiplica por 100
+     * varias vezes -- sem o teto, um parenteses muito aninhado estouraria o
+     * {@code long} e voltaria positivo, que e a mesma falha silenciosa que o
+     * {@link Cursor#readIntOrNull()} ja evita com numeros digitados.
+     */
+    private static long countRolls(List<Term> terms) {
+        long declared = 0;
+        for (Term term : terms) {
+            Group group = term.group;
+            if (group.formula()) {
+                declared = saturate(declared + countRolls(group.terms()) * group.repeat());
+            } else if (group.dice != null) {
+                declared = saturate(declared + (long) group.dice.count() * group.repeat());
+            }
+        }
+        return declared;
+    }
+
+    private static long saturate(long rolls) {
+        return rolls > MAX_TOTAL_ROLLS ? MAX_TOTAL_ROLLS + 1L : rolls;
+    }
+
+    /**
+     * Rola uma lista de termos, somando o total e guardando uma peca por termo.
+     *
+     * <p><b>O mesmo metodo serve para a formula inteira e para o conteudo de um
+     * grupo:</b> e o que faz {@code 4#(2d6+1d8+5)} e {@code 2#d20+5} darem
+     * exatamente o mesmo total que o jogador somaria na mao, em vez de repetir
+     * so o primeiro dado.
+     */
+    private static long rollTerms(List<Term> terms, List<Part> parts, IntUnaryOperator roller, Budget budget)
+            throws SyntaxException {
+        long total = 0;
+        for (Term term : terms) {
+            total += term.sign() * rollTerm(term, parts, roller, budget);
+        }
+        return total;
+    }
+
+    private static long rollTerm(Term term, List<Part> parts, IntUnaryOperator roller, Budget budget)
+            throws SyntaxException {
+        Group group = term.group;
+        if (group.formula()) {
+            return rollFormulaGroup(term, group, parts, roller, budget);
+        }
+
+        Dice dice = group.dice;
+        if (dice == null) {
+            long value = group.flat();
+            parts.add(Part.fixed(term.sign(), Math.abs(value)));
+            return value;
+        }
+
+        long groupTotal;
+        if (group.repeat() > 1) {
+            // Com repeticao o detalhamento que importa e o subtotal de
+            // cada volta, linha a linha; a lista corrida de 24 faces nao
+            // ajuda ninguem. O texto puro ainda resume em uma linha.
+            List<Round> rounds = new ArrayList<>(group.repeat());
+            groupTotal = 0;
+            for (int round = 0; round < group.repeat(); round++) {
+                List<DieResult> list = rollPool(dice, roller, budget);
+                applyKeepDrop(dice, list);
+                long subtotal = reduce(dice, list);
+                markCritical(list, budget);
+                List<Face> faces = facesOf(dice, list);
+                // Lista vazia: a volta repetida e um dado so, e nao ha termos
+                // internos para a linha separar.
+                rounds.add(new Round(dice.label(), faces, List.of(), subtotal, anyKeptCritical(faces)));
+                groupTotal += subtotal;
+            }
+            parts.add(Part.repeated(term.sign(), dice.label(), rounds));
+        } else {
+            // O rotulo do dado ("d20", "4d6kh3") vem antes das faces.
+            // Sem ele o chat mostraria so "[7]" e o jogador nao
+            // saberia o que rolou, que era o formato antigo.
+            List<DieResult> list = rollPool(dice, roller, budget);
+            applyKeepDrop(dice, list);
+            groupTotal = reduce(dice, list);
+            markCritical(list, budget);
+            parts.add(Part.rolled(term.sign(), dice.label(), facesOf(dice, list)));
+        }
+
+        return groupTotal;
+    }
+
+    /**
+     * Grupo repetido que tem formula dentro: cada volta rola a formula inteira
+     * de novo, com dados novos, e vira uma linha com o subtotal ja com as
+     * constantes do grupo.
+     */
+    private static long rollFormulaGroup(Term term, Group group, List<Part> parts,
+                                         IntUnaryOperator roller, Budget budget) throws SyntaxException {
+        if (group.repeat() == 1) {
+            // Sem '#' nao ha linha para montar: os termos de dentro entram direto
+            // na mensagem, como se o parenteses nao existisse.
+            return rollTerms(group.terms(), parts, roller, budget);
+        }
+
+        String label = group.formulaLabel();
+        List<Round> rounds = new ArrayList<>(group.repeat());
+        long groupTotal = 0;
+        for (int round = 0; round < group.repeat(); round++) {
+            List<Part> roundParts = new ArrayList<>();
+            long subtotal = rollTerms(group.terms(), roundParts, roller, budget);
+            List<Face> faces = facesOf(roundParts);
+            rounds.add(new Round(label, faces, roundParts, subtotal, anyKeptCritical(faces)));
+            groupTotal += subtotal;
+        }
+        parts.add(Part.repeated(term.sign(), label, rounds));
+        return groupTotal;
     }
 
     /** Congela a lista de dados no formato que o chat consome. */
     private static List<Face> facesOf(Dice dice, List<DieResult> list) {
         List<Face> faces = new ArrayList<>(list.size());
         for (DieResult die : list) {
-            faces.add(new Face(die.describe(dice), die.discarded));
+            faces.add(new Face(die.describe(dice), die.discarded, die.critical));
         }
         return faces;
+    }
+
+    /**
+     * Junta as faces das pecas de uma volta do grupo repetido, na ordem em que
+     * sairam, para a linha mostrar tudo que rolou naquela volta.
+     */
+    private static List<Face> facesOf(List<Part> parts) {
+        List<Face> faces = new ArrayList<>();
+        for (Part part : parts) {
+            faces.addAll(part.faces());
+        }
+        return faces;
+    }
+
+    /**
+     * Algum dado <b>mantido</b> da volta foi critico?
+     *
+     * <p>Usa a face, e nao o {@code Budget}: o {@code groupCritical} do orcamento
+     * e acumulado de toda a rolagem para o {@code CRIT} do fim da mensagem, e
+     * nao serve para dizer qual das linhas foi a que teve critico.
+     */
+    private static boolean anyKeptCritical(List<Face> faces) {
+        for (Face face : faces) {
+            if (!face.discarded() && face.critical()) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -969,7 +1229,11 @@ public final class DiceFormula {
         }
 
         DieResult die = new DieResult(chain.toString(), sum + dice.perDie());
-        die.critical = dice.critAt() >= 0 && die.value >= dice.critAt();
+        // Sem "cN" o critico e o maximo do dado (decisao do usuario, 30/09/2026):
+        // "2d20" saiu 20 e um 20 e o melhor resultado que o dado pode dar. Com
+        // "cN" o limiar escrito e o que vale, porque ai o jogador disse qual
+        // numero conta como critico.
+        die.critical = dice.critAt() >= 0 ? die.value >= dice.critAt() : die.value >= dice.sides();
         return die;
     }
 
@@ -1183,6 +1447,16 @@ public final class DiceFormula {
 
         Cursor(String source) {
             this.source = source;
+        }
+
+        /** O texto original (sem espacos), para as mensagens de erro. */
+        String text() {
+            return source;
+        }
+
+        /** O trecho digitado entre duas posicoes, como o jogador escreveu. */
+        String slice(int from, int to) {
+            return source.substring(from, to);
         }
 
         boolean atEnd() {
