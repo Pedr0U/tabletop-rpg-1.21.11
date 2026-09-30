@@ -966,9 +966,14 @@ public record SheetModel(
         // mundo, e o construtor do SheetData corta o que sobrou acima do novo teto
         // (ou abaixo do novo piso). Por isso baixar o teto no editor tambem corta
         // valores ja salvos, que e o que o Mestre espera ao mudar a regra.
+        //
+        // 30/09/2026 (FASE 2B): o inventario e copiado da ficha, e nao montado a
+        // partir do modelo. A lista de itens pertence ao jogador, nao ao sistema:
+        // sem esta linha, trocar o modelo do Mestre apagaria o que o jogador
+        // carregava, porque o align roda no login e a cada edicao do modelo.
         return new SheetData(sheet.identity(), sheet.vitals(), sheet.progress(),
                 new SheetData.Attributes(values), sheet.skills(), newPericias,
-                attributeValueMin, attributeValueMax, periciaValueMax);
+                attributeValueMin, attributeValueMax, periciaValueMax, sheet.inventory());
     }
 
     // ------------------------------------------------------------------
