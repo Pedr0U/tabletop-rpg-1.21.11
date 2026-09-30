@@ -86,7 +86,7 @@ Raiz única `/rpg`, **sem aliases**. Todos registrados em
 | `/rpg turn finish` | **dono do turno ou o Mestre** | Encerra o turno. Quem não for o dono nem o Mestre recebe `§c[RPG] It is not your turn to finish!` | `MasterCommands.java: onRegister` (`MasterCommands.java: finishTurn`, incluindo a checagem de dono) |
 | `/rpg roll` | qualquer jogador | **Lista as perícias da ficha** com valor + atributo de cada uma (não rola nada). São as do modelo em uso: 18 no padrão, quantas o Mestre deixar | `MasterCommands.java: onRegister` (handler `listSkills: listSkills`) |
 | `/rpg roll <perícia>` | qualquer jogador | Rola `1d20 + valor_da_perícia + atributo`, mostrando a conta (`d20 (12) + 2 + 3 = 17`) | `MasterCommands.java: onRegister` (handlers `rollOrSkill: rollOrSkill`, `rollSkill: rollSkill`) |
-| `/rpg roll <fórmula>` | qualquer jogador | Rola uma fórmula de dados com o motor completo: `d20`, `2d6+3`, `2d6+d4+3`, keep/drop (`4d20kh2`, `4d6dl1`), explosiva (`d6!`, `d6!5`), incremento por dado (`4d6++2`), repetição (`6#4d6dl1`) e contagem (`10d6>>3`). **Perícia com cauda** (`/rpg roll Pericia 0-2`) também vale, e o sufixo se aplica só à cauda. O descartado aparece riscado. Ver [o parser de dados](#comandos-de-dados-e-ficha) | `MasterCommands.java: onRegister` (handler `rollFormula: rollFormula`); parser e aritmética em `DiceFormula.java`, formatação em `MasterCommands.java: joinParts`, `: appendTermBody`, `: repeatBody`, `: facesBody` |
+| `/rpg roll <fórmula>` | qualquer jogador | Rola uma fórmula de dados com o motor completo: `d20`, `2d6+3`, `2d6+d4+3`, keep/drop (`4d20kh2`, `4d6dl1`), explosiva (`d6!`, `d6!5`), incremento por dado (`4d6++2`), repetição da fórmula inteira (`4#(2d6+1d8+5)`, `2#d20+5`) e contagem (`10d6>>3`). **Perícia com cauda** (`/rpg roll Pericia 0-2`) também vale, e o sufixo se aplica só à cauda. O descartado aparece riscado. Ver [o parser de dados](#comandos-de-dados-e-ficha) | `MasterCommands.java: onRegister` (handler `rollFormula: rollFormula`); parser e aritmética em `DiceFormula.java`, formatação em `MasterCommands.java: joinParts`, `: appendTermBody`, `: repeatBody`, `: facesBody` |
 | `/rpg openroll [fórmula]` | só o Mestre | Rolagem **pública** (todos veem). Sem argumento, rola `d20` | `MasterCommands.java: onRegister` (handler `openRoll: openRoll`) |
 | `/rpg time <0-24000>` | só o Mestre | Define o horário do mundo em ticks (0 = amanhecer, 6000 = meio-dia, 18000 = meia-noite) | `MasterCommands.java: onRegister` (handler `setWorldTime: setWorldTime`) |
 | `/rpg hoverdistance <1-256>` | só o Mestre | Define, **em blocos**, a distância máxima do destaque de mob para os jogadores | `MasterCommands.java: onRegister` (handler `setHoverDistance: setWorldTime`) |
@@ -121,24 +121,53 @@ Raiz única `/rpg`, **sem aliases**. Todos registrados em
    - `4d6++2` / `4d6--2` — **um** `+2`/`-2` **por dado** (soma `8+8+8+8`). A cadeia explosiva conta como
      **um** dado só, então `d6!++2` aplica `+2` uma vez no fim;
    - `6#4d6dl1` — **repete** a fórmula 6 vezes; `>>3` conta os 3 maiores, `<<3` os 3 menores.
+    - **`X#` repete a fórmula inteira, não só o primeiro dado (30/09/2026, correção do jogador).**
+      `2#d20+5` é `2 × (d20+5)`, então a constante vale nas duas voltas — antes a soma entrava uma vez só no
+      total e o `+ 5` aparecia colado embaixo da última linha, que é o que parecia "somar só na última".
+      O exemplo `4#(2d6+1d8+5)` também vale, e o **rótulo da linha é o trecho digitado**, sem os parênteses.
+      Os parênteses são **agrupamento opcional**, com aninhamento (`2#(1#d6+2)`); sem parênteses o `#` consome
+      o resto da fórmula no nível corrente **até o próximo `N#`**, o que faz `2#d20+3#d4` valer
+      `2 × d20 + 3 × d4`. Com `repeat=1` os parênteses são transparentes e `(2d6+3)` mostra os termos soltos.
  - **O descarte fica no lugar, não some da lista** (29/09/2026, pedido do jogador). Cada sufixo `kh/kl/dh/dl`
    ordena **só os sobreviventes** e os devolve para os **mesmos slots** que ocupavam; o total e a soma só dos
    que sobraram. É essa regra que faz `4d20kh2` → `[18,17,14,10]` e `4d6dl1` → `[1,2,3,4]`, e não
    `[2,3,4,1]`. O comando mostra o descartado **vermelho e riscado** (`§c§m`…`§r§b`) e **não** escreve mais
    `dropped N`; quando todos caem, todos aparecem marcados e o total é `0` (o antigo `[none]` **saiu**).
  - **No `#`, o cabeçalho fica numa linha e cada repetição vira uma linha**, com o subtotal da volta:
-   `6#4d6dl1:` seguido de ` 4d6dl1 [1,2,3,4] = 9` e assim por diante. Limite de **20 repetições
+   `6#4d6dl1:` seguido de ` 4d6dl1 [1,2,3,4] = 9` e assim por diante. **Quando a fórmula repetida tem mais de um tipo de dado, cada tipo fica no seu próprio colchete**, como na rolagem sem grade (`MasterCommands.java: repeatBody`, montando a linha com `appendRollTerm` e `appendTermBody`): `4#2d20+2d6` sai ` 2d20 [5, 12] + 2d6 [3, 6] = 26`, e a constante dentro da fórmula repetida aparece como termo (`4#(2d6+1d8+5)` sai ` 2d6 [3, 5] + 1d8 [7] + 5 = 20`). Repetição **só de dado** continua no formato antigo (`Round.parts()` vem vazio e a linha usa rótulo + faces achatadas). Limite de **20 repetições
    exibidas**, o resto vira `...+N more` (`DiceFormula.DISPLAY_ROUNDS`), porque `100#4d6` inundaria o chat.
-   Cada linha recomeça em `§b` porque **a quebra de linha não limpa a formatação no chat do Minecraft**:
-   sem isso o `§a` do subtotal da volta anterior vazava e a volta seguinte saía verde.
- - A **cor vive toda em `MasterCommands`** (`appendTermBody`, `repeatBody`, `facesBody`). O `DiceFormula` não
+Cada linha recomeça em `§b` porque **a quebra de linha não limpa a formatação no chat do Minecraft**:
+    sem isso o `§a` do subtotal da volta anterior vazava e a volta seguinte saía verde.
+    **A linha que teve crítico ganha `CRIT`** no fim (`§c§l CRIT`, `MasterCommands.java: repeatBody`, lendo
+    `Round.critical()`), e o **dado crítico** da linha fica **amarelo e em negrito** (`§e§l`, `MasterCommands.java: facesBody`,
+    lendo `Face.critical()`). Na volta que teve crítico, o **subtotal também vai em negrito**
+    (`§a§l` em `MasterCommands.java: repeatBody`) e a linha fecha com `§r§b`, porque o `§r`
+    desliga o **estilo** junto com a cor e sem isso o negrito vaza para o rótulo da linha seguinte.
+    **Na grade o `CRIT` do fim da mensagem não é escrito** (30/09/2026, pedido do jogador): quem marca o
+    crítico é a própria linha, e o `TOTAL = XX` fica limpo. Rolagem **sem** grade continua com o `CRIT`
+    global depois do total (`MasterCommands.java: rollDice` e `: rollPericia`, com `!hasGrid`).
+    **O total da grade vai para uma linha própria `TOTAL = XX`** (30/09/2026, pedido do jogador), e o
+    `= XX` que ficava colado no fim da última linha saiu, porque ali se confundia com o subtotal dela. A
+    grade é reconhecida por alguma peça repetida (`MasterCommands.java: hasGrid`), **não** por procurar o
+    `#` no texto, e o mesmo vale quando a **cauda da perícia** tem grade (o `2#d20` depois do nome da
+    perícia). Rolagem simples continua numa linha só, com o total colado.
+ - **Crítico: sem o sufixo `cN`, o dado no valor máximo conta como crítico (30/09/2026, regra do jogador).**
+    Antes o crítico **só** existia com `cN` (`2d20c18` = crítico 18 ou mais, `DiceFormula.java:
+    Suffix.critAt`), e `d20` puro nunca era crítico — foi o que o jogador corrigiu. Hoje o critério é
+    `critAt >= 0 ? value >= critAt : value >= sides` (`DiceFormula.java: rollOneDie`): **sem `cN` vale o
+    máximo do dado** (o `20` de um `d20`), **com `cN` vale o `cN`**, e o `cN` sobrepõe o máximo.
+    **Dado descartado nunca é crítico** (`DiceFormula.java: anyKeptCritical`), e o `Face.critical` guarda o
+    dado cru enquanto o chat combina `discarded` primeiro, então um descartado continua saindo riscado.
+  - A **cor vive toda em `MasterCommands`** (`appendTermBody`, `repeatBody`, `facesBody`). O `DiceFormula` não
    emite nenhum `§` e não importa Minecraft, e é por isso que dá para testar tudo com JUnit. O riscado é
    **estilo**, não cor: precisa de `§r` antes do `§b` para desligar, senão o dado cortado fica azul **e
    riscado**, que é o oposto do que o jogador precisa ver.
  - **Limites** (`DiceFormula.java`): `MAX_DICE=100`, `MAX_SIDES=1000`, `MAX_REPEAT=100`,
    `MAX_TOTAL_ROLLS=100000` (teto de segurança contra `100#100d1000`), `DISPLAY_LIMIT=20` faces mostradas
-   por dado, `DISPLAY_ROUNDS=20` repetições. O RNG é sorteado **depois** de validar a fórmula, para uma
-   rolagem inválida não consumir sorteio.
+por dado, `DISPLAY_ROUNDS=20` repetições. O RNG é sorteado **depois** de validar a fórmula, para uma
+    rolagem inválida não consumir sorteio. Com `X#` a fórmula inteira é contada `X` vezes contra
+    `MAX_TOTAL_ROLLS`, **incluindo dentro de parênteses** (`100#(100#(100d6))` é recusado por orçamento antes
+    de qualquer rolagem), porque o teto é de segurança e não pode ser contornado por aninhamento.
 - **`/rpg roll` sem argumento lista as perícias da ficha, que já não são uma lista fixa em código.**
   O que sai no chat é `sheet.pericias()` do jogador que executou (`MasterCommands.java: listSkills`), e o
   cabeçalho mostra a contagem por `sheet.pericias().size()` — então ele já acompanha o modelo. Num mundo sem

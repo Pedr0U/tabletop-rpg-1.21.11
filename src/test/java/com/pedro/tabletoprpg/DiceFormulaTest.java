@@ -330,9 +330,161 @@ class DiceFormulaTest {
     }
 
     @Test
-    @DisplayName("a repeticao respeita o sinal do termo")
+    @DisplayName("a repeticao respeita o sinal do termo e repete a formula inteira")
     void repeatKeepsTermSign() throws Exception {
-        roll("2#d6-3", 3L, always(3));
+        // O "#" passou a valer para a formula inteira: "2#d6-3" sao duas vezes
+        // (d6 - 3), e nao "2 x d6" seguido de "- 3" contado uma vez.
+        DiceFormula.Outcome inside = roll("2#d6-3", 0L, always(3));
+        assertEquals("2#d6-3 [0, 0]", inside.plainText());
+        // O sinal do termo de fora multiplica o grupo todo, e o sinal de dentro
+        // continua valendo na conta da volta.
+        roll("2#d6-1", 4L, always(3));
+        roll("-2#d6-1", -4L, always(3));
+    }
+
+    // ------------------------------------------------------------------
+    // o "#" vale para a formula inteira, com ou sem parenteses
+    // ------------------------------------------------------------------
+
+    @Test
+    @DisplayName("2#d20+5 repete a constante tambem, e o rotulo mostra a formula do grupo")
+    void repeatRepeatsWholeFormula() throws Exception {
+        // Sem o parenteses o grupo vai ate o proximo "N#", entao a constante +5
+        // entra em cada volta: (7+5) + (9+5) = 26, e nao 7+9+5.
+        DiceFormula.Outcome outcome = roll("2#d20+5", 26L, cycling(7, 9));
+        DiceFormula.Part part = outcome.parts().get(0);
+        assertEquals(2, part.repeat());
+        assertEquals("d20+5", part.label());
+        assertEquals(2, part.rounds().size());
+        assertEquals(12L, part.rounds().get(0).subtotal());
+        assertEquals(14L, part.rounds().get(1).subtotal());
+        // A volta tambem guarda os termos de dentro, e a constante entra como
+        // um termo: e o que deixa a linha mostrar "d20 [7] + 5" com um colchete
+        // so, em vez de "d20+5 [7]".
+        assertEquals(2, part.rounds().get(0).parts().size());
+        assertEquals("d20", part.rounds().get(0).parts().get(0).label());
+        assertEquals(1, part.rounds().get(0).parts().get(0).sign());
+        assertEquals(1, part.rounds().get(0).parts().get(1).sign());
+        assertEquals("5", part.rounds().get(0).parts().get(1).text());
+        assertEquals("2#d20+5 [12, 14]", part.text());
+        assertEquals("2#d20+5 [12, 14]", outcome.plainText());
+    }
+
+    @Test
+    @DisplayName("4#(2d6+1d8+5) rola o grupo inteiro quatro vezes, com os dados de cada volta")
+    void repeatGroupWithParentheses() throws Exception {
+        // always(3): 2d6 = 6, 1d8 = 3, mais a constante 5 = 14 por volta.
+        DiceFormula.Outcome outcome = roll("4#(2d6+1d8+5)", 56L, always(3));
+        DiceFormula.Part part = outcome.parts().get(0);
+        assertEquals(4, part.repeat());
+        assertEquals("2d6+1d8+5", part.label());
+        assertEquals(4, part.rounds().size());
+        for (DiceFormula.Round round : part.rounds()) {
+            assertEquals("2d6+1d8+5", round.label());
+            assertEquals(14L, round.subtotal());
+            // Os tres dados da volta ficam visiveis, mesmo sendo de termos
+            // diferentes: a linha precisa mostrar o que produziu o subtotal.
+            assertEquals(3, round.faces().size(), "a volta perdeu dados: " + round.faces());
+        }
+        assertEquals("4#2d6+1d8+5 [14, 14, 14, 14]", outcome.plainText());
+    }
+
+    @Test
+    @DisplayName("a volta com formula dentro guarda um termo por peca, na ordem")
+    void repeatRoundKeepsOnePartPerTerm() throws Exception {
+        // 4#2d20+2d6 precisa sair como "2d20 [5,12] + 2d6 [3,4] = 24": com um
+        // colchete so, o jogador nao descobre qual face saiu de qual dado. As
+        // faces achatadas continuam existindo, porque sao elas que alimentam o
+        // critico da volta.
+        DiceFormula.Outcome outcome = roll("4#2d20+2d6", 96L, cycling(5, 12, 3, 4));
+        DiceFormula.Round round = outcome.parts().get(0).rounds().get(0);
+        assertEquals("2d20+2d6", round.label());
+        assertEquals(2, round.parts().size(), "a volta perdeu um termo: " + round.parts());
+        assertEquals("2d20", round.parts().get(0).label());
+        assertEquals(1, round.parts().get(0).sign());
+        assertEquals("2d6", round.parts().get(1).label());
+        assertEquals(1, round.parts().get(1).sign());
+        assertEquals(2, round.parts().get(0).faces().size());
+        assertEquals(2, round.parts().get(1).faces().size());
+        // A lista achatada nao mudou: as mesmas quatro faces, na mesma ordem.
+        assertEquals(4, round.faces().size(), "a volta perdeu dados: " + round.faces());
+        assertEquals("5", round.faces().get(0).text());
+        assertEquals("12", round.faces().get(1).text());
+        assertEquals("3", round.faces().get(2).text());
+        assertEquals("4", round.faces().get(3).text());
+        // E o subtotal continua a mesma conta de antes.
+        assertEquals(24L, round.subtotal());
+        for (DiceFormula.Round each : outcome.parts().get(0).rounds()) {
+            assertEquals(24L, each.subtotal());
+        }
+    }
+
+    @Test
+    @DisplayName("a volta que repete um dado so tem um termo, e o rotulo continua o do dado")
+    void repeatOfSingleDiceKeepsTheDieLabel() throws Exception {
+        // 6#4d6dl1 continua em " 4d6dl1 [1,2,3,4] = 9". O "#" sem parenteses
+        // monta o grupo como formula de um termo so, entao a volta nao fica sem
+        // termo interno: ela tem exatamente o dado, e a linha sai igual.
+        DiceFormula.Outcome outcome = roll("6#4d6dl1", 74L,
+                cycling(1, 2, 3, 4, 5, 6, 1, 2, 3, 4, 5, 6, 1, 2, 3, 4, 5, 6, 1, 2, 3, 4, 5, 6));
+        DiceFormula.Round round = outcome.parts().get(0).rounds().get(0);
+        assertEquals(1, round.parts().size(), "um dado repetido nao vira varios termos: " + round.parts());
+        assertEquals("4d6dl1", round.parts().get(0).label());
+        assertEquals(1, round.parts().get(0).sign());
+        assertEquals("4d6dl1", round.label());
+        // As faces achatadas da volta sao exatamente as faces do dado.
+        assertEquals(4, round.parts().get(0).faces().size());
+        assertEquals(4, round.faces().size(), "a volta perdeu dados: " + round.faces());
+        assertEquals("1", round.faces().get(0).text());
+        assertEquals("2", round.faces().get(1).text());
+        assertEquals("3", round.faces().get(2).text());
+        assertEquals("4", round.faces().get(3).text());
+        assertEquals(9L, round.subtotal());
+    }
+
+    @Test
+    @DisplayName("parenteses aninhados: 2#(1#d6+2) repete o grupo interno")
+    void nestedParentheses() throws Exception {
+        DiceFormula.Outcome nested = roll("2#(1#d6+2)", 11L, cycling(3, 4));
+        assertEquals("2#1#d6+2 [5, 6]", nested.plainText());
+
+        // Parenteses sem "#" nao viram linha: os termos de dentro entram direto
+        // na mensagem, como se o parenteses nao existisse.
+        DiceFormula.Outcome plain = roll("(2d6+3)", 9L, always(3));
+        assertEquals(2, plain.parts().size());
+        assertEquals("2d6 [3,3] + 3", plain.plainText());
+    }
+
+    @Test
+    @DisplayName("2#d20+3#d4 fecha o primeiro grupo no proximo '#' e vira dois blocos")
+    void twoRepeatGroupsInOneFormula() throws Exception {
+        DiceFormula.Outcome outcome = roll("2#d20+3#d4", 34L, cycling(10, 20, 2, 1, 1, 3));
+        assertEquals(2, outcome.parts().size());
+        DiceFormula.Part first = outcome.parts().get(0);
+        DiceFormula.Part second = outcome.parts().get(1);
+        assertEquals(2, first.repeat());
+        assertEquals("d20", first.label());
+        assertEquals(3, second.repeat());
+        assertEquals("d4", second.label());
+        assertEquals("2#d20 [10, 20] + 3#d4 [2, 1, 1]", outcome.plainText());
+    }
+
+    @Test
+    @DisplayName("parentese que nao fecha, ou que nao tem nada dentro, e recusado")
+    void unbalancedParenthesesRejected() {
+        assertRejected("d20)");
+        assertRejected("(2d6");
+        assertRejected("4#(2d6+1d8");
+        assertRejected("(2d6))");
+        assertRejected("()");
+        assertRejected("2#()");
+    }
+
+    @Test
+    @DisplayName("o orcamento conta o grupo inteiro: cada volta cabe, o total e que nao")
+    void repeatGroupOverBudgetRejected() {
+        // 100 x 100 x 100 dados declarados, e cada nivel sozinho passaria.
+        assertRejected("100#(100#(100d6))");
     }
 
     // ------------------------------------------------------------------
@@ -478,10 +630,22 @@ class DiceFormulaTest {
         assertTrue(outcome.plainText().contains("*"), outcome.plainText());
     }
 
-    @Test
-    @DisplayName("sem cN nada e critico")
-    void noCriticalWithoutSuffix() throws Exception {
-        assertFalse(roll("d20", 20L, always(20)).critical());
+@Test
+    @DisplayName("sem cN o critico e a face maxima, e cN manda no lugar dela")
+    void criticalWithoutSuffixUsesMaxFaces() throws Exception {
+        // Decisao do usuario em 30/09/2026: um dado no maximo e critico, porque
+        // nao existe resultado melhor que aquele. O cN nao some: ele escolhe
+        // qual numero conta, e o maximo so vale quando o cN nao existe.
+        DiceFormula.Outcome max = roll("d20", 20L, always(20));
+        assertTrue(max.critical());
+        assertFalse(roll("d20", 19L, always(19)).critical());
+        assertFalse(roll("d6", 5L, always(5)).critical());
+
+        // cN abaixo do maximo antecipa o critico...
+        assertTrue(roll("d6c3", 3L, always(3)).critical());
+        assertFalse(roll("d6c4", 3L, always(3)).critical());
+        // ...e cN acima do maximo cancela o critico automatico.
+        assertFalse(roll("d6c20", 6L, always(6)).critical());
     }
 
     @Test
@@ -491,6 +655,54 @@ class DiceFormulaTest {
         assertFalse(dropped.critical(), dropped.plainText());
         assertFalse(dropped.plainText().contains("*"), dropped.plainText());
         assertTrue(roll("4d6c3", 10L, cycling(4, 1)).critical());
+    }
+
+    @Test
+    @DisplayName("a face no maximo e marcada como critica, para o chat poder pintar de amarelo")
+    void faceCriticalOnMaxFaces() throws Exception {
+        DiceFormula.Outcome max = roll("d20", 20L, always(20));
+        DiceFormula.Face face = max.parts().get(0).faces().get(0);
+        assertTrue(face.critical());
+        assertFalse(face.discarded());
+        // O asterisco continua no texto: e ele que marca o critico no log e no
+        // detalhe sem cor, e a cor do chat e um extra por cima.
+        assertEquals("20*", face.text());
+
+        DiceFormula.Face low = roll("d20", 19L, always(19)).parts().get(0).faces().get(0);
+        assertFalse(low.critical());
+        assertEquals("19", low.text());
+    }
+
+    @Test
+    @DisplayName("a volta marca o critico dela, e so dela")
+    void roundCriticalFlag() throws Exception {
+        // A primeira volta tira 20 do d20 e a segunda tira 5: so a primeira linha
+        // pode dizer CRIT, mesmo com o CRIT global no fim da mensagem.
+        DiceFormula.Outcome outcome = roll("2#d20+5", 35L, cycling(20, 5));
+        List<DiceFormula.Round> rounds = outcome.parts().get(0).rounds();
+        assertTrue(rounds.get(0).critical());
+        assertFalse(rounds.get(1).critical());
+        assertTrue(outcome.critical());
+
+        DiceFormula.Outcome none = roll("3#d20", 6L, cycling(1, 2, 3));
+        for (DiceFormula.Round round : none.parts().get(0).rounds()) {
+            assertFalse(round.critical());
+        }
+        assertFalse(none.critical());
+    }
+
+    @Test
+    @DisplayName("dado descartado nunca marca critico, nem na volta que o cortou")
+    void discardedDieIsNeverCritical() throws Exception {
+        // O 6 e a face maxima e por isso seria critico, mas o dh1 joga fora o
+        // maior: nenhuma das duas voltas pode dizer CRIT.
+        DiceFormula.Outcome outcome = roll("2#4d6dh1", 6L, cycling(6, 1, 1, 1, 6, 1, 1, 1));
+        for (DiceFormula.Round round : outcome.parts().get(0).rounds()) {
+            assertFalse(round.critical());
+        }
+        assertFalse(outcome.critical());
+        assertFalse(outcome.plainText().contains("*"), outcome.plainText());
+        assertEquals("2#4d6dh1 [3, 3]", outcome.plainText());
     }
 
     // ------------------------------------------------------------------

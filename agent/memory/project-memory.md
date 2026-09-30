@@ -1646,3 +1646,162 @@ custo de produzir o turno seguinte passa a ser o gargalo, nao a build.
 
 Checkpointer em `agent/reports/2026-09-29_checkpoint-motor-formulas.md`.
 
+## 2026-09-30 — `X#` passa a repetir a formula inteira, e critico tem padrao
+
+**FATO verificado** (80 testes + log de jogo `run/logs/latest.log`): `N#` nao repete mais
+so o dado seguinte, repete **a formula inteira**. Regra da gramatica, tal como ficou em
+`DiceFormula.java: parseGroup` / `parseTerms` / `parseParenthesized`:
+
+- com parenteses: `4#(2d6+1d8+5)` repete a subformula entre parenteses (aninhamento
+  permitidos, ex.: `2#(1#d6+2)`);
+- sem parenteses: repete **todo o resto da formula no nivel corrente**, parando **antes
+  do proximo `N#`** — por isso `2#d20+3#d4` vale `2 x d20 + 3 x d4`;
+- o `N#` **nao fecha o grupo no primeiro termo**; e exatamente isso que permite aninhar;
+- `repeat == 1` deixa o parenteses transparente: `(2d6+3)` mostra os termos soltos;
+- o rotulo da linha do grid e o **trecho digitado** (`Group.formulaLabel`), sem remontar
+  a formula.
+
+Consequencia economica: antes `2#d20+5` era `(d20+d20)+5` (constante avaliada fora do
+laco, em `rollTerm`) e o `+ 5` aparecia colado na ultima linha por concatenacao em
+`MasterCommands.repeatBody`, o que parecia "somou so na ultima". No jogo, `2#d20+5`
+deu `[6] = 11` e `[19] = 24`, total 35.
+
+**FATO verificado — regra de critico (decisao do usuario em 30/09/2026):**
+`DiceFormula.java: rollOneDie` agora faz `critAt() >= 0 ? value >= critAt() : value >=
+sides()`. Sem `cN` o critico e o **valor maximo do dado** (`d20` = 20); com `cN` vale o
+`cN`, que **sobrepoe** o maximo. Antes o critico so existia com `cN` (o teste
+`noCriticalWithoutSuffix` virou `criticalWithoutSuffixUsesMaxFaces`). Dado descartado
+nunca e critico.
+
+**FATO verificado — onde a cor mora:** `Face` e `Round` carregam **booleanos**
+(`Face.critical`, `Round.critical`); `§` so em `MasterCommands.java: facesBody`
+(`§e` no dado critico, `§r§b` para devolver o aqua) e `: repeatBody` (`§c§l CRIT` no fim
+da linha). `checkCatalogo` invariant: `DiceFormula.java` nao emite `§` e nao importa
+Minecraft — e o que mantem o motor testavel com JUnit. `scanEncoding` reprovaria `§`
+nesse arquivo.
+
+**FATO verificado — armadilha do `Budget`:** para dizer **qual** linha foi critica, olhe
+as faces da propria volta (`anyKeptCritical(List<Face>)`), **nao** `Budget.groupCritical`,
+que e acumulado da rolagem inteira e serve para o `CRIT` global do fim da mensagem.
+
+**FATO verificado — catalogo:** `cN` nao estava documentado em
+`FUNCIONALIDADES-E-COMANDOS.md` antes desta rodada; a regra de `#` dizia "repete a
+formula" quando so repetia o primeiro dado. Corrigido em 5 trechos. O catalogo e
+**untracked**, entao nao ha rede de seguranca do git: edicao por ancora, nunca
+sobrescrita.
+
+**FATO verificado — `check-catalogo.ps1`:** (1) precisa de `-ProjectRoot` explicito
+quando o diretorio de trabalho da sessao nao e a raiz do mod; (2) ele acusa
+`/rpg/roll/Pericia/0-2` como "comando que nao existe mais", e isso e **falso positivo**:
+o script compara literais registrados no codigo, e esse texto e exemplo de **entrada do
+jogador**. O caminho de cauda existe (`MasterCommands.java: splitPericiaPrefix`, devolve
+`MixedRoll`). Divergencia pre-existente de 30/09/2026, nao corrigida.
+
+**HIPOTESE (nao testado):** `Part.repeated` nao expoe faces, entao um `#` aninhado
+dentro de outro nao mostra os dados internos entre colchetes na linha de fora (o subtotal
+esta certo). Nao foi pedido e nao foi corrigido.
+
+Relatorio: `agent/reports/2026-09-30_grade-X-hash-A-e-critico-por-linha.md`.
+Commit/tag **nao feitos** (so mediante pedido explicito).
+
+## 2026-09-30 (2a rodada) — total da grade em linha propria
+
+**FATO verificado:** com `#`, o total sai em linha propria `TOTAL = XX`
+(`§6§eTOTAL §f= §l§a`), e o `= XX` que ficava colado no fim da ultima volta **saiu**,
+porque ali se confundia com o subtotal dela (`MasterCommands.java: rollDice`, com o
+prefixo montado em `totalPrefix`). **So na grade** (decisao do usuario): rolagem simples
+continua numa linha, com o total inline. O mesmo vale no caminho da pericia com cauda
+(`rollPericia`), protegido por `outcome != null` porque ali o `outcome` e nulo quando
+nao ha cauda.
+
+**FATO verificado:** grade se detecta por **peca repetida** (`MasterCommands.java:
+hasGrid`, `part.repeat() > 1`), nunca procurando `#` no texto — o texto da cauda pode
+ter o caractere sem ser grade.
+
+**FATO verificado — armadilha de edicao:** ancorar um `edit` numa linha interna de
+javadoc (por exemplo ` * As faces entre colchetes...`) insere o texto novo **depois** do
+`/**` que abre o bloco, deixando um `/**` orfao e o resto do javadoc sem dono. O build
+**nao pega** isso: `/**` orfao vira comentario e o codigo seguinte some do fonte. Conferir
+a regiao depois de editar dentro de javadoc, ou ancorar na linha `/**` completa.
+
+**FATO verificado — scanEncoding pega o que o olho nao pega:** um caracterere cirilico
+(U+043A) e tres ideogramas CJK que escapei num relatorio novo reprovaram o build
+inteiro (`[scanEncoding] FAIL: 3 caractere(s) proibido(s)`), enquanto o `MasterCommands.java`
+era limpo. O relatorio nao existed no build anterior, entao a falha parecia nao ter causa.
+Como os caracteres proibidos estavam no meio da frase, o `edit` exigia digitá-los; a
+reparacao foi por codepoint em PowerShell
+(`[char]0x043A`, etc. + `[System.IO.File]::WriteAllText` com `UTF8Encoding($false)`),
+**sem converter o encoding do arquivo inteiro**. Para achar, varrer por faixa de
+codepoint em vez de procurar o texto no console (que nao renderiza UTF-8 fiel).
+
+**HIPOTESE (nao testado em jogo):** o layout exato da linha `TOTAL = XX` (cor, posicao do
+`CRIT` global, e a rolagem de pericia com cauda) so foi conferido por codigo e build; o
+usuario ainda nao viu a saida. Confirmado pelo usuario em 30/09/2026: **funcionou**.
+
+## 2026-09-30 (rodada 3) — dado critico em negrito e CRIT fora do TOTAL
+
+**FATO verificado:** o dado critico no chat e **amarelo e em negrito** (`§e§l` em
+`MasterCommands.java: facesBody`). O `§r§b` de volta continua obrigatorio porque `§r`
+zera o **estilo** junto com a cor: sem ele o proximo dado da lista sairia negrito tambem.
+
+**FATO verificado:** **na grade o `CRIT` global nao e mais escrito** (decisao do usuario).
+Quem marca o critico e a propria linha, e o `TOTAL = XX` fica limpo. O `CRIT` global
+continua nas rolagens **sem** grade: `rollDice` e `rollPericia` ganharam
+`outcome.critical() && !hasGrid(outcome)`.
+
+**FATO verificado — armadilha do `edit`:** um `oldString` com indentacao menor casa
+como **substring** dentro da indentacao maior, e o `edit` aplica no bloco errado. Numa
+das tres edicoes do mesmo pedido, a de 8 espacos mirou `rollPericia` (16 espacos) em vez
+de `rollDice`. Ancore sempre com contexto unico e identico (linha vizinha propria) e
+confira com `Select-String` qual bloco mudou.
+
+**FATO verificado — limitacao da ferramenta:** o `edit` **normaliza o espaco inicial do
+parametro**, entao nao da para corrigir indentacao colocando os espacos no comeco da
+`newString` (o `oldString` e a `newString` chegam identicos e a edicao e recusada como
+"no changes to apply"). Saida: `oldString`/`newString` de varias linhas, ou PowerShell
+com replace por codepoint.
+
+## 2026-09-30 (rodada 4) — subtotal da volta critica em negrito
+
+**FATO verificado:** o pedido era "negrito no resultado do dado que critou **tambem**", e o
+que faltava era o **subtotal da volta**: `MasterCommands.java: repeatBody` escreve
+`" §f= §a" + (round.critical() ? "§l" : "") + subtotal`. A face ja era `§e§l` e o `CRIT`
+ja era `§c§l`. A rolagem **sem** grade ja entregava o total em negrito (`§l§a` no
+`totalPrefix`), entao a diferenca so aparecia na grade.
+
+**FATO verificado — negrito vaza no chat do Minecraft:** `§l` e estilo e **nao** cor, e
+`§r` zera estilo **e** cor. Como a proxima linha da grade comeca com `\n§b ` (que so
+muda a cor), o negrito da volta critica continuava no rotulo da linha seguinte. Por isso
+a volta critica agora fecha com `§r§b`, e o mesmo motivo exige `§r§b` em `facesBody`
+depois do dado critico.
+
+**FATO verificado:** `§b` neste codigo e **azul (aqua)**, nao negrito; negrito e `§l`.
+
+**FATO verificado:** comentario de codigo **envelhece** quando a regra em volta muda. O
+comentario do `CRIT` de linha ainda afirmava que "o CRIT do fim da mensagem segue
+valendo", depois de a grade ter parado de escreve-lo. Alteracao de comportamento exige
+reler o comentario vizinho, nao so o codigo.
+
+## 2026-09-30 (rodada 5) — cada tipo de dado no seu colchete dentro da grade
+
+**FATO verificado:** a linha da volta na grade **achatava** todos os tipos de dado num
+colchete so, porque `rollFormulaGroup` montava a linha a partir de `facesOf(roundParts)`,
+que junta as faces de todos os termos. Agora `DiceFormula.Round` carrega `parts` (a lista
+de `Part` daquela volta) e `MasterCommands.java: repeatBody` monta a linha com
+`appendRollTerm(body, inner.sign(), appendTermBody(inner))` — os **mesmos** metodos que
+`joinParts` usa na rolagem sem grade. Resultado: `4#2d20+2d6` sai
+` 2d20 [5, 12] + 2d6 [3, 6] = 26`. A constante dentro da formula repetida aparece como
+termo (`+ 5`), e `6#4d6dl1` **nao muda**: volta so de dado recebe `List.of()` em `parts` e
+continua no rotulo + faces achatadas. `Round.faces()` (a lista achatada) foi **mantida**,
+porque e ela que alimenta `anyKeptCritical` e varios testes.
+
+**FATO verificado — correcao de memoria:** a limitacao "faces de um `#` aninhado nao
+aparecem na linha de fora" (HIPOTESE de 30/09/2026) esta **resolvida**: o bloco interno
+passa a ser renderizado por `appendTermBody` -> `repeatBody`, com quebras de linha.
+
+**FATO verificado — subagente pode devolver vazio:** a implementacao delegada voltou sem
+texto nenhum, sem erro. O codigo **estava** pronto. `git diff --stat` nao prova nada
+nesse caso (e cumulativo desde o HEAD); confirmei com `Select-String` procurando o simbolo
+novo (`Round.parts`, `round.parts()`) e so depois compilei. **Delegar nao substitui
+conferir o simbolo novo no arquivo.**
+
