@@ -54,6 +54,7 @@ import java.util.UUID;
  *   <li>{@link SheetStatePayload} (S2C): conteúdo de uma ficha + se o destinatário pode editá-la.</li>
  *   <li>{@link SheetFieldPayload} (C2S): edição de um campo da ficha (texto ou número).</li>
  *   <li>{@link SheetSkillPayload} (C2S): adiciona/remove/reordena/edita uma skill da ficha.</li>
+ *   <li>{@link SheetItemPayload} (C2S): cria/edita/apaga um item do inventario da ficha.</li>
  * </ul>
  */
 public final class RpgNetworking {
@@ -565,13 +566,25 @@ public final class RpgNetworking {
      * ("hp", "race", ...) e o valor chega como texto. O servidor converte e
      * limita em {@link SheetData#withField(String, String)} — o cliente nunca
      * escreve direto no estado.
+     *
+     * <p><b>30/09/2026: o teto do {@code value} foi de 64 para 2048.</b> Os dois
+     * textos longos da aba {@code Info/Inventory} ({@code appearance} e
+     * {@code backstory}) tem teto de {@link SheetData#MAX_TEXT}, que sao 2000
+     * caracteres, e {@code stringUtf8(64)} derrubaria a conexao ao decodificar.
+     * <b>Por que 2048 e nao 2000:</b> o {@code stringUtf8} nao corta, ele lanca
+     * excecao. O valor precisa caber inteiro no pacote <i>antes</i> do
+     * {@code clean()} do servidor truncar, com folga para o {@code trim} e para
+     * uma diferenca de contagem entre o widget e o servidor; com o teto colado no
+     * limite, o pacote estouraria no servidor e a conexao cairia em vez de o
+     * servidor apenas cortar. O {@code field} continua em 32: {@code appearance}
+     * e {@code backstory} tem 9 letras cada.
      */
     public record SheetFieldPayload(String targetName, String field, String value) implements CustomPacketPayload {
         public static final Type<SheetFieldPayload> TYPE = new Type<>(TabletopRpg.id("sheet_field"));
         public static final StreamCodec<FriendlyByteBuf, SheetFieldPayload> STREAM_CODEC = StreamCodec.composite(
                 ByteBufCodecs.stringUtf8(64), SheetFieldPayload::targetName,
                 ByteBufCodecs.stringUtf8(32), SheetFieldPayload::field,
-                ByteBufCodecs.stringUtf8(64), SheetFieldPayload::value,
+                ByteBufCodecs.stringUtf8(2048), SheetFieldPayload::value,
                 SheetFieldPayload::new
         );
 
@@ -649,6 +662,66 @@ public final class RpgNetworking {
          */
         public static SheetSkillPayload update(String targetName, int index, String skill, String description) {
             return new SheetSkillPayload(targetName, skill, SheetData.SkillOp.UPDATE, description, index);
+        }
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
+    /**
+     * Cliente -&gt; Servidor: cria, edita ou apaga um <b>item do inventario</b>
+     * (30/09/2026, FASE 2B).
+     *
+     * <p>O limite de peso do inventario <b>nao vem aqui</b>: ele e um campo de
+     * texto da ficha e viaja no {@link SheetFieldPayload} com a chave
+     * {@code maxWeight}, que o {@link SheetData#withField} ja resolve. Este
+     * pacote so carrega a lista de itens, porque editar um item manda as quatro
+     * colunas dele de uma vez e um payload de texto nao expressa isso.
+     *
+     * <p><b>O item viaja como record e nao como quatro strings</b> porque o
+     * peso e um {@code float}: o {@code ByteBufCodecs.FLOAT} e' o mesmo
+     * caminho do {@link SheetData.InventoryItem#STREAM_CODEC}, e um cliente
+     * forjado nao escapa do teto porque o construtor compacto do record corta
+     * o que passou.
+     *
+     * <p><b>O indice e' do {@code UPDATE} e do {@code REMOVE}</b>, pelo mesmo
+     * motivo do {@link SheetSkillPayload}: enquanto o jogador edita, o item pode
+     * ter sido apagado, e "o mesmo lugar" so pode ser dito por posicao. No
+     * {@code ADD} o indice e' {@code -1} e ignorado.
+     */
+    public record SheetItemPayload(String targetName, SheetData.ItemOp op, int index,
+                                   SheetData.InventoryItem item) implements CustomPacketPayload {
+        public static final Type<SheetItemPayload> TYPE = new Type<>(TabletopRpg.id("sheet_item"));
+        public static final StreamCodec<FriendlyByteBuf, SheetItemPayload> STREAM_CODEC = StreamCodec.composite(
+                ByteBufCodecs.stringUtf8(64), SheetItemPayload::targetName,
+                SheetData.ItemOp.STREAM_CODEC, SheetItemPayload::op,
+                ByteBufCodecs.VAR_INT, SheetItemPayload::index,
+                SheetData.InventoryItem.STREAM_CODEC, SheetItemPayload::item,
+                SheetItemPayload::new
+        );
+
+        /** Atalho: criar um item novo (o indice nao importa no ADD). */
+        public static SheetItemPayload add(String targetName, SheetData.InventoryItem item) {
+            return new SheetItemPayload(targetName, SheetData.ItemOp.ADD, -1, item);
+        }
+
+        /**
+         * Atalho: apagar o item do indice.
+         *
+         * <p>O {@code item} e' o {@link SheetData.InventoryItem#EMPTY}, e nao
+         * {@code null}: o codec do record le os quatro campos sempre, e um
+         * {@code null} aqui derrubaria o pacote inteiro no cliente em vez de
+         * exigir o campo.
+         */
+        public static SheetItemPayload remove(String targetName, int index) {
+            return new SheetItemPayload(targetName, SheetData.ItemOp.REMOVE, index, SheetData.InventoryItem.EMPTY);
+        }
+
+        /** Atalho: salvar a edicao do item que esta no indice, no mesmo lugar. */
+        public static SheetItemPayload update(String targetName, int index, SheetData.InventoryItem item) {
+            return new SheetItemPayload(targetName, SheetData.ItemOp.UPDATE, index, item);
         }
 
         @Override
@@ -776,6 +849,8 @@ public final class RpgNetworking {
         PayloadTypeRegistry.playC2S().register(SheetFieldPayload.TYPE, SheetFieldPayload.STREAM_CODEC);
         PayloadTypeRegistry.playC2S().register(SheetSkillPayload.TYPE, SheetSkillPayload.STREAM_CODEC);
         PayloadTypeRegistry.playC2S().register(SheetPericiaPayload.TYPE, SheetPericiaPayload.STREAM_CODEC);
+        // 30/09/2026 (FASE 2B): a lista de itens do inventario da ficha.
+        PayloadTypeRegistry.playC2S().register(SheetItemPayload.TYPE, SheetItemPayload.STREAM_CODEC);
         PayloadTypeRegistry.playS2C().register(DownedStatePayload.TYPE, DownedStatePayload.STREAM_CODEC);
         // Modelo global da ficha (27/09/2026, Sheet Editor). S2C para todo mundo
         // porque o modelo desenha a ficha dos OUTROS tambem; C2S porque a edicao
@@ -1030,6 +1105,31 @@ public final class RpgNetworking {
             broadcastSheet(target);
         });
 
+        // Cria/edita/apaga um ITEM DO INVENTARIO (30/09/2026, FASE 2B). Mesma
+        // regra de permissao dos outros campos: o Mestre edita qualquer ficha, o
+        // jogador so a propria.
+        ServerPlayNetworking.registerGlobalReceiver(SheetItemPayload.TYPE, (payload, context) -> {
+            ServerPlayer sender = context.player();
+            ServerPlayer target = resolveSheetTarget(sender, payload.targetName());
+            if (target == null || !canEditSheet(sender, target)) {
+                return;
+            }
+            SheetData current = SessionManager.getOrCreateSheet(target.getUUID(), target.getName().getString());
+            SheetData updated = switch (payload.op() == null ? SheetData.ItemOp.INVALID : payload.op()) {
+                case ADD -> current.withInventory(current.inventory().addItem(payload.item()));
+                case UPDATE -> updateItem(current, payload);
+                case REMOVE -> current.withInventory(current.inventory().removeItem(payload.index()));
+                // Pacote corrompido: melhor nao fazer nada do que transformar
+                // uma op invalida em "criar item".
+                case INVALID -> current;
+            };
+            if (updated == current) {
+                return; // indice fora da lista, lista cheia, item sem nome, ou nada mudou
+            }
+            SessionManager.setSheet(target.getUUID(), updated);
+            broadcastSheet(target);
+        });
+
         // Muda o VALOR ou o ATRIBUTO de uma PERÍCIA já existente. Criar e
         // remover perícia é do Mestre, no Sheet Editor; este pacote só ajusta os
         // dois campos, e vale a mesma regra de permissão dos outros campos da
@@ -1172,6 +1272,34 @@ public final class RpgNetworking {
             return current;
         }
         return current.withSkill(index, name, description);
+    }
+
+    /**
+     * Aplica o {@code ItemOp.UPDATE}: troca o item do inventario que esta no
+     * indice do payload, <b>no mesmo lugar</b> da lista (30/09/2026, FASE 2B).
+     *
+     * <p><b>Indice fora da lista e item sem nome devolvem a ficha intacta</b>, e o
+     * receptor ve {@code updated == current} e sai sem gravar nem transmitir. E o
+     * que segura o caso "o item que eu estava editando foi apagado entre o clique
+     * e o pacote": sem o teste de faixa, o UPDATE viraria um ADD e o item
+     * reapareceria sozinho, que e pior do que o pedido silenciosamente nao
+     * acontecer.
+     *
+     * <p>Nao ha trava de nome como no {@code updateSkill}: dois itens com o mesmo
+     * nome sao legitimos (o inventario nao deduplica), entao o indice e a
+     * unica identidade valida. O teto de nome, tipo, peso e descricao e' do
+     * construtor de {@link SheetData.InventoryItem}, e nao deste metodo.
+     */
+    private static SheetData updateItem(SheetData current, SheetItemPayload payload) {
+        int index = payload.index();
+        if (index < 0 || index >= current.inventory().items().size()) {
+            return current;
+        }
+        SheetData.InventoryItem item = payload.item();
+        if (item == null || item.name().isEmpty()) {
+            return current;
+        }
+        return current.withInventory(current.inventory().withItem(index, item));
     }
 
     /**

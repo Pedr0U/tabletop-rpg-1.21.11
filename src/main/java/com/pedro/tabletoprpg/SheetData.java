@@ -21,7 +21,7 @@ import java.util.Set;
  *
  * <p>Estrutura agrupada em sub-records para manter cada
  * {@code StreamCodec.composite} com no máximo 6 campos (limite da API):
-     * {@code identity} (5), {@code vitals} (4), {@code progress} (2),
+     * {@code identity} (7), {@code vitals} (4), {@code progress} (2),
  * {@code attributes} (6) e {@code skills} (lista).
  *
  * <p><b>Invariante de faixa:</b> os construtores compactos limitam o que
@@ -62,6 +62,13 @@ import java.util.Set;
  * <p>Os limites de tamanho de texto também protegem o codec: o
  * {@code ByteBufCodecs.stringUtf8(n)} lança exceção ao decodificar uma
  * string maior que {@code n}, então truncar aqui evita derrubar a conexão.
+ *
+ * <p><b>30/09/2026 (FASE 2B): o inventario e o ultimo componente do record</b>,
+ * depois de {@code periciaValueMax} e fora dos seis grupos do {@link
+ * #STREAM_CODEC}: ele entra no {@link #ENCODER} e no {@link #DECODER} na
+ * <b>mesma posicao</b> (a ultima), porque as duas lambdas nao se amarram em
+ * tempo de compilacao. O peso e <b>visual</b>: {@link Inventory#overweight()}
+ * so pinta a linha de vermelho, e o excesso nunca bloqueia a gravacao.
  */
 public record SheetData(
         Identity identity,
@@ -72,11 +79,23 @@ public record SheetData(
         List<Pericia> pericias,
         int attributeValueMin,
         int attributeValueMax,
-        int periciaValueMax
+        int periciaValueMax,
+        Inventory inventory
     ) {
 
     /** Teto de caracteres dos textos livres (nome, raça, classe). */
     public static final int MAX_NAME = 32;
+    /**
+     * Teto de caracteres dos textos longos (aparência e história do personagem).
+     *
+     * <p><b>30/09/2026:</b> os dois quadros grandes da aba {@code Info/Inventory}.
+     * O teto e separado do {@link #MAX_NAME} porque sao coisas diferentes: 32 e
+     * o nome do personagem, que precisa caber num rotulo; 2.000 e um texto livre
+     * que o jogador rola dentro da caixa. Se os dois usassem {@code MAX_NAME}, o
+     * Appearance seria cortado em 32 pelo servidor (ver {@link Identity}) e a
+     * rolagem mostraria sempre o mesmo comeco.
+     */
+    public static final int MAX_TEXT = 2_000;
     /** Teto de caracteres do nome de uma skill. */
     public static final int SKILL_MAX = 48;
     /**
@@ -131,7 +150,8 @@ public record SheetData(
      * tinha caso proprio em {@link #withField}.
      */
     public static final List<String> TEXT_FIELDS =
-            List.of("playerName", "characterName", "race", "characterClass", "background", "xptext");
+            List.of("playerName", "characterName", "race", "characterClass", "background",
+                    "appearance", "backstory", "xptext");
     /**
      * Campos com rotulo <b>desenhado na ficha</b>: os de texto, os numericos
      * com rotulo proprio e o XP em modo TEXT.
@@ -201,6 +221,11 @@ public record SheetData(
         ByteBufCodecs.VAR_INT.encode(buf, sheet.attributeValueMin());
         ByteBufCodecs.VAR_INT.encode(buf, sheet.attributeValueMax());
         ByteBufCodecs.VAR_INT.encode(buf, sheet.periciaValueMax());
+        // 30/09/2026 (FASE 2B): o inventario vai por ultimo, como no record, e
+        // na mesma posicao do DECODER abaixo. Ler e escrever em ordem diferente
+        // continua compilando e quebra so em runtime -- e o round-trip de
+        // SheetModelCodecTest que pega isso.
+        Inventory.STREAM_CODEC.encode(buf, sheet.inventory());
     };
 
     private static final StreamDecoder<FriendlyByteBuf, SheetData> DECODER = buf -> new SheetData(
@@ -212,7 +237,8 @@ public record SheetData(
             PERICIAS_STREAM_CODEC.decode(buf),
             ByteBufCodecs.VAR_INT.decode(buf),
             ByteBufCodecs.VAR_INT.decode(buf),
-            ByteBufCodecs.VAR_INT.decode(buf)
+            ByteBufCodecs.VAR_INT.decode(buf),
+            Inventory.STREAM_CODEC.decode(buf)
     );
 
     public static final StreamCodec<FriendlyByteBuf, SheetData> STREAM_CODEC =
@@ -233,7 +259,14 @@ public record SheetData(
             Codec.STRING.optionalFieldOf("background", "").forGetter(Identity::background),
             // 29/09/2026: nome do jogador dono da ficha, pedido do usuario.
             // Opcional com "" para uma ficha de mundo ja salva continuar abrindo.
-            Codec.STRING.optionalFieldOf("playerName", "").forGetter(Identity::playerName)
+            Codec.STRING.optionalFieldOf("playerName", "").forGetter(Identity::playerName),
+            // 30/09/2026: os dois textos longos da aba Info/Inventory. O padrao ""
+            // e obrigatorio pelo mesmo motivo do playerName acima: sao chaves que
+            // NAO existem em nenhuma ficha ja salva, e sem o padrao o
+            // RecordCodecBuilder derrubaria o NBT inteiro no primeiro mundo que
+            // abrir o log com uma ficha de antes desta mudanca.
+            Codec.STRING.optionalFieldOf("appearance", "").forGetter(Identity::appearance),
+            Codec.STRING.optionalFieldOf("backstory", "").forGetter(Identity::backstory)
     ).apply(i, Identity::new));
 
     private static final Codec<Vitals> VITALS_CODEC = RecordCodecBuilder.create(i -> i.group(
@@ -318,6 +351,34 @@ public record SheetData(
     ).apply(i, Pericia::new));
 
     /**
+     * Codec de NBT de UM item do inventario (30/09/2026, FASE 2B).
+     *
+     * <p>Todos os campos opcionais: e a mesma regra dos outros grupos deste
+     * arquivo (ver o {@link #CODEC}) -- um item gravado por outra versao, ou
+     * editado a mao, nao pode derrubar a ficha inteira. O construtor compacto
+     * de {@link InventoryItem} corta o que passou do teto depois.
+     */
+    private static final Codec<InventoryItem> INVENTORY_ITEM_CODEC = RecordCodecBuilder.create(i -> i.group(
+            Codec.STRING.optionalFieldOf("name", "").forGetter(InventoryItem::name),
+            Codec.STRING.optionalFieldOf("type", "").forGetter(InventoryItem::type),
+            Codec.FLOAT.optionalFieldOf("weight", 0f).forGetter(InventoryItem::weight),
+            Codec.STRING.optionalFieldOf("description", "").forGetter(InventoryItem::description)
+    ).apply(i, InventoryItem::new));
+
+    /**
+     * Codec de NBT do inventario inteiro (30/09/2026, FASE 2B).
+     *
+     * <p>A lista de itens e opcional com o padrao vazio e o {@code maxWeight}
+     * opcional com {@code 0}: sao chaves que <b>nao existem em nenhuma ficha ja
+     * salva</b>, e sem o padrao o {@link #CODEC} derrubaria o NBT inteiro no
+     * primeiro mundo que abrir o log com uma ficha de antes desta fase.
+     */
+    private static final Codec<Inventory> INVENTORY_CODEC = RecordCodecBuilder.create(i -> i.group(
+            Codec.list(INVENTORY_ITEM_CODEC).optionalFieldOf("items", List.of()).forGetter(Inventory::items),
+            Codec.FLOAT.optionalFieldOf("maxWeight", 0f).forGetter(Inventory::maxWeight)
+    ).apply(i, Inventory::new));
+
+    /**
      * Codec de NBT da ficha completa, usado por
      * {@code PlayerSheetPersistenceMixin} para salvar a ficha no proprio NBT do
      * jogador (sobrevive a restart e a desconexao).
@@ -336,7 +397,7 @@ public record SheetData(
      * {@link #sanitizePericias} e volta a lista fixa.
      */
     public static final Codec<SheetData> CODEC = RecordCodecBuilder.create(i -> i.group(
-            IDENTITY_CODEC.optionalFieldOf("identity", new Identity("", "", "", "", "")).forGetter(SheetData::identity),
+            IDENTITY_CODEC.optionalFieldOf("identity", new Identity("", "", "", "", "", "", "")).forGetter(SheetData::identity),
             VITALS_CODEC.optionalFieldOf("vitals", Vitals.defaults()).forGetter(SheetData::vitals),
             PROGRESS_CODEC.optionalFieldOf("progress", Progress.defaults()).forGetter(SheetData::progress),
             ATTRIBUTES_CODEC.optionalFieldOf("attributes", Attributes.defaults()).forGetter(SheetData::attributes),
@@ -349,7 +410,19 @@ public record SheetData(
             // SheetModel.align assim que o Mestre salva o modelo.
             Codec.INT.optionalFieldOf("attributeValueMin", SheetModel.DEFAULT_ATTRIBUTE_VALUE_MIN).forGetter(SheetData::attributeValueMin),
             Codec.INT.optionalFieldOf("attributeValueMax", SheetModel.DEFAULT_ATTRIBUTE_VALUE_MAX).forGetter(SheetData::attributeValueMax),
-            Codec.INT.optionalFieldOf("periciaValueMax", SheetModel.DEFAULT_PERICIA_VALUE_MAX).forGetter(SheetData::periciaValueMax)
+            Codec.INT.optionalFieldOf("periciaValueMax", SheetModel.DEFAULT_PERICIA_VALUE_MAX).forGetter(SheetData::periciaValueMax),
+            // 30/09/2026 (FASE 2B): o inventario e o setimo grupo deste codec.
+            // O RecordCodecBuilder aceita mais de 6 grupos (o limite de 6 e do
+            // StreamCodec.composite, e o topo da ficha ja usa encoder/decoder
+            // proprios), entao ele entra aqui como um grupo so, opcional: um
+            // save anterior a Fase 2B abre com Inventory.EMPTY, nunca quebrado.
+            // O padrao e construido aqui em vez de lido de Inventory.EMPTY: um
+            // save antigo pode chegar enquanto o <clinit> de Inventory ainda
+            // roda (InventoryItem abre a ficha ao montar o EMPTY dele), e nesse
+            // instante o EMPTY ainda vale null -- o que faria este CODEC devolver
+            // null no lugar de um inventario vazio e derrubar o login.
+            INVENTORY_CODEC.optionalFieldOf("inventory", new Inventory(List.of(), 0f))
+                    .forGetter(SheetData::inventory)
     ).apply(i, SheetData::new));
 
     /**
@@ -372,7 +445,7 @@ public record SheetData(
      * para o piso, ate os que estavam certos.
      */
     public SheetData {
-        identity = identity == null ? new Identity("", "", "", "", "") : identity;
+        identity = identity == null ? new Identity("", "", "", "", "", "", "") : identity;
         vitals = vitals == null ? Vitals.defaults() : vitals;
         progress = progress == null ? Progress.defaults() : progress;
         attributeValueMin = clamp(attributeValueMin, SheetModel.VALUE_LIMIT_MIN, SheetModel.VALUE_LIMIT_MAX);
@@ -386,6 +459,10 @@ public record SheetData(
         pericias = sanitizePericias(pericias);
         attributes = clampAttributes(attributes, attributeValueMin, attributeValueMax);
         pericias = clampPericiaValues(pericias, periciaValueMax);
+        // 30/09/2026 (FASE 2B): o inventario entra por ultimo, normalizado pelo
+        // construtor de Inventory, que corta a lista em Inventory.MAX_ITEMS e o
+        // maxWeight em [0, WEIGHT_MAX].
+        inventory = inventory == null ? Inventory.EMPTY : inventory;
     }
 
     // ------------------------------------------------------------------
@@ -409,23 +486,69 @@ public record SheetData(
      * apenas por convencao de leitura - a posição é indiferente para a
      * segurança, e a compatibilidade real vem de o mod ir junto com o cliente.
      *
-     * <p><b>{@code playerName} (29/09/2026):</b> quinto e ultimo campo, pedido
+     * <p><b>{@code playerName} (29/09/2026):</b> quinto campo, pedido
      * do usuario como "campo Player na frente de Identity, com uma caixinha
      * pequena para o nome do dono da ficha". Ele e <b>independente</b> do
      * {@code characterName}: aquele e o nome do personagem, este e o nome de
      * quem joga. Texto vazio e <b>legitimo</b> (caixa vazia = nao preenchido),
      * e por isso ele passa pelo {@link SheetData#clean(String)} de um argumento,
      * que devolve {@code ""} em vez de um fallback.
+     *
+     * <p><b>{@code appearance} e {@code backstory} (30/09/2026):</b> sexto e
+     * setimo campo, os dois quadros de texto livre com rolagem da aba
+     * {@code Info/Inventory}. <b>Por que entram aqui e nao como componentes
+     * novos do {@link SheetData}:</b> {@code Identity} ja e o bloco de texto do
+     * personagem e ja esta no NBT com {@code optionalFieldOf} por chave, entao
+     * os dois campos novos nao mexem no {@link SheetData#CODEC} (que tem ordem
+     * sensivel e ~8 call sites de construtor dentro do {@link #withField}) nem
+     * no {@link SheetData#STREAM_CODEC}. O preco e um {@link
+     * #STREAM_CODEC} deste record com 7 campos, que e o motivo de ele ter sido
+     * trocado por {@link StreamCodec#of} logo abaixo.
+     *
+     * <p>Os dois tetos sao DIFERENTES e nao se cruzam: os cinco campos antigos
+     * continuam em {@link #MAX_NAME} (32) e estes dois em {@link #MAX_TEXT}
+     * (2.000). E o construtor compacto que aplica o teto de cada um, entao o
+     * Appearance nao volta cortado em 32 pelo servidor -- o que aconteceria se os
+     * dois usassem o mesmo {@code clean(String)}.
      */
     public record Identity(String characterName, String race, String characterClass, String background,
-                           String playerName) {
-        public static final StreamCodec<FriendlyByteBuf, Identity> STREAM_CODEC = StreamCodec.composite(
-                ByteBufCodecs.stringUtf8(MAX_NAME), Identity::characterName,
-                ByteBufCodecs.stringUtf8(MAX_NAME), Identity::race,
-                ByteBufCodecs.stringUtf8(MAX_NAME), Identity::characterClass,
-                ByteBufCodecs.stringUtf8(MAX_NAME), Identity::background,
-                ByteBufCodecs.stringUtf8(MAX_NAME), Identity::playerName,
-                Identity::new
+                           String playerName, String appearance, String backstory) {
+        /**
+         * <b>Por que {@link StreamCodec#of} e nao {@code composite} (30/09/2026):</b>
+         * o record foi de 5 para 7 campos. O {@code composite} tem sobrecarga de 7
+         * pares (conferido com {@code javap} no jar do 1.21.11), entao nao era
+         * obrigatorio trocar -- mas o {@code of} deixa as duas listas de campos
+         * visiveis lado a lado, sem depender de o numero caber numa sobrecarga, e
+         * ja e o caminho do {@link SheetData#STREAM_CODEC} (ver o Javadoc do
+         * {@code ENCODER} de la).
+         *
+         * <p><b>A ORDEM DO ENCODER TEM DE SER IGUAL A DO DECODER</b> (7 linhas
+         * em cada lado, nesta ordem: characterName, race, characterClass,
+         * background, playerName, appearance, backstory). Os dois sao lambdas
+         * independentes e nada os amarra em tempo de compilacao: um campo so num
+         * dos lados continua compilando e falha so em runtime, com o dado
+         * trocado. O {@code Identity} de um cliente antigo nao teria o 6o e o 7o
+         * campo, mas nao ha como evitar: o mod vai junto com o cliente.
+         */
+        public static final StreamCodec<FriendlyByteBuf, Identity> STREAM_CODEC = StreamCodec.of(
+                (buf, id) -> {
+                    ByteBufCodecs.stringUtf8(MAX_NAME).encode(buf, id.characterName());
+                    ByteBufCodecs.stringUtf8(MAX_NAME).encode(buf, id.race());
+                    ByteBufCodecs.stringUtf8(MAX_NAME).encode(buf, id.characterClass());
+                    ByteBufCodecs.stringUtf8(MAX_NAME).encode(buf, id.background());
+                    ByteBufCodecs.stringUtf8(MAX_NAME).encode(buf, id.playerName());
+                    ByteBufCodecs.stringUtf8(MAX_TEXT).encode(buf, id.appearance());
+                    ByteBufCodecs.stringUtf8(MAX_TEXT).encode(buf, id.backstory());
+                },
+                buf -> new Identity(
+                        ByteBufCodecs.stringUtf8(MAX_NAME).decode(buf),
+                        ByteBufCodecs.stringUtf8(MAX_NAME).decode(buf),
+                        ByteBufCodecs.stringUtf8(MAX_NAME).decode(buf),
+                        ByteBufCodecs.stringUtf8(MAX_NAME).decode(buf),
+                        ByteBufCodecs.stringUtf8(MAX_NAME).decode(buf),
+                        ByteBufCodecs.stringUtf8(MAX_TEXT).decode(buf),
+                        ByteBufCodecs.stringUtf8(MAX_TEXT).decode(buf)
+                )
         );
 
         public Identity {
@@ -436,31 +559,46 @@ public record SheetData(
             // clean(String) de um argumento: trim + teto MAX_NAME, e devolve ""
             // para null/"" em vez de cair em um fallback.
             playerName = clean(playerName);
+            // Os dois textos longos NAO podem usar o clean de cima: ele corta em
+            // MAX_NAME (32) e o Appearance seria truncado pelo servidor sempre no
+            // mesmo ponto. cleanText e o mesmo trim com o teto MAX_TEXT.
+            appearance = cleanText(appearance);
+            backstory = cleanText(backstory);
         }
 
         /** Cópia com o nome do personagem trocado. */
         public Identity withCharacterName(String value) {
-            return new Identity(value, race, characterClass, background, playerName);
+            return new Identity(value, race, characterClass, background, playerName, appearance, backstory);
         }
 
         /** Cópia com a raça trocada. */
         public Identity withRace(String value) {
-            return new Identity(characterName, value, characterClass, background, playerName);
+            return new Identity(characterName, value, characterClass, background, playerName, appearance, backstory);
         }
 
         /** Cópia com a classe trocada. */
         public Identity withCharacterClass(String value) {
-            return new Identity(characterName, race, value, background, playerName);
+            return new Identity(characterName, race, value, background, playerName, appearance, backstory);
         }
 
         /** Cópia com a origem trocada. */
         public Identity withBackground(String value) {
-            return new Identity(characterName, race, characterClass, value, playerName);
+            return new Identity(characterName, race, characterClass, value, playerName, appearance, backstory);
         }
 
         /** Cópia com o nome do jogador dono da ficha trocado. */
         public Identity withPlayerName(String value) {
-            return new Identity(characterName, race, characterClass, background, value);
+            return new Identity(characterName, race, characterClass, background, value, appearance, backstory);
+        }
+
+        /** Cópia com a aparência do personagem trocada. */
+        public Identity withAppearance(String value) {
+            return new Identity(characterName, race, characterClass, background, playerName, value, backstory);
+        }
+
+        /** Cópia com a história do personagem trocada. */
+        public Identity withBackstory(String value) {
+            return new Identity(characterName, race, characterClass, background, playerName, appearance, value);
         }
     }
 
@@ -925,6 +1063,240 @@ public record SheetData(
     }
 
     // ------------------------------------------------------------------
+    // INVENTARIO (30/09/2026, FASE 2B)
+    // ------------------------------------------------------------------
+
+    /**
+     * O que um {@code SheetItemPayload} quer fazer com um item do inventario.
+     *
+     * <p>As mesmas tres operacoes de {@link SkillOp}, pelo mesmo motivo: sao as
+     * tres coisas que um item pode sofrer na tela -- criar, editar, apagar.
+     */
+    public enum ItemOp {
+        /** Cria um item novo. O {@code index} do payload e {@code -1}. */
+        ADD,
+        /**
+         * Troca o item do <b>indice</b> do payload, no mesmo lugar da lista.
+         *
+         * <p>E o que o botao Edit da coluna Inventory faz. O indice trava a
+         * posicao: enquanto o jogador edita, outra edicao pode ter apagado esse
+         * item, e um UPDATE atrasado com indice fora da lista e descartado pelo
+         * servidor em vez de recriar o item.
+         */
+        UPDATE,
+        /** Apaga o item do indice. O {@code item} do payload nao e lido. */
+        REMOVE,
+        /**
+         * Valor invalido vindo da rede. <b>Nao fazer nada com ele.</b>
+         *
+         * <p>Mesma razao do {@link SkillOp#INVALID}: um indice corrompido nao
+         * pode virar uma operacao valida por acidente.
+         */
+        INVALID;
+
+        public static final StreamCodec<io.netty.buffer.ByteBuf, ItemOp> STREAM_CODEC =
+                new StreamCodec<>() {
+                    @Override
+                    public ItemOp decode(io.netty.buffer.ByteBuf buffer) {
+                        int index = ByteBufCodecs.VAR_INT.decode(buffer);
+                        ItemOp[] values = ItemOp.values();
+                        return index >= 0 && index < values.length ? values[index] : INVALID;
+                    }
+
+                    @Override
+                    public void encode(io.netty.buffer.ByteBuf buffer, ItemOp op) {
+                        ByteBufCodecs.VAR_INT.encode(buffer, op == null ? 0 : op.ordinal());
+                    }
+                };
+    }
+
+    /**
+     * Um <b>item</b> do inventario da ficha: {@code name} + {@code type} +
+     * {@code weight} + {@code description} (30/09/2026, FASE 2B).
+     *
+     * <p><b>O peso nao e uma regra, e um numero que o jogador ve.</b> O
+     * {@code type} ("arma", "poção", "armadura") e o que o jogador classifica;
+     * o {@code weight} e o quanto aquilo pesa para a regra de carga, e a soma de
+     * todos os itens aparece na linha {@code Weight: X.XX / Y.YY}. Passar do
+     * limite pinta a linha de vermelho ({@link Inventory#overweight()}) e
+     * <b>nao bloqueia nada</b>: quem decide se o personagem pode carregar o que
+     * carrega e o Mestre, em jogo.
+     *
+     * <p>Por que {@code name} e {@code type} tem teto {@link #MAX_NAME} (32) e
+     * a descricao tem {@link #MAX_TEXT}: sao coisas diferentes. O nome e o tipo
+     * precisam caber num rotulo e numa linha da lista; a descricao e texto livre
+     * e o jogador rola dentro da caixa.
+     *
+     * <p><b>{@code WEIGHT_PATTERN} e a regra de digito do peso</b>, e ela mora
+     * aqui, e nao em cada tela, porque tem de concordar com o teto de 2 casas
+     * que {@link #WEIGHT_MAX} e o arredondamento de {@link #roundWeight}
+     * implementam: um peso escrito na tela nao pode ser recusado pelo construtor
+     * logo depois.
+     */
+    public record InventoryItem(String name, String type, float weight, String description) {
+
+        /**
+         * Item vazio. E o que o payload de {@link ItemOp#REMOVE} leva: apagar nao
+         * precisa carregar item nenhum, e assim o servidor tem um campo valido
+         * para ler mesmo quando o item sumiu da lista.
+         */
+        public static final InventoryItem EMPTY = new InventoryItem("", "", 0f, "");
+
+        /** Teto do peso de um item, e o mesmo do {@code maxWeight}. */
+        public static final float WEIGHT_MAX = 9999f;
+
+        /**
+         * Digitos do peso, com <b>um</b> ponto e ate 2 casas decimais.
+         *
+         * <p>E o filtro que as duas telas usam na caixa do peso: e o que impede
+         * "1.2.3" (que nao parseia e cairia em 0 ao salvar) e "99999" (que o
+         * construtor cortaria em {@link #WEIGHT_MAX} sem o jogador ver).
+         */
+        public static final String WEIGHT_PATTERN = "\\d{0,4}(\\.\\d{0,2})?";
+
+        public static final StreamCodec<FriendlyByteBuf, InventoryItem> STREAM_CODEC = StreamCodec.composite(
+                ByteBufCodecs.stringUtf8(MAX_NAME), InventoryItem::name,
+                ByteBufCodecs.stringUtf8(MAX_NAME), InventoryItem::type,
+                ByteBufCodecs.FLOAT, InventoryItem::weight,
+                ByteBufCodecs.stringUtf8(MAX_TEXT), InventoryItem::description,
+                InventoryItem::new
+        );
+
+        public InventoryItem {
+            name = clean(name);
+            type = clean(type);
+            // 30/09/2026: o peso e arredondado NA ENTRADA (duas casas), e nao
+            // so na soma. Sem isso, dois itens de peso 1.005 somariam 2.01 e
+            // cada um continuaria exibindo um numero que a soma nao tem.
+            weight = roundWeight(clampWeight(weight));
+            description = cleanText(description);
+        }
+
+        /** Peso Formatado com 2 casas, para a lista e para o resumo. */
+        public String weightText() {
+            return formatWeight(weight);
+        }
+    }
+
+    /**
+     * A lista de itens da ficha e o limite de peso escolhido pelo jogador
+     * (30/09/2026, FASE 2B).
+     *
+     * <p>Vem por ultimo no {@link SheetData} e e o unico componente que o
+     * {@link SheetModel#align} <b>copia sem mexer</b>: a lista de itens pertence
+     * ao jogador e nao ao modelo do sistema, entao trocar de modelo nao pode
+     * apagar o que ele carrega.
+     *
+     * <p><b>O peso e sempre visual.</b> {@link #totalWeight()} e a soma
+     * arredondada de todos os itens e {@link #overweight()} decide a cor da
+     * linha do resumo; nenhum dos dois bloqueia gravacao, edicao ou uso do
+     * inventario.
+     */
+    public record Inventory(List<InventoryItem> items, float maxWeight) {
+
+        /** Numero maximo de itens por ficha. */
+        public static final int MAX_ITEMS = 50;
+
+        /** Teto do peso maximo, o mesmo de {@link InventoryItem#WEIGHT_MAX}. */
+        public static final float WEIGHT_MAX = InventoryItem.WEIGHT_MAX;
+
+        /** Inventario vazio: e o que um save anterior a Fase 2B decodifica. */
+        public static final Inventory EMPTY = new Inventory(List.of(), 0f);
+
+        public static final StreamCodec<FriendlyByteBuf, Inventory> STREAM_CODEC = StreamCodec.composite(
+                InventoryItem.STREAM_CODEC.apply(ByteBufCodecs.list()), Inventory::items,
+                ByteBufCodecs.FLOAT, Inventory::maxWeight,
+                Inventory::new
+        );
+
+        public Inventory {
+            items = sanitizeItems(items);
+            maxWeight = roundWeight(clampWeight(maxWeight));
+        }
+
+        /**
+         * Soma dos pesos de todos os itens, <b>arredondada uma vez no final</b>.
+         *
+         * <p>Cada item ja chega arredondado por {@link InventoryItem}, mas a
+         * soma de dois numeros de 2 casas ainda pode dar uma terceira casa
+         * (0.33 + 0.33 = 0.66 exato, mas 12.34 + 0.66 = 13.00 tambem fecha;
+         * 0.01 repetido 50 vezes fecha em 0.50, e com itens de 9999 o total
+         * passa de 49 mil). Arredondar so aqui evita que a linha do resumo
+         * mostre um numero que a soma nao tem.
+         */
+        public float totalWeight() {
+            float sum = 0f;
+            for (InventoryItem item : items) {
+                sum += item.weight();
+            }
+            return roundWeight(sum);
+        }
+
+        /** O total passa do limite escolhido. Decide so a cor do resumo. */
+        public boolean overweight() {
+            return totalWeight() > maxWeight;
+        }
+
+        /**
+         * Acrescenta um item no fim da lista.
+         *
+         * <p><b>Com a lista cheia (50) devolve a propria instancia</b>: o
+         * servidor ve {@code updated == current} e nem transmite nada, em vez de
+         * aceitar o 51o item e perder o primeiro. E o mesmo caminho do
+         * {@link #withSkill} com {@link #MAX_SKILLS}.
+         */
+        public Inventory addItem(InventoryItem item) {
+            if (item == null || items.size() >= MAX_ITEMS) {
+                return this;
+            }
+            List<InventoryItem> next = new ArrayList<>(items);
+            next.add(item);
+            return new Inventory(next, maxWeight);
+        }
+
+        /**
+         * Troca o item do indice dado, no mesmo lugar da lista.
+         *
+         * <p>Indice fora da lista devolve a propria instancia: um UPDATE atrasado
+         * (o item foi apagado entre o clique e o pacote) nao pode recriar o item
+         * como se fosse um ADD.
+         */
+        public Inventory withItem(int index, InventoryItem item) {
+            if (item == null || index < 0 || index >= items.size()) {
+                return this;
+            }
+            if (items.get(index).equals(item)) {
+                return this;
+            }
+            List<InventoryItem> next = new ArrayList<>(items);
+            next.set(index, item);
+            return new Inventory(next, maxWeight);
+        }
+
+        /** Apaga o item do indice; indice fora da lista devolve a propria instancia. */
+        public Inventory removeItem(int index) {
+            if (index < 0 || index >= items.size()) {
+                return this;
+            }
+            List<InventoryItem> next = new ArrayList<>(items);
+            next.remove(index);
+            return new Inventory(next, maxWeight);
+        }
+
+        /**
+         * Novo limite de peso. Valor ja cortado e arredondado por quem chama
+         * (o construtor), e igual ao atual devolve a propria instancia, para que
+         * o eco do servidor nao dispare uma gravacao e um broadcast a toa.
+         */
+        public Inventory withMaxWeight(float next) {
+            if (next == maxWeight) {
+                return this;
+            }
+            return new Inventory(items, next);
+        }
+    }
+
+    // ------------------------------------------------------------------
     // FÁBRICA
     // ------------------------------------------------------------------
 
@@ -1097,7 +1469,7 @@ public record SheetData(
                 // proposito. O nome do jogador continua indo no campo do
                 // personagem, como antes - o usuario nao pediu para mudar esse
                 // campo, so pediu a caixinha nova em cima dele.
-                new Identity(clean(playerName), "", "", "", ""),
+                new Identity(clean(playerName), "", "", "", "", "", ""),
                 Vitals.defaults(),
                 Progress.defaults(),
                 Attributes.defaults(),
@@ -1105,7 +1477,12 @@ public record SheetData(
                 defaultPericias(),
                 model.attributeValueMin(),
                 model.attributeValueMax(),
-                model.periciaValueMax()
+                model.periciaValueMax(),
+                // 30/09/2026 (FASE 2B): a ficha nova nasce com inventario vazio
+                // e sem limite de peso. O jogador escolhe o proprio limite na
+                // coluna Inventory; um valor aqui viria do modelo, que nao tem
+                // nada a dizer sobre a carga de cada um.
+                Inventory.EMPTY
         );
     }
 
@@ -1145,20 +1522,41 @@ public record SheetData(
 
         return switch (key) {
             case "charactername" -> new SheetData(identity.withCharacterName(value), vitals, progress,
-                    attributes, skills, pericias, attributeValueMin, attributeValueMax, periciaValueMax);
+                    attributes, skills, pericias, attributeValueMin, attributeValueMax, periciaValueMax, inventory);
             case "race" -> new SheetData(identity.withRace(value), vitals, progress,
-                    attributes, skills, pericias, attributeValueMin, attributeValueMax, periciaValueMax);
+                    attributes, skills, pericias, attributeValueMin, attributeValueMax, periciaValueMax, inventory);
             case "characterclass" -> new SheetData(identity.withCharacterClass(value), vitals, progress,
-                    attributes, skills, pericias, attributeValueMin, attributeValueMax, periciaValueMax);
+                    attributes, skills, pericias, attributeValueMin, attributeValueMax, periciaValueMax, inventory);
             case "background" -> new SheetData(identity.withBackground(value), vitals, progress,
-                    attributes, skills, pericias, attributeValueMin, attributeValueMax, periciaValueMax);
+                    attributes, skills, pericias, attributeValueMin, attributeValueMax, periciaValueMax, inventory);
             // 29/09/2026: nome do jogador dono da ficha. A chave chega como
             // "playerName" e o switch compara em minuscula (key), igual aos
             // casos acima. A permissao e a mesma de todos os outros campos de
             // texto: quem aplica este metodo ja passou por canEditSheet no
             // servidor, que libera o dono da ficha e o Mestre.
             case "playername" -> new SheetData(identity.withPlayerName(value), vitals, progress,
-                    attributes, skills, pericias, attributeValueMin, attributeValueMax, periciaValueMax);
+                    attributes, skills, pericias, attributeValueMin, attributeValueMax, periciaValueMax, inventory);
+            // 30/09/2026: os dois textos longos da aba Info/Inventory. Mesmo
+            // caminho dos casos acima (chave em minuscula no `key`, permissao ja
+            // liberada por canEditSheet no servidor, teto por cleanText no
+            // Identity) -- e o que sobra depois e o `default`, o ramo de
+            // atributo: sem estes casos o Appearance cairia la e viraria um
+            // atributo inexistente.
+            case "appearance" -> new SheetData(identity.withAppearance(value), vitals, progress,
+                    attributes, skills, pericias, attributeValueMin, attributeValueMax, periciaValueMax, inventory);
+            case "backstory" -> new SheetData(identity.withBackstory(value), vitals, progress,
+                    attributes, skills, pericias, attributeValueMin, attributeValueMax, periciaValueMax, inventory);
+
+            // 30/09/2026 (FASE 2B): o limite de peso do inventario e um texto
+            // que o jogador digita, entao vem pelo mesmo caminho dos outros
+            // campos em withField (o SheetFieldPayload ja trada a chave
+            // "maxWeight"). Valor nao numerico mantem o anterior, e um valor que
+            // nao muda devolve a propria ficha -- assim o eco do servidor nao
+            // reescreve a caixa que esta com o foco.
+            case "maxweight" -> {
+                Inventory next = inventory.withMaxWeight(parseFloat(value, inventory.maxWeight()));
+                yield next == inventory ? this : withInventory(next);
+            }
 
             case "hp" -> replaceVitals(new Vitals(parseInt(value, vitals.hp()), vitals.hpMax(), vitals.mana(), vitals.manaMax()));
             case "hpmax" -> replaceVitals(new Vitals(vitals.hp(), parseInt(value, vitals.hpMax()), vitals.mana(), vitals.manaMax()));
@@ -1167,18 +1565,18 @@ public record SheetData(
 
             case "level" -> new SheetData(identity, vitals,
                     new Progress(parseInt(value, progress.level()), progress.xp(), progress.xpText()),
-                    attributes, skills, pericias, attributeValueMin, attributeValueMax, periciaValueMax);
+                    attributes, skills, pericias, attributeValueMin, attributeValueMax, periciaValueMax, inventory);
             // Com o modelo em modo TEXT, o campo da barra mostra o texto que o
             // Mestre digitou (ex.: "Fiel aogrupo"). O numero continua guardado
             // para quando o modelo voltar para NUMBER.
             case "xp" -> SheetModelHolder.current().xp() == SheetModel.XpMode.TEXT
                     ? new SheetData(identity, vitals, new Progress(progress.level(), progress.xp(), value),
                             attributes, skills, pericias,
-                            attributeValueMin, attributeValueMax, periciaValueMax)
+                            attributeValueMin, attributeValueMax, periciaValueMax, inventory)
                     : new SheetData(identity, vitals,
                             new Progress(progress.level(), parseInt(value, progress.xp()), progress.xpText()),
                             attributes, skills, pericias,
-                            attributeValueMin, attributeValueMax, periciaValueMax);
+                            attributeValueMin, attributeValueMax, periciaValueMax, inventory);
 
             // O texto do XP vem num campo SEPARADO do numero, e nao no mesmo
             // "xp": e o que a tela de Status abre em modo TEXT. Sem este caso o
@@ -1193,7 +1591,7 @@ public record SheetData(
             case "xptext" -> SheetModelHolder.current().xp() == SheetModel.XpMode.TEXT
                     ? new SheetData(identity, vitals, new Progress(progress.level(), progress.xp(), value),
                             attributes, skills, pericias,
-                            attributeValueMin, attributeValueMax, periciaValueMax)
+                            attributeValueMin, attributeValueMax, periciaValueMax, inventory)
                     : this;
 
             // Qualquer outra chave e um id de atributo. O que decide se ela
@@ -1208,12 +1606,12 @@ public record SheetData(
 
     private SheetData replaceVitals(Vitals newVitals) {
         return new SheetData(identity, newVitals, progress, attributes, skills, pericias,
-                attributeValueMin, attributeValueMax, periciaValueMax);
+                attributeValueMin, attributeValueMax, periciaValueMax, inventory);
     }
 
     private SheetData replaceAttributes(Attributes newAttributes) {
         return new SheetData(identity, vitals, progress, newAttributes, skills, pericias,
-                attributeValueMin, attributeValueMax, periciaValueMax);
+                attributeValueMin, attributeValueMax, periciaValueMax, inventory);
     }
 
     /**
@@ -1242,14 +1640,14 @@ public record SheetData(
         }
         if (updated) {
             return new SheetData(identity, vitals, progress, attributes, next, pericias,
-                    attributeValueMin, attributeValueMax, periciaValueMax);
+                    attributeValueMin, attributeValueMax, periciaValueMax, inventory);
         }
         if (skills.size() >= MAX_SKILLS) {
             return this; // lista cheia
         }
         next.add(new Skill(cleanName, cleanDesc));
         return new SheetData(identity, vitals, progress, attributes, next, pericias,
-                attributeValueMin, attributeValueMax, periciaValueMax);
+                attributeValueMin, attributeValueMax, periciaValueMax, inventory);
     }
 
     /**
@@ -1293,7 +1691,7 @@ public record SheetData(
             }
         }
         return new SheetData(identity, vitals, progress, attributes, next, pericias,
-                attributeValueMin, attributeValueMax, periciaValueMax);
+                attributeValueMin, attributeValueMax, periciaValueMax, inventory);
     }
 
     /**
@@ -1348,7 +1746,7 @@ public record SheetData(
             }
         }
         return changed ? new SheetData(identity, vitals, progress, attributes, skills, next,
-                attributeValueMin, attributeValueMax, periciaValueMax) : this;
+                attributeValueMin, attributeValueMax, periciaValueMax, inventory) : this;
     }
 
     /** Remove uma skill pelo nome (comparação sem diferenciar maiusculas). */
@@ -1367,7 +1765,7 @@ public record SheetData(
             next.add(existing);
         }
         return removed ? new SheetData(identity, vitals, progress, attributes, next, pericias,
-                attributeValueMin, attributeValueMax, periciaValueMax) : this;
+                attributeValueMin, attributeValueMax, periciaValueMax, inventory) : this;
     }
 
     /**
@@ -1401,7 +1799,25 @@ public record SheetData(
         List<Skill> next = new ArrayList<>(skills);
         next.add(to, next.remove(from));
         return new SheetData(identity, vitals, progress, attributes, next, pericias,
-                attributeValueMin, attributeValueMax, periciaValueMax);
+                attributeValueMin, attributeValueMax, periciaValueMax, inventory);
+    }
+
+    /**
+     * Devolve uma ficha nova com o inventario trocado (30/09/2026, FASE 2B).
+     *
+     * <p>E o unico caminho que o servidor usa para gravar um item, e ele
+     * <b>devolve a propria ficha</b> quando o inventario nao mudou (indice fora
+     * da lista, item igual, lista cheia). O handler do servidor compara
+     * {@code updated == current} e nesse caso nem grava nem transmite: e o que
+     * faz um UPDATE atrasado, cujo item ja foi apagado, ser descartado em
+     * silencio em vez de recriar o item.
+     */
+    public SheetData withInventory(Inventory next) {
+        if (next == null || next.equals(inventory)) {
+            return this;
+        }
+        return new SheetData(identity, vitals, progress, attributes, skills, pericias,
+                attributeValueMin, attributeValueMax, periciaValueMax, next);
     }
 
     // ------------------------------------------------------------------
@@ -1419,10 +1835,17 @@ public record SheetData(
             case "race" -> identity.race();
             case "characterclass" -> identity.characterClass();
             case "background" -> identity.background();
+            // 30/09/2026: os dois textos longos da aba Info/Inventory.
+            case "appearance" -> identity.appearance();
+            case "backstory" -> identity.backstory();
             // XP em modo TEXT e um campo de texto, e nao um numero. Sem esta
             // linha, a caixa de texto da tela de Status cairia no `default` e o
             // Mestre nao veria o que digitou.
             case "xptext" -> progress.xpText();
+            // 30/09/2026 (FASE 2B): o limite de peso e lido como texto (e nao
+            // por getNumeric, que devolve int) justamente porque tem 2 casas
+            // decimais. O formato e o mesmo da linha de resumo do inventario.
+            case "maxweight" -> formatWeight(inventory.maxWeight());
             default -> "";
         };
     }
@@ -1554,16 +1977,32 @@ public record SheetData(
      * progressao). O rotulo de um atributo mora no modelo e e lido por
      * {@link SheetModel#attributeLabel(String)}; o de uma pericia e o proprio
      * {@code name} que o Mestre digitou no editor.
+     *
+     * <p><b>30/09/2026 - os dois textos longos tem o rotulo resolvido AQUI, e nao
+     * no {@link SheetModel}:</b> o {@code default} do modelo devolve a propria
+     * chave, e "appearance" nao e vazio, entao o {@code switch} abaixo nunca era
+     * alcancado e a ficha desenharia "appearance" cru no lugar do titulo. Como o
+     * usuario nao pediu para editar estes dois nomes no Sheet Editor (ao contrario
+     * de {@code characterName}, que tem {@code nameLabel}), o nome e um literal
+     * dos dois, igual ao {@code case "playername" -> "Player"} do modelo. Sao os
+     * unicos dois campos com este tratamento: nenhum outro rotulo foi inventado.
      */
     public static String labelOf(String field) {
         if (field == null) {
             return "";
         }
+        String key = field.toLowerCase(Locale.ROOT);
+        if (key.equals("appearance")) {
+            return "Character Appearance";
+        }
+        if (key.equals("backstory")) {
+            return "Character Backstory";
+        }
         String label = SheetModelHolder.current().labelOf(field);
         if (!label.isEmpty()) {
             return label;
         }
-        return switch (field.toLowerCase(Locale.ROOT)) {
+        return switch (key) {
             case "hpmax" -> "Max HP";
             case "manamax" -> "Max Mana";
             default -> field;
@@ -1581,6 +2020,26 @@ public record SheetData(
         }
         String trimmed = text.trim();
         return trimmed.length() > MAX_NAME ? trimmed.substring(0, MAX_NAME) : trimmed;
+    }
+
+    /**
+     * Texto longo (aparencia, historia): o mesmo trim de {@link #clean(String)},
+     * mas com o teto {@link #MAX_TEXT} em vez de {@link #MAX_NAME}.
+     *
+     * <p><b>30/09/2026:</b> existe para o teto nao ser unico. Se os dois campos
+     * novos usassem o {@code clean} de um argumento, o servidor cortaria o
+     * Appearance em 32 caracteres e a rolagem mostraria sempre o mesmo comeco --
+     * o jogador digitaria o resto e ele nunca chegaria ao servidor. O
+     * {@code stringUtf8(MAX_TEXT)} do {@link Identity#STREAM_CODEC} e o
+     * {@code stringUtf8(2048)} do {@code SheetFieldPayload} sao o mesmo numero
+     * com folga, porque o codec lanca excecao acima do teto, nao corta.
+     */
+    private static String cleanText(String text) {
+        if (text == null) {
+            return "";
+        }
+        String trimmed = text.trim();
+        return trimmed.length() > MAX_TEXT ? trimmed.substring(0, MAX_TEXT) : trimmed;
     }
 
     private static String cleanSkill(String text) {
@@ -1783,11 +2242,102 @@ public record SheetData(
         return Math.max(min, Math.min(value, max));
     }
 
+    /**
+     * Corta o peso em {@code 0..WEIGHT_MAX} (30/09/2026, FASE 2B).
+     *
+     * <p><b>NaN e infinito viram 0</b>, e nao passam reto: eles chegam de um
+     * {@code ByteBufCodecs.FLOAT} adulterado ou de um NBT editado a mao, e
+     * {@code Math.min(NaN, x)} devolve {@code NaN} -- que contaminaria a soma de
+     * {@link Inventory#totalWeight()} e a comparacao de {@link
+     * Inventory#overweight()} para sempre, sem erro nenhum.
+     */
+    private static float clampWeight(float value) {
+        if (!Float.isFinite(value)) {
+            return 0f;
+        }
+        return Math.max(0f, Math.min(value, InventoryItem.WEIGHT_MAX));
+    }
+
+    /**
+     * Arredonda o peso para 2 casas decimais (decisao do usuario em 30/09/2026).
+     *
+     * <p>E o {@code Math.round(w * 100f) / 100f} do enunciado: o
+     * {@code Math.round(float)} devolve {@code int}, e o total de 50 itens de
+     * peso {@link InventoryItem#WEIGHT_MAX} multiplicado por 100 cabe folgado
+     * num {@code int}.
+     */
+    private static float roundWeight(float value) {
+        return Math.round(value * 100f) / 100f;
+    }
+
+    /**
+     * Peso como texto, sempre com 2 casas (decisao do usuario em 30/09/2026).
+     *
+     * <p>{@link Locale#ROOT} e obrigatorio: com a locale padrao do sistema (pt-BR
+     * no Windows) o separador viraria virgula, e o eco do servidor apareceria
+     * como {@code 12,34} na caixa, que so aceita digito e ponto.
+     */
+    public static String formatWeight(float value) {
+        return String.format(Locale.ROOT, "%.2f", value);
+    }
+
+    /**
+     * Higiene da lista de itens (30/09/2026, FASE 2B).
+     *
+     * <p>Mesmo desenho do {@link #sanitizeSkills}: descarta nulo e item sem
+     * nome, reconstroi os que ficam (o construtor do record normaliza de novo,
+     * porque a lista pode vir de um payload sem passar por {@link
+     * Inventory#addItem}) e corta em {@link Inventory#MAX_ITEMS}.
+     *
+     * <p><b>Nao deduplica por nome</b>, ao contrario das skills: dois itens com o
+     * mesmo nome sao legitimos ("Corda" em duas mochilas), e o jogador e quem
+     * decide o que e duplicado.
+     */
+    private static List<InventoryItem> sanitizeItems(List<InventoryItem> raw) {
+        if (raw == null || raw.isEmpty()) {
+            return List.of();
+        }
+        List<InventoryItem> out = new ArrayList<>(Math.min(raw.size(), Inventory.MAX_ITEMS));
+        for (InventoryItem item : raw) {
+            if (item == null) {
+                continue;
+            }
+            InventoryItem clean = new InventoryItem(item.name(), item.type(), item.weight(), item.description());
+            if (clean.name().isEmpty()) {
+                continue;
+            }
+            out.add(clean);
+            if (out.size() >= Inventory.MAX_ITEMS) {
+                break;
+            }
+        }
+        return List.copyOf(out);
+    }
+
     private static int parseInt(String value, int fallback) {
         try {
             return Integer.parseInt(value);
         } catch (NumberFormatException e) {
             return fallback; // texto não numérico: mantém o valor anterior
+        }
+    }
+
+    /**
+     * Le o peso que o cliente mandou como texto (30/09/2026, FASE 2B).
+     *
+     * <p><b>Texto incompleto mantem o valor anterior</b> em vez de virar 0: e o
+     * que acontece com o texto "12." que o jogador esta digitando quando o
+     * pacote sai, e zerar o limite nele seria pior do que nao gravar nada. O
+     * corte e o arredondamento ficam com {@link Inventory#withMaxWeight}.
+     */
+    private static float parseFloat(String value, float fallback) {
+        if (value.endsWith(".")) {
+            return fallback; // texto incompleto: mantem o valor anterior
+        }
+        try {
+            return Float.parseFloat(value);
+        } catch (NumberFormatException e) {
+            return fallback; // texto nao numerico: mantem o valor anterior
         }
     }
 }
