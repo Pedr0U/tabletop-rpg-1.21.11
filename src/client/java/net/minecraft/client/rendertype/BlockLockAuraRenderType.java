@@ -22,11 +22,13 @@ import net.minecraft.resources.Identifier;
  * created, which a build cannot catch.
  */
 public final class BlockLockAuraRenderType {
+    private static RenderPipeline linesThroughWallsPipeline;
     private static RenderType linesThroughWalls;
 
     private BlockLockAuraRenderType() {
     }
 
+    /** O RenderType da aura; cria o pipeline sob demanda. */
     public static RenderType linesThroughWalls() {
         if (linesThroughWalls != null) {
             return linesThroughWalls;
@@ -68,8 +70,20 @@ public final class BlockLockAuraRenderType {
         builder.withColorWrite(source.isWriteColor(), source.isWriteAlpha());
 
         RenderPipeline pipeline = builder.build();
+        linesThroughWallsPipeline = pipeline;
         RenderSetup setup = RenderSetup.builder(pipeline).createRenderSetup();
         linesThroughWalls = RenderType.create("tabletop-rpg:block_lock_aura_lines", setup);
         return linesThroughWalls;
+    }
+
+    /**
+     * O {@link RenderPipeline} cru da aura. A integracao com o Iris precisa da identidade do
+     * pipeline (e nao so do RenderType) para atribuir um shader a ele.
+     */
+    public static RenderPipeline pipelineThroughWalls() {
+        if (linesThroughWallsPipeline == null) {
+            linesThroughWalls();
+        }
+        return linesThroughWallsPipeline;
     }
 }

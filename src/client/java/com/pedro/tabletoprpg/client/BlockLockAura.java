@@ -100,12 +100,22 @@ public final class BlockLockAura {
             return;
         }
 
-        PoseStack poseStack = context.matrices();
-        Vec3 camera = client.gameRenderer.getMainCamera().position();
-
         RenderType auraType = BlockLockAuraRenderType.linesThroughWalls();
-        MultiBufferSource consumers = context.consumers();
-        VertexConsumer consumer = consumers.getBuffer(auraType);
+
+        // Antes do desenho: diz ao Iris qual shader usar para o pipeline da aura. Sem isso
+        // a aura nao aparece quando ha shaders ligados (ver IrisAuraSupport).
+        IrisAuraSupport.ensurePipelineRegistered();
+
+        drawOutline(context.consumers(), context.matrices(),
+                client.gameRenderer.getMainCamera().position(), locks, auraType, AURA_COLOR);
+    }
+
+    /**
+     * Desenha o contorno de todos os blocos trancados e fecha o batch.
+     */
+    private static void drawOutline(MultiBufferSource consumers, PoseStack poseStack, Vec3 camera,
+                                    Set<BlockPos> locks, RenderType type, int color) {
+        VertexConsumer consumer = consumers.getBuffer(type);
 
         poseStack.pushPose();
         poseStack.translate(-camera.x, -camera.y, -camera.z);
@@ -114,15 +124,15 @@ public final class BlockLockAura {
             ShapeRenderer.renderShape(
                     poseStack, consumer, Shapes.block(),
                     pos.getX(), pos.getY(), pos.getZ(),
-                    AURA_COLOR, AURA_LINE_WIDTH);
+                    color, AURA_LINE_WIDTH);
         }
 
         poseStack.popPose();
 
-        // The interface only exposes getBuffer; endBatch lives on the BufferSource
-        // implementation, which is what vanilla world rendering actually hands over.
+        // A interface so expoe getBuffer; endBatch vive na implementacao BufferSource, que e
+        // o que o render de mundo do jogo de fato entrega.
         if (consumers instanceof MultiBufferSource.BufferSource bufferSource) {
-            bufferSource.endBatch(auraType);
+            bufferSource.endBatch(type);
         }
     }
 }

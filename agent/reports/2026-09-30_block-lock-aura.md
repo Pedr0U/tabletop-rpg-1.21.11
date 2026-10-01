@@ -79,25 +79,65 @@ Recriados os dois arquivos, corrigidas as 3 referencias, corrigidas as 4 assinat
 API, e a verificacao de artefato virou parte obrigatoria do fluxo.
 
 ## Remaining Issues
-1. **COM O IRIS INSTALADO A AURA NAO APARECE.** Este item SUBSTITUI a avaliacao de risco
-   original desta secao, escrita antes de o problema ser descoberto.
-   SINTOMA: com shaders ligados nada e desenhado e o log recebe, a cada frame enquanto o
-   Mestre segura o item, `Missing program tabletop-rpg:block_lock_aura_lines in override
-   list.`, com um `java.lang.Throwable` lancado de `redirectIrisProgram`.
-   ROOT CAUSE (FATO verificado nos jars, nao por deducao): a frase `"in override list"`
-   nao existe em nenhum `.class` do `minecraft-clientonly`, e existe dentro de
-   `iris-fabric-1.10.7+mc1.21.11.jar`. O Iris intercepta a ligacao de pipeline e Lanca
-   excecao para qualquer programa fora da lista de override dele; a lista e montada a
-   partir dos shaders do Iris e nenhum mod consegue se registrar nela.
-   CONCLUSAO: um `RenderType` com pipeline proprio NAO e compativel com o Iris. Nao e bug
-   de construcao do pipeline e nao ha correcao do lado do mod.
+1. ~~**COM O IRIS INSTALADO A AURA NAO APARECE.**~~ **RESOLVIDO em 30/09/2026.**
+   Este item substitui a avaliacao de risco original desta secao, escrita antes de o
+   problema ser descoberto.
+   SINTOMA: com shaders ligados nada e desenhado. O log recebia
+   `Missing program tabletop-rpg:block_lock_aura_lines in override list.` junto de um
+   `java.lang.Throwable` cujo stack trace aponta para `redirectIrisProgram`.
+   CAUSA RAIZ **ERRADA** (registrada aqui de proposito, ver abaixo): a primeira versao
+   deste relatorio afirmava que o Iris "lanca excecao para qualquer programa fora da lista
+   de override" e que por isso a aura nao desenhava. **Isso e FALSO.**
+   FATO (javap de `MixinShaderManager_Overrides`, 30/09/2026) - o metodo e:
+   ```java
+   if (pipeline == COMPOSITE_PIPELINE) return;
+   if (pipeline == field_64220 || pipeline == field_64221) return;
+   WorldRenderingPipeline w = Iris.getPipelineManager().getPipelineNullable();
+   if (w instanceof IrisRenderingPipeline iris && iris.shouldOverrideShaders()
+           && !ImmediateState.bypass) {
+       ShaderInstance s = override(iris, pipeline);   // IrisPipelines + ShaderMap
+       if (s != null) { cir.setReturnValue(new Program(pipeline, s)); return; }
+       if (missingShaders.add(pipeline)) {              // <- so na primeira vez
+           if (namespace.equals("minecraft")) Iris.logger.fatal(msg, new Throwable());
+           else                              Iris.logger.error(msg, new Throwable());
+       }
+   }
+   return;   // <- vanilla continua normalmente
+   ```
+   Tres consequencias que a analise anterior errou: (a) **nao ha `athrow`**, o
+   `Throwable` serve so para a stack trace; (b) o log sai no nivel `error`, nao `fatal`,
+   porque o namespace e `tabletop-rpg`; (c) o guarda `missingShaders.add` faz o log
+   sair **uma vez por pipeline**, nao a cada frame.
+   CAUSA RAIZ REAL (FACT, confirmado por bisect em jogo): o Iris **nao tinha shader
+   atribuido** ao pipeline do mod, e por isso nao desenhava as linhas. Sem shader o pipeline
+   do mod e valido e funciona; com shader ligado, o Iris assume a ligacao do shader e um
+   pipeline desconhecido simplesmente nao sai na tela — sem erro de GL, sem excecao, batch
+   fechado normalmente. O log `Missing program` era o **sintoma** disso, nunca a causa.
+   COMO FOI ISOLADO (bisect, 30/09/2026): a mesma geometria foi desenhada duas vezes no
+   mesmo frame, com o pipeline do mod (ambar) e com `RenderTypes.linesTranslucent()` do
+   jogo (verde). Resultado: **so o verde apareceu**. Isso matou de uma vez as hipoteses de
+   alvo de render, timing do END_MAIN e geometria/camara — todas compartilhariam o mesmo
+   frame e as mesmas coordenadas — e deixou o pipeline do mod como unico suspeito.
+   CORRECAO APLICADA: `IrisAuraSupport.ensurePipelineRegistered()` chama
+   `IrisPipelines.copyPipeline(LINES_TRANSLUCENT.pipeline(), pipelineThroughWalls())` por
+   reflexao, antes do desenho, so quando `FabricLoader.isModLoaded("iris")`. O atravessa-
+   parede e preservado porque profundidade vive no pipeline e o shader e o programa.
+   **VALIDADO EM JOGO pelo usuario em 30/09/2026**, com o Complementary Unbound ligado.
+2. `ShaderDefines` do pipeline de origem nao sao copiados. Sem efeito observado ate aqui.
+3. O log de diagnostico (`diagnose`, `heartbeat`, `recordDraw`) foi removido em 30/09/2026,
+   depois de servir ao seu proposito. O padrao ficou na memoria do projeto.
    POR QUE O DEV NAO VIU: o ambiente `run/` nao tem Iris (pasta `mods` vazia, so Fabric
    API), entao build e `runClient` nao reproduzem; so a instancia do usuario reproduz.
-   SAIDAS (decisao do usuario adiada): (a) usar `RenderTypes.LINES_TRANSLUCENT`, que o Iris
-   conhece: a aura aparece mas nao atravessa parede; (b) detectar o Iris e escolher a rota.
-   Sem Iris a aura funciona e atravessa parede normalmente.
-   CORRECAO DE AVALIACAO: a versao anterior desta secao tratava "pipeline rejeitado no
-   primeiro frame" como risco de codigo. Isso nao era a causa; nao usar como causa raiz.
+   DADOS NOVOS DO DIA: (a) `RenderPipelines` tem 15 pipelines com
+   `DepthTestFunction.NO_DEPTH_TEST` e **nenhum** deles e de LINHAS - sao QUADS texturizados
+   de `OUTLINE_SNIPPET` (o contorno de selecao). Portanto **nao existe rota vanilla para
+   "linhas + atravessa parede"** e o pipeline proprio continua necessario.
+   (b) A superficie de integracao do Iris e `IrisApi.assignPipeline(RenderPipeline,
+   IrisProgram)` (API publica, `net.irisshaders.iris.api.v0`) mais
+   `IrisPipelines.copyPipeline(to, from)` (interna, copia a associacao de um pipeline para
+   outro). Nenhuma usada ainda. RISCO CONHECIDO: ambas escrevem em um mapa reconstruido a
+   cada carga de shaderpack, entao um registro feito uma vez pode nao sobreviver a uma troca
+   de pack em jogo.
 2. `Location` do pipeline e um `Identifier` literal novo; se o registro de pipelines
    colidir, o erro aparece em runtime.
 3. Nada com cleanup de estado de depth/blend e necessario: o estado vive no pipeline e

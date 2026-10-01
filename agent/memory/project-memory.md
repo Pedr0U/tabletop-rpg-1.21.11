@@ -2229,3 +2229,44 @@ lote so no mesmo arquivo e com trechos bem distintos; **sempre** confirmar com `
 `if (guarda)`/simbolo depois, e aplicar **uma de cada vez** quando o arquivo for critico.
 Nao confie no "applied" nem no "error" da ferramenta para garantir o estado do arquivo.
 
+
+**FATO verificado (Iris, 30/09/2026) - o Iris NAO lanca excecao por pipeline desconhecido.** A
+primeira analise registrou o contrario, e a causa errada foi parar no catalogo e no relatorio.
+O metodo e `MixinShaderManager_Overrides.redirectIrisProgram` e, por `javap`, faz: se
+`override(...)` devolver um shader, usa ele; senao, **apenas loga** — `fatal` quando o namespace do
+pipeline e `minecraft`, `error` caso contrario (nosso e `tabletop-rpg`), e o guarda
+`missingShaders.add(pipeline)` faz o log sair **uma vez por pipeline**, nao a cada frame. O
+`new Throwable()` e so para a stack trace. Depois disso o metodo **retorna e o vanilla segue
+normal**, ou seja o bind do pipeline acontece e o desenho roda.
+
+**Licao (a mais importante desta sessao): causa raiz precisa de `javap`, nao de plausibilidade.**
+Achamos a frase `"in override list"` dentro do jar do Iris, o log trazia um `Throwable`, e a
+conclusao "o Iris lanca excecao" parecia tao segura que foi para o catalogo, para o relatorio e
+para a memoria. Era falsa. **Regra:** antes de escrever "X faz Y" em documento vivo, abrir o
+bytecode e ler o metodo. Um `Throwable` no log **nao** prova que algo foi lancado — e um
+`Mixin` no stack trace **nao** prova que houve excecao. E quando uma causa raiz for corrigida,
+corrogir em **todos** os lugares onde ela foi escrita, marcando a versao errada como errada em vez de
+apaga-la, para ninguem reusar.
+
+**FATO (1.21.11) - nao existe pipeline de LINHAS sem teste de profundidade.** Varri os 15 pipelines
+de `RenderPipelines` que usam `DepthTestFunction.NO_DEPTH_TEST`: **todos** sao QUADS texturizados
+vindos de `OUTLINE_SNIPPET` (o contorno de selecao, shader `core/rendertype_outline`, vertex format
+`POSITION_TEX_COLOR`). Os de linhas (`LINES`, `LINES_TRANSLUCENT`, `SECONDARY_BLOCK_OUTLINE`) usam
+`LINES_SNIPPET` (shader `core/rendertype_lines`, `POSITION_COLOR_NORMAL_LINE_WIDTH`) e **nao** tocam
+em `withDepthTestFunction`. Conclusao: nao ha rota vanilla para "linhas + atravessa parede"; um
+pipeline proprio continua obrigatorio.
+
+**FATO (superficie de integracao do Iris) - existe API publica para mods:**
+`IrisApi.assignPipeline(RenderPipeline, IrisProgram)` em `net.irisshaders.iris.api.v0` (e
+`IrisApi.getInstance()`), alem da interna `IrisPipelines.copyPipeline(to, from)`, que copia a
+associacao pipeline->shader de um pipeline para outro. `IrisPipelines.getPipeline` consulta um mapa
+por identidade do pipeline com `getOrDefault(pipeline, FAKE_FUNCTION)`, e por isso devolve `null`
+para qualquer pipeline que o mod criou. **RISCO:** esse mapa e reconstruido a cada carga de
+shaderpack, entao registrar uma vez pode nao sobreviver a uma troca de pack em jogo.
+
+**FATO (ambiente, ferramenta) - dois-adjustedo que custaram tempo.** (a) `javap` **nao esta no
+PATH** nesta maquina; o executavel e `C:\Program Files\Java\jdk-25\bin\javap.exe`.
+(b) PowerShell 5.1 **nao tem** `[System.Text.Encoding]::Latin1` (e' .NET Core) — usar
+`[System.Text.Encoding]::GetEncoding(28591)`. (c) O `>` do PowerShell grava **UTF-16**: sempre
+`Out-File -Encoding utf8`. (d) `Select-String` e case-insensitive, entao um "texto velho
+sobrou: 1" pode ser o proprio trecho que marca o texto velho como errado.
