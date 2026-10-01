@@ -246,3 +246,18 @@ jogo**.
 - Decidir o risco latente de `<clinit>`.
 - Commit/tag **nao feitos**: ultimo checkpoint e `7ace0fd` /
   `checkpoint-20260930-1412-antes-das-abas-da-ficha`, **anterior** as tres fases.
+
+## CORRECAO da linha acima + commit (30/09/2026, depois do fechamento)
+
+A frase "Commit/tag nao feitos" **valeu so ate o fim das correcoes de layout**. O usuario
+validou em jogo ("perfeito") e pediu commit:
+
+- **Commit:** `a16b3b7` — "Cria as tres abas da ficha, os campos de texto grandes e o
+  inventario com rolagem"
+- **12 arquivos, +3204 / -47**, branch `main`, arvore limpa depois do commit.
+- **Sem tag:** o pedido foi o commit, e a skill pede seguir o tipo solicitado. O ultimo
+  checkpoint continua `7ace0fd` / `checkpoint-20260930-1412-antes-das-abas-da-ficha`.
+- Sem push: `origin/main` segue em `5c39f00`, e nenhum push foi feito.
+
+Estado validado em jogo no momento do commit: **as tres fases (abas, campos grandes,
+inventario) e todas as correcoes de layout**.

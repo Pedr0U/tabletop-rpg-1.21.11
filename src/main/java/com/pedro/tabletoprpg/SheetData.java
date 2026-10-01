@@ -14,6 +14,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 
 /**
@@ -80,7 +81,8 @@ public record SheetData(
         int attributeValueMin,
         int attributeValueMax,
         int periciaValueMax,
-        Inventory inventory
+        Inventory inventory,
+        Spellbook spellbook
     ) {
 
     /** Teto de caracteres dos textos livres (nome, raça, classe). */
@@ -165,7 +167,7 @@ public record SheetData(
      */
     public static final List<String> LABELLED_FIELDS = List.of(
             "playerName", "characterName", "race", "characterClass", "background",
-            "hp", "mana", "level", "xp", "xptext"
+            "hp", "mana", "level", "xp", "xptext", "ca"
     );
     /**
      * Campos numericos que NAO sao atributos: vida, mana e progressao.
@@ -185,6 +187,8 @@ public record SheetData(
             Skill.STREAM_CODEC.apply(ByteBufCodecs.list());
     private static final StreamCodec<FriendlyByteBuf, List<Pericia>> PERICIAS_STREAM_CODEC =
             Pericia.STREAM_CODEC.apply(ByteBufCodecs.list());
+    private static final StreamCodec<FriendlyByteBuf, List<Spell>> SPELLS_STREAM_CODEC =
+            Spell.STREAM_CODEC.apply(ByteBufCodecs.list());
 
     /**
      * Codec da ficha. Cada grupo tem seu próprio codec; a lista de skills é
@@ -226,6 +230,11 @@ public record SheetData(
         // continua compilando e quebra so em runtime -- e o round-trip de
         // SheetModelCodecTest que pega isso.
         Inventory.STREAM_CODEC.encode(buf, sheet.inventory());
+        // 01/10/2026 (pagina 3 da ficha): o grimorio entra por ultimo, como no
+        // record, e na MESMA posicao do DECODER abaixo. Mesmo alerta do
+        // inventario: ler e escrever em ordem diferente continua compilando e
+        // quebra so em runtime, e o round-trip do SheetModelCodecTest e o que pega.
+        Spellbook.STREAM_CODEC.encode(buf, sheet.spellbook());
     };
 
     private static final StreamDecoder<FriendlyByteBuf, SheetData> DECODER = buf -> new SheetData(
@@ -238,7 +247,8 @@ public record SheetData(
             ByteBufCodecs.VAR_INT.decode(buf),
             ByteBufCodecs.VAR_INT.decode(buf),
             ByteBufCodecs.VAR_INT.decode(buf),
-            Inventory.STREAM_CODEC.decode(buf)
+            Inventory.STREAM_CODEC.decode(buf),
+            Spellbook.STREAM_CODEC.decode(buf)
     );
 
     public static final StreamCodec<FriendlyByteBuf, SheetData> STREAM_CODEC =
@@ -279,7 +289,11 @@ public record SheetData(
     private static final Codec<Progress> PROGRESS_CODEC = RecordCodecBuilder.create(i -> i.group(
             Codec.INT.optionalFieldOf("level", Progress.defaults().level()).forGetter(Progress::level),
             Codec.INT.optionalFieldOf("xp", Progress.defaults().xp()).forGetter(Progress::xp),
-            Codec.STRING.optionalFieldOf("xpText", "").forGetter(Progress::xpText)
+            Codec.STRING.optionalFieldOf("xpText", "").forGetter(Progress::xpText),
+            // 01/10/2026: o CA entra como optionalFieldOf com padrao 0, entao uma
+            // ficha salva ANTES do CA existir continua abrindo -- e abre com CA 0,
+            // que e o mesmo que uma ficha recem-criada.
+            Codec.INT.optionalFieldOf("ca", 0).forGetter(Progress::ca)
     ).apply(i, Progress::new));
 
     /**
@@ -379,6 +393,40 @@ public record SheetData(
     ).apply(i, Inventory::new));
 
     /**
+     * Codec de NBT de UMA magia (01/10/2026, pagina 3 da ficha).
+     *
+     * <p>Mesmo desenho do {@link #INVENTORY_ITEM_CODEC}: tudo opcional com padrao,
+     * e o construtor compacto do {@link Spell} corta o que passou do teto depois.
+     * O {@code circle} e {@code optionalFieldOf} com padrao {@code 1} porque e a
+     * chave de ordenacao da lista (ver {@link Spellbook#sorted()}): uma magia
+     * gravada sem ele tem de cair no 1o circulo, nao ser descartada.
+     */
+    private static final Codec<Spell> SPELL_CODEC = RecordCodecBuilder.create(i -> i.group(
+            Codec.STRING.optionalFieldOf("name", "").forGetter(Spell::name),
+            Codec.INT.optionalFieldOf("circle", 1).forGetter(Spell::circle),
+            Codec.STRING.optionalFieldOf("execution", "").forGetter(Spell::execution),
+            Codec.STRING.optionalFieldOf("range", "").forGetter(Spell::range),
+            Codec.STRING.optionalFieldOf("target", "").forGetter(Spell::target),
+            Codec.STRING.optionalFieldOf("duration", "").forGetter(Spell::duration),
+            Codec.STRING.optionalFieldOf("cost", "").forGetter(Spell::cost)
+    ).apply(i, Spell::new));
+
+    /**
+     * Codec de NBT do grimorio inteiro (01/10/2026, pagina 3 da ficha).
+     *
+     * <p>Sao tres chaves que <b>nao existem em nenhuma ficha ja salva</b>, entao
+     * todas precisam de padrao: sem ele o {@link #CODEC} derrubaria o NBT inteiro
+     * no primeiro mundo que abrir o log com uma ficha de antes da pagina 3.
+     * O padrao e escrito aqui em vez de lido de {@link Spellbook#EMPTY}, pelo
+     * mesmo motivo do inventario (ver o comentario do {@link #CODEC}).
+     */
+    private static final Codec<Spellbook> SPELLBOOK_CODEC = RecordCodecBuilder.create(i -> i.group(
+            Codec.list(SPELL_CODEC).optionalFieldOf("spells", List.of()).forGetter(Spellbook::spells),
+            Codec.STRING.optionalFieldOf("castingAttribute", "").forGetter(Spellbook::castingAttribute),
+            Codec.INT.optionalFieldOf("cd", 0).forGetter(Spellbook::cd)
+    ).apply(i, Spellbook::new));
+
+    /**
      * Codec de NBT da ficha completa, usado por
      * {@code PlayerSheetPersistenceMixin} para salvar a ficha no proprio NBT do
      * jogador (sobrevive a restart e a desconexao).
@@ -422,7 +470,12 @@ public record SheetData(
             // instante o EMPTY ainda vale null -- o que faria este CODEC devolver
             // null no lugar de um inventario vazio e derrubar o login.
             INVENTORY_CODEC.optionalFieldOf("inventory", new Inventory(List.of(), 0f))
-                    .forGetter(SheetData::inventory)
+                    .forGetter(SheetData::inventory),
+            // 01/10/2026 (pagina 3 da ficha): o grimorio e o ultimo grupo deste
+            // codec, pela mesma raza do inventario. Um save anterior a pagina 3
+            // abre com Spellbook vazio, nunca quebrado.
+            SPELLBOOK_CODEC.optionalFieldOf("spellbook", new Spellbook(List.of(), "", 0))
+                    .forGetter(SheetData::spellbook)
     ).apply(i, SheetData::new));
 
     /**
@@ -463,6 +516,11 @@ public record SheetData(
         // construtor de Inventory, que corta a lista em Inventory.MAX_ITEMS e o
         // maxWeight em [0, WEIGHT_MAX].
         inventory = inventory == null ? Inventory.EMPTY : inventory;
+        // 01/10/2026 (pagina 3): o grimorio entra por ultimo. O
+        // castingAttribute passa por cleanId e o cd e cortado em
+        // [Spellbook.CD_MIN, Spellbook.CD_MAX]; a lista e normalizada pelo
+        // construtor de Spellbook.
+        spellbook = spellbook == null ? new Spellbook(List.of(), "", 0) : spellbook;
     }
 
     // ------------------------------------------------------------------
@@ -647,11 +705,27 @@ public record SheetData(
      * campos coexistem e <b>so um deles e lido</b>, escolhido pelo
      * {@link SheetModel.XpMode}: e o que mantem cada modo simples.
      */
-    public record Progress(int level, int xp, String xpText) {
+    /**
+     * O progresso do personagem: nivel, XP e o CA (Classe de Armadura).
+     *
+     * <p><b>01/10/2026, o campo {@code ca}:</b> o usuario pediu um campo CA na
+     * mesma linha do Level, com caixa numerica propria. Ele mora AQUI e nao na
+     * {@link Attributes} porque ele nao e um atributo: nao entra em rolagem, nao
+     * tem piso/teto do Mestre e nao e uma das pericias. E um valor absoluto do
+     * personagem, como o Level e o XP.
+     *
+     * <p><b>Por que o limite e {@code 0..MAX_RESOURCE}:</b> e o mesmo teto que o
+     * HP e a Mana ja usam ({@link #MAX_RESOURCE}), por decision do usuario. O
+     * piso 0 significa que CA nao aceita negativo: um CA abaixo de zero nao tem
+     * leitura em regra de RPG, e o campo serve para mostrar a classe de armadura,
+     * nao um modificador (modificadores vivem nos atributos, que vao a -30).
+     */
+    public record Progress(int level, int xp, String xpText, int ca) {
         public static final StreamCodec<FriendlyByteBuf, Progress> STREAM_CODEC = StreamCodec.composite(
                 ByteBufCodecs.VAR_INT, Progress::level,
                 ByteBufCodecs.VAR_INT, Progress::xp,
                 ByteBufCodecs.stringUtf8(MAX_NAME), Progress::xpText,
+                ByteBufCodecs.VAR_INT, Progress::ca,
                 Progress::new
         );
 
@@ -659,10 +733,25 @@ public record SheetData(
             level = clamp(level, 1, MAX_LEVEL);
             xp = clamp(xp, 0, MAX_XP);
             xpText = clean(xpText);
+            ca = clamp(ca, 0, MAX_RESOURCE);
+        }
+
+        /**
+         * Construtor de 3 campos, kept para os chamadores antigos.
+         *
+         * <p><b>Por que ele existe:</b> sem ele, adicionar o {@code ca} obrigaria
+         * a editar as sete chamadas de {@code new Progress(...)} espalhadas por
+         * {@link #withField} e pelo resto do arquivo, e um delas esquecida seria
+         * um erro de compilacao em um lugar que nao tem nada a ver com CA. Com o
+         * construtor antigo, o CA entra no lugar certo ({@code 0}) por padrao e
+         * so o codigo que realmente mexe no CA precisa falar dele.
+         */
+        public Progress(int level, int xp, String xpText) {
+            this(level, xp, xpText, 0);
         }
 
         public static Progress defaults() {
-            return new Progress(1, 0, "");
+            return new Progress(1, 0, "", 0);
         }
     }
 
@@ -1111,6 +1200,49 @@ public record SheetData(
     }
 
     /**
+     * As operacoes de uma magia (01/10/2026, pagina 3).
+     *
+     * <p><b>Sao as mesmas tres de {@link ItemOp}, e nao as quatro de
+     * {@link SkillOp}:</b> falta o {@code MOVE} de proposito, porque a ordem
+     * exibida das magias e sempre automatica (circulo crescente, depois
+     * alfabetica, por {@link Spellbook#visible(int)}) e o jogador nao tem o que
+     * mover. O {@code INVALID} e pelo mesmo motivo dos outros enums: um indice
+     * corrompido nao pode virar uma operacao valida por acidente.
+     */
+    public enum SpellOp {
+        /** Cria uma magia nova. O {@code index} do payload e {@code -1}. */
+        ADD,
+        /**
+         * Troca a magia do <b>indice</b> do payload, no mesmo lugar da lista.
+         *
+         * <p>E o que o botao Edit da coluna de magias faz. O indice e o indice
+         * <b>guardado</b>, nao a posicao na tela filtrada: e por isso que
+         * {@link Spellbook#visible(int)} devolve indices da lista e nao das
+         * posicoes exibidas.
+         */
+        UPDATE,
+        /** Apaga a magia do indice. O {@code spell} do payload nao e lido. */
+        REMOVE,
+        /** Valor invalido vindo da rede. <b>Nao fazer nada com ele.</b> */
+        INVALID;
+
+        public static final StreamCodec<io.netty.buffer.ByteBuf, SpellOp> STREAM_CODEC =
+                new StreamCodec<>() {
+                    @Override
+                    public SpellOp decode(io.netty.buffer.ByteBuf buffer) {
+                        int index = ByteBufCodecs.VAR_INT.decode(buffer);
+                        SpellOp[] values = SpellOp.values();
+                        return index >= 0 && index < values.length ? values[index] : INVALID;
+                    }
+
+                    @Override
+                    public void encode(io.netty.buffer.ByteBuf buffer, SpellOp op) {
+                        ByteBufCodecs.VAR_INT.encode(buffer, op == null ? 0 : op.ordinal());
+                    }
+                };
+    }
+
+    /**
      * Um <b>item</b> do inventario da ficha: {@code name} + {@code type} +
      * {@code weight} + {@code description} (30/09/2026, FASE 2B).
      *
@@ -1293,6 +1425,331 @@ public record SheetData(
                 return this;
             }
             return new Inventory(items, next);
+        }
+    }
+
+    /**
+     * Uma magia da ficha (01/10/2026, pagina 3).
+     *
+     * <p>Campos por decisao do usuario: nome, circulo (1 a 5) e os cinco campos
+     * do formulario de Tormenta 20 - execucao, alcance, alvo, duracao e custo.
+     * Os cinco sao <b>texto livre</b>, e nao lista fechada: o pedido foi "campo",
+     * e e o mesmo tratamento que o inventario da aba Info/Inventory ja usa.
+     *
+     * <p><b>Por que o {@link #STREAM_CODEC} e manual:</b> sao 7 campos e o
+     * {@link StreamCodec#composite} para em 6. Nao da para criar um sub-record
+     * so para caber no limite sem mudar o formulario, entao o par
+     * {@link StreamCodec#of} e o mesmo caminho que o topo da ficha ja usa (ver
+     * o Javadoc do {@link #ENCODER}).
+     *
+     * <p><b>A ordem do encoder tem de ser igual a do decoder</b>, pelas mesmas
+     * razoes do topo da ficha: sao duas lambdas independentes e nada as amarra em
+     * tempo de compilacao.
+     */
+    public record Spell(String name, int circle, String execution, String range,
+                        String target, String duration, String cost) {
+
+        /** Menor circulo de Tormenta 20 que o mod aceita. */
+        public static final int CIRCLE_MIN = 1;
+        /** Maior circulo de Tormenta 20 que o mod aceita. */
+        public static final int CIRCLE_MAX = 5;
+        /** Circulo usado quando a magia nao tem circulo definido. */
+        public static final int CIRCLE_DEFAULT = 1;
+
+        /** Teto de caracteres do nome de uma magia: o mesmo do {@link #MAX_NAME}. */
+        public static final int SPELL_NAME_MAX = 48;
+        /**
+         * Teto de caracteres de cada um dos cinco campos de texto curto.
+         *
+         * <p>Menor que o {@link #MAX_TEXT} (2.000) porque "Acao", "1 por turno" e
+         * "Ate 1 hora" sao curtos: o que o jogador rola nesses cinco campos e o
+         * valor da tabela dele, e 200 casas deixariam a caixa abrindo tres
+         * linhas de nada.
+         */
+        public static final int SPELL_FIELD_MAX = 64;
+        /** Teto de caracteres do custo, que pode trazer calculo ("3 PM + 2 accoes"). */
+        public static final int SPELL_COST_MAX = 120;
+
+        /** Magia vazia: e o que um item de lista sem nome decodifica. */
+        public static final Spell EMPTY = new Spell("", 1, "", "", "", "", "");
+
+        /**
+         * Encodificador manual, no mesmo par do {@link SheetData#ENCODER}.
+         * Ordem: nome, circulo, execucao, alcance, alvo, duracao, custo.
+         */
+        private static final StreamEncoder<FriendlyByteBuf, Spell> ENCODER = (buf, spell) -> {
+            ByteBufCodecs.stringUtf8(SPELL_NAME_MAX).encode(buf, spell.name());
+            ByteBufCodecs.VAR_INT.encode(buf, spell.circle());
+            ByteBufCodecs.stringUtf8(SPELL_FIELD_MAX).encode(buf, spell.execution());
+            ByteBufCodecs.stringUtf8(SPELL_FIELD_MAX).encode(buf, spell.range());
+            ByteBufCodecs.stringUtf8(SPELL_FIELD_MAX).encode(buf, spell.target());
+            ByteBufCodecs.stringUtf8(SPELL_FIELD_MAX).encode(buf, spell.duration());
+            ByteBufCodecs.stringUtf8(SPELL_COST_MAX).encode(buf, spell.cost());
+        };
+
+        private static final StreamDecoder<FriendlyByteBuf, Spell> DECODER = buf -> new Spell(
+                ByteBufCodecs.stringUtf8(SPELL_NAME_MAX).decode(buf),
+                ByteBufCodecs.VAR_INT.decode(buf),
+                ByteBufCodecs.stringUtf8(SPELL_FIELD_MAX).decode(buf),
+                ByteBufCodecs.stringUtf8(SPELL_FIELD_MAX).decode(buf),
+                ByteBufCodecs.stringUtf8(SPELL_FIELD_MAX).decode(buf),
+                ByteBufCodecs.stringUtf8(SPELL_FIELD_MAX).decode(buf),
+                ByteBufCodecs.stringUtf8(SPELL_COST_MAX).decode(buf)
+        );
+
+        public static final StreamCodec<FriendlyByteBuf, Spell> STREAM_CODEC =
+                StreamCodec.of(ENCODER, DECODER);
+
+        public Spell {
+            name = cleanSpellName(name);
+            circle = clamp(circle, CIRCLE_MIN, CIRCLE_MAX);
+            execution = cleanSpellField(execution);
+            range = cleanSpellField(range);
+            target = cleanSpellField(target);
+            duration = cleanSpellField(duration);
+            cost = cleanSpellCost(cost);
+        }
+
+        /**
+         * Rotulo do circulo, do jeito que a lista mostra na propria linha da magia.
+         *
+         * <p><b>Por que o nome por extenso entra na lista (01/10/2026):</b> o
+         * jogador pediu "1º círculo" em vez do ordinal sozinho: com a linha so
+         * embaixo do nome e nada mais na tela, "3º" nao dizia o que era, e ele
+         * lia como numero solto. O nome por extenso cabe -- a coluna mostra o
+         * circulo sozinho na linha, sem texto do lado.
+         *
+         * <p><b>Por que minusculo:</b> e a linha da lista, nao um titulo; o
+         * formulario e o filtro continuam capitalizados em {@link #circleLabel}.
+         */
+        public String circleText() {
+            return circle + "º círculo";
+        }
+
+        /**
+         * O circulo na sua forma por extenso, para o formulario.
+         *
+         * <p><b>O indicador ordinal (01/10/2026):</b> e {@code º} (U+00BA) e nao
+         * a letra "o" -- pedido do usuario, que le "1o" como letra solta e nao
+         * como ordinal. O {@code default} cobre o circulo 0 e o 6, que o
+         * construtor ja cortou; devolve o 1º porque e o circulo mais provavel de um
+         * formulario recem-aberto.
+         */
+        public String circleLabel() {
+            return switch (circle) {
+                case 1 -> "1º Círculo";
+                case 2 -> "2º Círculo";
+                case 3 -> "3º Círculo";
+                case 4 -> "4º Círculo";
+                case 5 -> "5º Círculo";
+                default -> "1º Círculo";
+            };
+        }
+    }
+
+    /**
+     * A lista de magias, o atributo de conjuracao e a CD da pagina 3
+     * (01/10/2026).
+     *
+     * <p><b>Por que o atributo e a CD sao globais da pagina e nao por magia</b>:
+     * decisao do usuario. O "Modificador" exibido ao lado do atributo e o valor
+     * daquele atributo na pagina 1 ({@link #attributeValue}), e a CD e um alvo
+     * de rolagem da pagina, nao uma propriedade da magia.
+     *
+     * <p>Vem por ultimo no {@link SheetData}, depois de {@code inventory}, e
+     * assim como ele nao e copiado nem apagado pelo {@link SheetModel#align}: a
+     * lista de magias pertence ao jogador, nao ao modelo do sistema.
+     *
+     * <p><b>A ordem exibida nao e a ordem da lista guardada.</b> A lista e
+     * mantida na ordem em que o jogador digitou, porque um UPDATE chega por
+     * indice e reordenar no caminho gravar trocaria o alvo do proximo UPDATE.
+     * O filtro e a ordenacao sao aplicados so na exibicao, por
+     * {@link #visible(int)}.
+     */
+    public record Spellbook(List<Spell> spells, String castingAttribute, int cd) {
+
+        /** Numero maximo de magias por ficha, decidido pelo usuario. */
+        public static final int MAX_SPELLS = 60;
+
+        /** Menor CD aceito. CD negativa nao tem significado de jogo. */
+        public static final int CD_MIN = 0;
+        /**
+         * Maior CD aceito (decisao do usuario em 01/10/2026).
+         *
+         * <p><b>E o teto de 4 digitos do {@code SheetFieldPayload}, nao um numero
+         * de jogo:</b> o jogador pediu para manter o teto de 2048 que o payload ja
+         * tinha, entao a CD e livre ate 4 algarismos. O {@code EditBox} da tela
+         * filtra em {@code \d{0,4}} pelo mesmo motivo, e por isso os dois tetos
+         * precisam concordar -- se a caixa aceitasse mais, o servidor cortaria o
+         * que o jogador digitou sem ele ver.
+         */
+        public static final int CD_MAX = 2048;
+
+        /** Filtro que mostra todas as magias, sem cortar por circulo. */
+        public static final int FILTER_ALL = 0;
+
+        /** Grimorio vazio: e o que um save anterior a pagina 3 decodifica. */
+        public static final Spellbook EMPTY = new Spellbook(List.of(), "", 0);
+
+        public static final StreamCodec<FriendlyByteBuf, Spellbook> STREAM_CODEC = StreamCodec.composite(
+                SPELLS_STREAM_CODEC, Spellbook::spells,
+                ByteBufCodecs.stringUtf8(32), Spellbook::castingAttribute,
+                ByteBufCodecs.VAR_INT, Spellbook::cd,
+                Spellbook::new
+        );
+
+        public Spellbook {
+            spells = sanitizeSpells(spells);
+            castingAttribute = cleanId(castingAttribute);
+            cd = clamp(cd, CD_MIN, CD_MAX);
+        }
+
+        /**
+         * Acrescenta uma magia no fim da lista.
+         *
+         * <p><b>Com a lista cheia devolve a propria instancia</b>: o servidor ve
+         * {@code updated == current} e nem transmite nada, em vez de aceitar a
+         * 61a magia e perder a primeira. Mesmo caminho do
+         * {@link Inventory#addItem} e do {@link #withSkill}.
+         */
+        public Spellbook addSpell(Spell spell) {
+            if (spell == null || spells.size() >= MAX_SPELLS) {
+                return this;
+            }
+            List<Spell> next = new ArrayList<>(spells);
+            next.add(spell);
+            return new Spellbook(next, castingAttribute, cd);
+        }
+
+        /**
+         * Troca a magia do indice dado, no mesmo lugar da lista.
+         *
+         * <p>Indice fora da lista devolve a propria instancia: um UPDATE atrasado
+         * (a magia foi apagada entre o clique e o pacote) nao pode recriá-la como
+         * se fosse um ADD. Mesmo desenho do {@link Inventory#withItem}.
+         */
+        public Spellbook withSpell(int index, Spell spell) {
+            if (spell == null || index < 0 || index >= spells.size()) {
+                return this;
+            }
+            if (spells.get(index).equals(spell)) {
+                return this;
+            }
+            List<Spell> next = new ArrayList<>(spells);
+            next.set(index, spell);
+            return new Spellbook(next, castingAttribute, cd);
+        }
+
+        /** Apaga a magia do indice; indice fora da lista devolve a propria instancia. */
+        public Spellbook removeSpell(int index) {
+            if (index < 0 || index >= spells.size()) {
+                return this;
+            }
+            List<Spell> next = new ArrayList<>(spells);
+            next.remove(index);
+            return new Spellbook(next, castingAttribute, cd);
+        }
+
+        /** Indice da magia com esse nome, ou {@code -1}. */
+        public int indexOfSpell(String name) {
+            if (name == null || name.isEmpty()) {
+                return -1;
+            }
+            for (int i = 0; i < spells.size(); i++) {
+                if (spells.get(i).name().equalsIgnoreCase(name)) {
+                    return i;
+                }
+            }
+            return -1;
+        }
+
+        /**
+         * Novo atributo de conjuracao. Id igual ao atual devolve a propria
+         * instancia, para que o eco do servidor nao dispare gravacao e broadcast
+         * a toa.
+         */
+        public Spellbook withCastingAttribute(String attributeId) {
+            if (Objects.equals(castingAttribute, attributeId)) {
+                return this;
+            }
+            return new Spellbook(spells, attributeId, cd);
+        }
+
+        /** Nova CD. Valor ja cortado pelo construtor. */
+        public Spellbook withCd(int next) {
+            if (next == cd) {
+                return this;
+            }
+            return new Spellbook(spells, castingAttribute, next);
+        }
+
+        /**
+         * O filtro de circulo que o jogador escolheu no botao do topo.
+         *
+         * <p><b>Ordem do ciclo, pedida pelo usuario:</b> Todas -&gt; 1o -&gt; 2o -&gt;
+         * 3o -&gt; 4o -&gt; 5o -&gt; Todas. O valor e um {@code int} de tela, nao um
+         * campo da ficha: por isso nao entra em codec, payload nem NBT. O que a
+         * ficha guarda sao as magias; como elas aparecem e escolha de cada tela.
+         */
+        public static int nextFilter(int current) {
+            if (current < FILTER_ALL || current >= Spell.CIRCLE_MAX) {
+                return FILTER_ALL;
+            }
+            return current + 1;
+        }
+
+        /** Rotulo do filtro, para o botao do topo. */
+        public static String filterText(int filter) {
+            // 01/10/2026: "1º" com o indicador ordinal (U+00BA) e nao "1o", por
+            // pedido do usuario -- e o mesmo rotulo que a ficha usa nos outros
+            // circulos. O Minecraft traz esse caractere na fonte padrao, entao nao
+            // vira caixa especial.
+            return switch (filter) {
+                case 1 -> "1º Círculo";
+                case 2 -> "2º Círculo";
+                case 3 -> "3º Círculo";
+                case 4 -> "4º Círculo";
+                case 5 -> "5º Círculo";
+                default -> "Todas";
+            };
+        }
+
+        /**
+         * As magias que o filtro atual deve mostrar, ja ordenadas.
+         *
+         * <p><b>Todas:</b> circulo crescente, e dentro do mesmo circulo em ordem
+         * alfabetica. <b>Um circulo so:</b> o mesmo criterio, com o filtro
+         * custando nada porque as magias ja vem em ordem de circulo.
+         *
+         * <p>O indice devolvido e o indice na <b>lista guardada</b>, e nao na
+         * lista exibida: e ele que volta no UPDATE quando o jogador edita a
+         * magia em questao. Por isso a comparacao e o sort sao feitos sobre o
+         * indice original.
+         */
+        public List<Integer> visible(int filter) {
+            List<Integer> idx = new ArrayList<>(spells.size());
+            for (int i = 0; i < spells.size(); i++) {
+                if (filter <= FILTER_ALL || spells.get(i).circle() == filter) {
+                    idx.add(i);
+                }
+            }
+            idx.sort((a, b) -> {
+                Spell first = spells.get(a);
+                Spell second = spells.get(b);
+                int byCircle = Integer.compare(first.circle(), second.circle());
+                if (byCircle != 0) {
+                    return byCircle;
+                }
+                // Sem acento e sem diferenciar maiuscula: a lista e em portugues
+                // e "Agua" precisa ficar junto de "Abrigo", nao depois de "Z".
+                return first.name().compareToIgnoreCase(second.name());
+            });
+            return List.copyOf(idx);
+        }
+
+        /** A magia do indice exibido, ou {@code null} se o filtro a escondeu. */
+        public Spell at(int index) {
+            return index < 0 || index >= spells.size() ? null : spells.get(index);
         }
     }
 
@@ -1482,7 +1939,10 @@ public record SheetData(
                 // e sem limite de peso. O jogador escolhe o proprio limite na
                 // coluna Inventory; um valor aqui viria do modelo, que nao tem
                 // nada a dizer sobre a carga de cada um.
-                Inventory.EMPTY
+                Inventory.EMPTY,
+                // 01/10/2026: a ficha nova nasce sem magias, sem atributo
+                // de conjuracao e com CD 0.
+                new Spellbook(List.of(), "", 0)
         );
     }
 
@@ -1522,20 +1982,20 @@ public record SheetData(
 
         return switch (key) {
             case "charactername" -> new SheetData(identity.withCharacterName(value), vitals, progress,
-                    attributes, skills, pericias, attributeValueMin, attributeValueMax, periciaValueMax, inventory);
+                    attributes, skills, pericias, attributeValueMin, attributeValueMax, periciaValueMax, inventory, spellbook);
             case "race" -> new SheetData(identity.withRace(value), vitals, progress,
-                    attributes, skills, pericias, attributeValueMin, attributeValueMax, periciaValueMax, inventory);
+                    attributes, skills, pericias, attributeValueMin, attributeValueMax, periciaValueMax, inventory, spellbook);
             case "characterclass" -> new SheetData(identity.withCharacterClass(value), vitals, progress,
-                    attributes, skills, pericias, attributeValueMin, attributeValueMax, periciaValueMax, inventory);
+                    attributes, skills, pericias, attributeValueMin, attributeValueMax, periciaValueMax, inventory, spellbook);
             case "background" -> new SheetData(identity.withBackground(value), vitals, progress,
-                    attributes, skills, pericias, attributeValueMin, attributeValueMax, periciaValueMax, inventory);
+                    attributes, skills, pericias, attributeValueMin, attributeValueMax, periciaValueMax, inventory, spellbook);
             // 29/09/2026: nome do jogador dono da ficha. A chave chega como
             // "playerName" e o switch compara em minuscula (key), igual aos
             // casos acima. A permissao e a mesma de todos os outros campos de
             // texto: quem aplica este metodo ja passou por canEditSheet no
             // servidor, que libera o dono da ficha e o Mestre.
             case "playername" -> new SheetData(identity.withPlayerName(value), vitals, progress,
-                    attributes, skills, pericias, attributeValueMin, attributeValueMax, periciaValueMax, inventory);
+                    attributes, skills, pericias, attributeValueMin, attributeValueMax, periciaValueMax, inventory, spellbook);
             // 30/09/2026: os dois textos longos da aba Info/Inventory. Mesmo
             // caminho dos casos acima (chave em minuscula no `key`, permissao ja
             // liberada por canEditSheet no servidor, teto por cleanText no
@@ -1543,9 +2003,9 @@ public record SheetData(
             // atributo: sem estes casos o Appearance cairia la e viraria um
             // atributo inexistente.
             case "appearance" -> new SheetData(identity.withAppearance(value), vitals, progress,
-                    attributes, skills, pericias, attributeValueMin, attributeValueMax, periciaValueMax, inventory);
+                    attributes, skills, pericias, attributeValueMin, attributeValueMax, periciaValueMax, inventory, spellbook);
             case "backstory" -> new SheetData(identity.withBackstory(value), vitals, progress,
-                    attributes, skills, pericias, attributeValueMin, attributeValueMax, periciaValueMax, inventory);
+                    attributes, skills, pericias, attributeValueMin, attributeValueMax, periciaValueMax, inventory, spellbook);
 
             // 30/09/2026 (FASE 2B): o limite de peso do inventario e um texto
             // que o jogador digita, entao vem pelo mesmo caminho dos outros
@@ -1558,25 +2018,65 @@ public record SheetData(
                 yield next == inventory ? this : withInventory(next);
             }
 
+            // 01/10/2026 (pagina 3): os dois campos globais da area de magias.
+            // "cd" e' o numero que o jogador digita na caixa; "castingAttribute"
+            // e' o id do atributo escolhido no seletor. Valor nao numerico mantem
+            // o anterior, e um valor que nao muda devolve a propria ficha -- assim
+            // o eco do servidor nao reescreve a caixa que esta com o foco.
+            case "cd" -> {
+                Spellbook next = spellbook.withCd(parseInt(value, spellbook.cd()));
+                yield next == spellbook ? this : withSpellbook(next);
+            }
+            case "castingattribute" -> {
+                // Id fora do modelo e' recusado, pelo mesmo motivo do
+                // withPericiaAttribute: o "Modificador" mostrado ao lado busca o
+                // valor desse id na pagina 1, e um id que nao existe mostraria 0
+                // sem o jogador perceber que escolheu nada.
+                if (SheetModelHolder.current().attribute(value) == null) {
+                    yield this;
+                }
+                Spellbook next = spellbook.withCastingAttribute(value);
+                yield next == spellbook ? this : withSpellbook(next);
+            }
+
             case "hp" -> replaceVitals(new Vitals(parseInt(value, vitals.hp()), vitals.hpMax(), vitals.mana(), vitals.manaMax()));
             case "hpmax" -> replaceVitals(new Vitals(vitals.hp(), parseInt(value, vitals.hpMax()), vitals.mana(), vitals.manaMax()));
             case "mana" -> replaceVitals(new Vitals(vitals.hp(), vitals.hpMax(), parseInt(value, vitals.mana()), vitals.manaMax()));
             case "manamax" -> replaceVitals(new Vitals(vitals.hp(), vitals.hpMax(), vitals.mana(), parseInt(value, vitals.manaMax())));
 
+            // <b>01/10/2026: o {@code progress.ca()} e repassado aqui e nos
+            // ramos de XP abaixo.</b> Estes ramos reconstroem o Progress inteiro a
+            // partir do antigo para trocar UM campo. Usar o construtor de 3 campos
+            // (que deixa o CA em 0) faria o Level voltar a 0 sempre que o Mestre
+            // mexesse no XP, e vice-versa -- o CA e a mesma linha do Level, entao
+            // as duas edicoes estao a uma tecla de distancia e o sumico seria
+            // facil de encontrar e impossivel de explicar.
             case "level" -> new SheetData(identity, vitals,
-                    new Progress(parseInt(value, progress.level()), progress.xp(), progress.xpText()),
-                    attributes, skills, pericias, attributeValueMin, attributeValueMax, periciaValueMax, inventory);
+                    new Progress(parseInt(value, progress.level()), progress.xp(), progress.xpText(),
+                            progress.ca()),
+                    attributes, skills, pericias, attributeValueMin, attributeValueMax, periciaValueMax, inventory, spellbook);
+            // 01/10/2026: o CA (Classe de Armadura), na mesma linha do Level na
+            // ficha. Fica ANTES do `default` pelo mesmo motivo do "level": sem
+            // esta linha "ca" cairia em attributes.withValue, que devolveria a
+            // propria ficha -- a caixa aceitaria a tecla e o valor sumiria no
+            // proximo eco do servidor.
+            case "ca" -> new SheetData(identity, vitals,
+                    new Progress(progress.level(), progress.xp(), progress.xpText(),
+                            parseInt(value, progress.ca())),
+                    attributes, skills, pericias, attributeValueMin, attributeValueMax, periciaValueMax, inventory, spellbook);
             // Com o modelo em modo TEXT, o campo da barra mostra o texto que o
             // Mestre digitou (ex.: "Fiel aogrupo"). O numero continua guardado
             // para quando o modelo voltar para NUMBER.
             case "xp" -> SheetModelHolder.current().xp() == SheetModel.XpMode.TEXT
-                    ? new SheetData(identity, vitals, new Progress(progress.level(), progress.xp(), value),
+                    ? new SheetData(identity, vitals, new Progress(progress.level(), progress.xp(), value,
+                            progress.ca()),
                             attributes, skills, pericias,
-                            attributeValueMin, attributeValueMax, periciaValueMax, inventory)
+                            attributeValueMin, attributeValueMax, periciaValueMax, inventory, spellbook)
                     : new SheetData(identity, vitals,
-                            new Progress(progress.level(), parseInt(value, progress.xp()), progress.xpText()),
+                            new Progress(progress.level(), parseInt(value, progress.xp()), progress.xpText(),
+                                    progress.ca()),
                             attributes, skills, pericias,
-                            attributeValueMin, attributeValueMax, periciaValueMax, inventory);
+                            attributeValueMin, attributeValueMax, periciaValueMax, inventory, spellbook);
 
             // O texto do XP vem num campo SEPARADO do numero, e nao no mesmo
             // "xp": e o que a tela de Status abre em modo TEXT. Sem este caso o
@@ -1589,9 +2089,10 @@ public record SheetData(
             // a tela nao mostra essa caixa, entao um pacote com "xptext" so pode
             // vir de um cliente forjado.
             case "xptext" -> SheetModelHolder.current().xp() == SheetModel.XpMode.TEXT
-                    ? new SheetData(identity, vitals, new Progress(progress.level(), progress.xp(), value),
+                    ? new SheetData(identity, vitals, new Progress(progress.level(), progress.xp(), value,
+                            progress.ca()),
                             attributes, skills, pericias,
-                            attributeValueMin, attributeValueMax, periciaValueMax, inventory)
+                            attributeValueMin, attributeValueMax, periciaValueMax, inventory, spellbook)
                     : this;
 
             // Qualquer outra chave e um id de atributo. O que decide se ela
@@ -1606,12 +2107,12 @@ public record SheetData(
 
     private SheetData replaceVitals(Vitals newVitals) {
         return new SheetData(identity, newVitals, progress, attributes, skills, pericias,
-                attributeValueMin, attributeValueMax, periciaValueMax, inventory);
+                attributeValueMin, attributeValueMax, periciaValueMax, inventory, spellbook);
     }
 
     private SheetData replaceAttributes(Attributes newAttributes) {
         return new SheetData(identity, vitals, progress, newAttributes, skills, pericias,
-                attributeValueMin, attributeValueMax, periciaValueMax, inventory);
+                attributeValueMin, attributeValueMax, periciaValueMax, inventory, spellbook);
     }
 
     /**
@@ -1640,14 +2141,14 @@ public record SheetData(
         }
         if (updated) {
             return new SheetData(identity, vitals, progress, attributes, next, pericias,
-                    attributeValueMin, attributeValueMax, periciaValueMax, inventory);
+                    attributeValueMin, attributeValueMax, periciaValueMax, inventory, spellbook);
         }
         if (skills.size() >= MAX_SKILLS) {
             return this; // lista cheia
         }
         next.add(new Skill(cleanName, cleanDesc));
         return new SheetData(identity, vitals, progress, attributes, next, pericias,
-                attributeValueMin, attributeValueMax, periciaValueMax, inventory);
+                attributeValueMin, attributeValueMax, periciaValueMax, inventory, spellbook);
     }
 
     /**
@@ -1691,7 +2192,7 @@ public record SheetData(
             }
         }
         return new SheetData(identity, vitals, progress, attributes, next, pericias,
-                attributeValueMin, attributeValueMax, periciaValueMax, inventory);
+                attributeValueMin, attributeValueMax, periciaValueMax, inventory, spellbook);
     }
 
     /**
@@ -1746,7 +2247,7 @@ public record SheetData(
             }
         }
         return changed ? new SheetData(identity, vitals, progress, attributes, skills, next,
-                attributeValueMin, attributeValueMax, periciaValueMax, inventory) : this;
+                attributeValueMin, attributeValueMax, periciaValueMax, inventory, spellbook) : this;
     }
 
     /** Remove uma skill pelo nome (comparação sem diferenciar maiusculas). */
@@ -1765,7 +2266,7 @@ public record SheetData(
             next.add(existing);
         }
         return removed ? new SheetData(identity, vitals, progress, attributes, next, pericias,
-                attributeValueMin, attributeValueMax, periciaValueMax, inventory) : this;
+                attributeValueMin, attributeValueMax, periciaValueMax, inventory, spellbook) : this;
     }
 
     /**
@@ -1799,7 +2300,7 @@ public record SheetData(
         List<Skill> next = new ArrayList<>(skills);
         next.add(to, next.remove(from));
         return new SheetData(identity, vitals, progress, attributes, next, pericias,
-                attributeValueMin, attributeValueMax, periciaValueMax, inventory);
+                attributeValueMin, attributeValueMax, periciaValueMax, inventory, spellbook);
     }
 
     /**
@@ -1817,7 +2318,62 @@ public record SheetData(
             return this;
         }
         return new SheetData(identity, vitals, progress, attributes, skills, pericias,
-                attributeValueMin, attributeValueMax, periciaValueMax, next);
+                attributeValueMin, attributeValueMax, periciaValueMax, next, spellbook);
+    }
+
+    /**
+     * Devolve uma ficha nova com o grimorio trocado (01/10/2026, pagina 3).
+     *
+     * <p>E o unico caminho que o servidor usa para gravar uma magia, o atributo
+     * de conjuracao ou a CD. Devolve a <b>propria ficha</b> quando nada mudou
+     * (mesma regra do {@link #withInventory}), para que o handler do servidor
+     * veja {@code updated == current} e nem grave nem transmita.
+     */
+    public SheetData withSpellbook(Spellbook next) {
+        if (next == null || next.equals(spellbook)) {
+            return this;
+        }
+        return new SheetData(identity, vitals, progress, attributes, skills, pericias,
+                attributeValueMin, attributeValueMax, periciaValueMax, inventory, next);
+    }
+
+    /** Acrescenta uma magia no fim. Com a lista cheia devolve a propria ficha. */
+    public SheetData withSpellAdded(Spell spell) {
+        Spellbook next = spellbook.addSpell(spell);
+        return next == spellbook ? this : withSpellbook(next);
+    }
+
+    /**
+     * Troca a magia do indice dado.
+     *
+     * <p>Indice fora da lista devolve a propria ficha: um UPDATE atrasado (a magia
+     * foi apagada entre o clique e o pacote) nao pode recriá-la como se fosse um
+     * ADD. Mesmo desenho do {@link #withSkill(int, String, String)}.
+     */
+    public SheetData withSpellUpdated(int index, Spell spell) {
+        if (spell == null || spell.name().isEmpty()) {
+            return this;
+        }
+        Spellbook next = spellbook.withSpell(index, spell);
+        return next == spellbook ? this : withSpellbook(next);
+    }
+
+    /** Apaga a magia do indice; indice fora da lista devolve a propria ficha. */
+    public SheetData withSpellRemoved(int index) {
+        Spellbook next = spellbook.removeSpell(index);
+        return next == spellbook ? this : withSpellbook(next);
+    }
+
+    /** Novo atributo de conjuracao da pagina 3. */
+    public SheetData withCastingAttribute(String attributeId) {
+        Spellbook next = spellbook.withCastingAttribute(attributeId);
+        return next == spellbook ? this : withSpellbook(next);
+    }
+
+    /** Nova CD da pagina 3. */
+    public SheetData withCd(int next) {
+        Spellbook updated = spellbook.withCd(next);
+        return updated == spellbook ? this : withSpellbook(updated);
     }
 
     // ------------------------------------------------------------------
@@ -1838,6 +2394,10 @@ public record SheetData(
             // 30/09/2026: os dois textos longos da aba Info/Inventory.
             case "appearance" -> identity.appearance();
             case "backstory" -> identity.backstory();
+            // 01/10/2026 (pagina 3): o id do atributo de conjuracao. A tela mostra
+            // o NOME do atributo (o rotulo do Mestre), e nao o id, porque e o que
+            // o jogador le; o id continua sendo a chave que o servidor valida.
+            case "castingattribute" -> castingAttributeName();
             // XP em modo TEXT e um campo de texto, e nao um numero. Sem esta
             // linha, a caixa de texto da tela de Status cairia no `default` e o
             // Mestre nao veria o que digitou.
@@ -1869,6 +2429,14 @@ public record SheetData(
             case "manamax" -> vitals.manaMax();
             case "level" -> progress.level();
             case "xp" -> progress.xp();
+            // 01/10/2026: o CA da mesma linha do Level. Entra antes do `default`
+            // pelo mesmo motivo de level/xp: sem ele, "ca" seria lido como id de
+            // atributo e devolveria 0 sempre.
+            case "ca" -> progress.ca();
+            // 01/10/2026 (pagina 3): a CD das magias. Entra no switch antes do
+            // `default` pelo mesmo motivo de hp/level: sem esta linha, "cd" cairia
+            // em `attributes.valueOf("cd")` e a caixa mostraria 0 sempre.
+            case "cd" -> spellbook.cd();
             default -> attributes.valueOf(key);
         };
     }
@@ -1883,6 +2451,23 @@ public record SheetData(
      */
     public int attributeValue(String attributeId) {
         return attributeId == null ? 0 : attributes.valueOf(attributeId.toLowerCase(Locale.ROOT));
+    }
+
+    /**
+     * O NOME do atributo de conjuracao escolhido na pagina 3, ou {@code ""}.
+     *
+     * <p>E o rotulo do Mestre ({@link SheetModel.AttributeDef#label()}), e nao o
+     * id: o id e a chave que o servidor valida, e o rotulo e o que o jogador le
+     * no botao. Um id que saiu do modelo devolve {@code ""}, que e o que a tela
+     * mostra como "sem atributo escolhido".
+     */
+    public String castingAttributeName() {
+        String id = spellbook.castingAttribute();
+        if (id.isEmpty()) {
+            return "";
+        }
+        SheetModel.AttributeDef def = SheetModelHolder.current().attribute(id);
+        return def == null ? "" : def.label();
     }
 
     /**
@@ -2048,6 +2633,70 @@ public record SheetData(
         }
         String trimmed = text.trim();
         return trimmed.length() > SKILL_MAX ? trimmed.substring(0, SKILL_MAX) : trimmed;
+    }
+
+    /** Nome de uma magia: trim e teto {@link Spell#SPELL_NAME_MAX}. */
+    private static String cleanSpellName(String text) {
+        if (text == null) {
+            return "";
+        }
+        String trimmed = text.trim();
+        return trimmed.length() > Spell.SPELL_NAME_MAX
+                ? trimmed.substring(0, Spell.SPELL_NAME_MAX) : trimmed;
+    }
+
+    /** Um dos cinco campos curtos de uma magia: teto {@link Spell#SPELL_FIELD_MAX}. */
+    private static String cleanSpellField(String text) {
+        if (text == null) {
+            return "";
+        }
+        String trimmed = text.trim();
+        return trimmed.length() > Spell.SPELL_FIELD_MAX
+                ? trimmed.substring(0, Spell.SPELL_FIELD_MAX) : trimmed;
+    }
+
+    /** Custo de uma magia: o mesmo trim, com o teto maior dele. */
+    private static String cleanSpellCost(String text) {
+        if (text == null) {
+            return "";
+        }
+        String trimmed = text.trim();
+        return trimmed.length() > Spell.SPELL_COST_MAX
+                ? trimmed.substring(0, Spell.SPELL_COST_MAX) : trimmed;
+    }
+
+    /**
+     * Higiene da lista de magias (01/10/2026, pagina 3).
+     *
+     * <p>Mesmo desenho do {@link #sanitizeItems}: descarta nulo e magia sem nome,
+     * reconstroi as que ficam (o construtor do record normaliza de novo, porque a
+     * lista pode vir de um payload sem passar por {@link Spellbook#addSpell}) e
+     * corta em {@link Spellbook#MAX_SPELLS}.
+     *
+     * <p><b>Nao deduplica por nome</b>, ao contrario das skills: o jogador e quem
+     * decide o que e duplicado, e duas magias de mesmo nome em circulos
+     * diferentes sao legítimas.
+     */
+    private static List<Spell> sanitizeSpells(List<Spell> raw) {
+        if (raw == null || raw.isEmpty()) {
+            return List.of();
+        }
+        List<Spell> out = new ArrayList<>(Math.min(raw.size(), Spellbook.MAX_SPELLS));
+        for (Spell spell : raw) {
+            if (spell == null) {
+                continue;
+            }
+            Spell clean = new Spell(spell.name(), spell.circle(), spell.execution(),
+                    spell.range(), spell.target(), spell.duration(), spell.cost());
+            if (clean.name().isEmpty()) {
+                continue;
+            }
+            out.add(clean);
+            if (out.size() >= Spellbook.MAX_SPELLS) {
+                break;
+            }
+        }
+        return List.copyOf(out);
     }
 
     /**

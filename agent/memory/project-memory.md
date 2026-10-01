@@ -2229,7 +2229,6 @@ lote so no mesmo arquivo e com trechos bem distintos; **sempre** confirmar com `
 `if (guarda)`/simbolo depois, e aplicar **uma de cada vez** quando o arquivo for critico.
 Nao confie no "applied" nem no "error" da ferramenta para garantir o estado do arquivo.
 
-
 **FATO verificado (Iris, 30/09/2026) - o Iris NAO lanca excecao por pipeline desconhecido.** A
 primeira analise registrou o contrario, e a causa errada foi parar no catalogo e no relatorio.
 O metodo e `MixinShaderManager_Overrides.redirectIrisProgram` e, por `javap`, faz: se
@@ -2383,3 +2382,217 @@ Decisao do usuario para o `Camera Tool`, e vale como regra geral para sprite de 
   jogo -- e uma mudanca de textura do vanilla mudaria o item sem ninguem pedir.
 - **Assinatura de PNG valido:** `89 50 4E 47 0D 0A 1A 0A`; largura/altura nos bytes 16..23
   (big-endian). Conferir depois de extrair do jar.
+**FATO verificado (30/09/2026, fim da sessao):** as tres fases da ficha (abas, campos de
+texto grandes, inventario) e todas as correcoes de layout foram **validadas em jogo** pelo
+usuario e commitadas em **`a16b3b7`** (12 arquivos, +3204/-47, branch `main`, sem tag e sem
+push). `origin/main` continua em `5c39f00`. O ultimo **checkpoint** segue sendo `7ace0fd` /
+`checkpoint-20260930-1412-antes-das-abas-da-ficha`, que e anterior a tudo isso.
+
+### Trabalho em paralelo de outra pessoa no mesmo repositorio (30/09/2026)
+
+**FATO verificado:** o repositorio nao e shallow, e o remoto e
+`https://github.com/Pedr0U/tabletop-rpg-1.21.11.git`. Alem da `main`, existe a branch
+**`pasta-Net`** (`450d64c` "Correcao de Bugs e Adicoes") — e onde o outro desenvolvedor
+trabalha. Portanto **`git pull` na `main` nao traz o trabalho dele**: so traria se ele
+mesmo mesclar a `pasta-Net` na `main` e der push.
+
+**FATO verificado:** nesta maquina `pull.rebase = false`, entao `git pull` faz **merge**
+(gera commit de merge), nao rebase. Consequencia pratica: se houver conflito, o pull
+**para** e deixa a arvore em estado de conflito para resolver — nada se perde, mas precisa
+de atencao.
+
+**Risco especifico deste projeto, e o que vale avisar:** os dois mexem em
+`SheetData.java`. Conflictos ali sao praticamente Certainos (o diff da fase 2B sozinho tem
++634 linhas), e o perigo **silencioso** e a **ordem dos campos no codec de NBT**: se uma
+resolucao manual deixar o `group(...)`/`forGetter` do `CODEC` em ordem diferente da do
+construtor do record, os testes de round-trip **continuam passando** (encoder e decoder
+concordam entre si) mas uma ficha salva pela outra versao e lida com campos trocados.
+Depois de qualquer pull que toque `SheetData`, conferir a ordem e testar com uma ficha
+salva **antes** do merge.
+
+**Procedimento seguro para o usuario:** `git fetch origin` -> `git log --oneline HEAD..origin/main`
+para ver o que veio -> `git pull` **so com a arvore limpa** (commit ou stash antes) ->
+`.\gradlew.bat build --no-daemon --console=plain` antes de testar em jogo.
+
+**FATO verificado (01/10/2026) - conflito de merge orfao foi resolvido antes de commitar.**
+O `agent/memory/project-memory.md` estava com marcadores `<<<<<<< Updated upstream` /
+`>>>>>>> Stashed changes` e status `UU`, **sem** `MERGE_HEAD` e **sem** entrada em
+`git stash list`: sobra de um `git stash pop` anterior que conflitou e foi abandonado.
+Resolvido **mantendo os dois lados** (os dois blocos eram blocos de memoria distintos e
+append-only, um do Iris e outro do fim da sessao das abas), na ordem upstream -> stashed.
+Nenhum conteudo foi descartado.
+
+---
+
+## 2026-10-01 - Pagina 3 (Skills/Magias): widget nao e recortado pela faixa da lista
+
+**FATO verificado (causa raiz do estouro de borda, por leitura de codigo em
+`StatusScreen.java`, confirmado pelo relato do usuario em 01/10/2026):** `ItemBox`
+e um retangulo desenhado pela propria tela, entao o `addSkillEntry`/`addSpellEntry`
+recorta o fundo na borda com `Math.max`/`Math.min`. Mas um **widget** (`Button`,
+`EditBox`) e desenhado pelo vanilla na posicao Y que recebeu, sem nenhuma ideia da
+faixa da lista. Resultado: o fundo era recortado e o botao nao, entao o jogador via o
+botao vazando por cima do `+ Skill`/`+ Magia` ou por cima da barra de abas.
+
+**FATO verificado:** a coluna de inventario ja resolvia isso com um guarda
+`lineInList`/equivalente; a coluna nova nao replicou o guarda. Agora existe
+`Column.lineFits(int y, int h)` em `StatusScreen`, usado pelo botao de nome de skill,
+pelo botao de nome de magia e por `addDeleteButton`. Texto continua guardado pela
+mesma regra. Correcao de geometria (`Column.prepare` antes do laco) sozinha **nao**
+resolve: ela arruma a faixa, nao o desenho do widget.
+
+**FATO verificado (armadilha de API do projeto):** em `addEntryNameButton` o
+parametro `right` controla DUAS coisas: `right == null` desliga o texto do circulo
+**e** o botao `Del` (`delW = right == null ? 0 : LIST_BTN_W`). Passar `null` para
+tirar o circulo apaga o `Del` junto. Para skill, que nao tem circulo, o valor correto
+e `""` (texto vazio, `Del` presente).
+
+**FATO verificado (01/10/2026):** `TextLine` cresce para DIREITA a partir do X que
+recebeu. No cabecalho de conjuracao o `Modifier` nasce em `cdX` (fim do botao de
+atributo), entao a largura util e `(panelX + panelW) - x`, nao `panelW`. Usar a
+largura total do painel fazia o `"Modifier: -"` transbordar para fora do painel.
+
+**Decisao do usuario (01/10/2026):** CD foi para a ESQUERDA na linha de baixo do
+cabecalho (rotulo `CD` + caixa encostados a esquerda); antes encostava a direita e
+invadia a area do `Modifier`. Cartao de magia na nova disposicao: nome largo e mais
+alto, `1º círculo` ate `5º círculo` (nome por extenso, minusculo, na linha), execucao
+abaixo, custo abaixo da execucao, e `Del` na direita da ultima linha com texto. O
+`Del` desceu porque na linha do circulo o usuario lia como se fosse botao do circulo.
+
+**HIPOTESE:** o `Del` sempre na ultima linha com texto (desce conforme execucao e custo
+aparecem) e o que resolve a leitura ambigua; se o usuario preferir Del sempre na mesma
+altura, e uma linha de altura fixa.
+
+**Validacao:** `gradlew build test --no-daemon --console=plain` -> `BUILD SUCCESSFUL`.
+**NAO validado:** o recorte visual em jogo -- build nao prova o desenho do widget na tela.
+Precisa do teste visual do usuario com rolagem nas duas colunas.
+### 2026-10-01 (tarde) - Pecao visivel na rolagem + validacao de nome obrigatorio
+
+**FATO verificado (por que o widget e recortado e nao pulado):** o primeiro corte
+usava so um guarda "cabe inteiro?". Isso matava o estouro de borda, mas o jogador
+passou a ver a linha **sumir de uma vez** ao rolar. A solucao nao e voltar a criar
+o widget inteiro: e criar o widget **com a altura que sobra na faixa**
+(Column.clippedHeight, minimo LIST_PEEK_MIN = 5) e empurrar o Y para
+listTop. O vanilla entao desenha um botao de 5 px, que e o "pedaco" pedido.
+Texto continua com o guarda "cabe inteiro?" (lineFits), porque TextLine e
+desenhado por nos e nao precisa de recorte.
+
+**FATO verificado:** o ItemBox (fundo do card) e desenhado por esta tela e
+encolhe ate 1 px -- e ele que faz a transicao parecer continua. O botao some aos
+5 px. Os dois juntos dao o efeito pedido.
+
+**Decisao do usuario (01/10/2026):** nome **obrigatorio** em Skill e Magia. Sem
+nome, save() marca showNameError, foca a caixa e **nao** envia pacote; o
+aviso "Name required" aparece em  xFF5555 sob a caixa de nome. Validado so no
+cliente: e conforto, nao seguranca -- o servidor ja normaliza e limita o texto.
+
+**FATO verificado (cabecalho):** o rotulo "CD" e medido por ont.width("CD") + 2,
+nao pela largura da caixa (que e o dobro) -- era o vao enorme entre o rotulo e a
+caixa. O botao de atributo agora e w - font.width("Modifier: -") - 2*PER_GAP, e
+o Modifier nasce em modX = x + attrW + PER_GAP, entao ele tem largura reservada
+e nao depende do resto da linha.
+
+**Validacao:** build + test -> BUILD SUCCESSFUL (18s).
+**NAO validado em jogo:** o efeito do pedaco visivel na rolagem, a proximidade da CD e o
+aviso de nome vazio -- build nao prova desenho nem interacao de widget.
+
+### 2026-10-01 (noite) - Botao Save desativado + armadilha de gravacao da memoria
+
+**Decisao do usuario (01/10/2026):** o aviso de "nome obrigatorio" vira botao
+**desabilitado**. saveButton.active = !nameBox.getValue().isBlank(), com
+
+ameBox.setResponder(text -> syncSaveEnabled()) para reavaliar a cada tecla, sem
+rebuild. O aviso "Name required" continua, mas agora nasce do mesmo estado do
+botao (
+ameBox.getValue().isBlank()) e nao de um clique -- que deixou de acontecer.
+Os dois nunca discordam porque leem a mesma expressao. A guarda em save() foi
+mantida como rede de seguranca: Save nao deve depender da UI para ser correto.
+
+**FATO verificado (armadilha REAL deste projeto):** gravar a memoria com
+[System.IO.File]::AppendAllText e seguro, mas o edit/write com texto em que
+`b` e `t` vem no inicio de palavra **trunca as letras**: "build" vira "uild" com um
+0x08 (backspace) no lugar do `b`, e "test" vira "est" com 0x09 (tab). Esses
+bytes de controle nao aparecem no 
+ead como caracteres visiveis, entao parece
+apenas palavra faltando letra. **scanEncoding do build.gradle pega isso e faz o
+`build` FALHAR** (`throw GradleException` em build.gradle:218), o que e bom: e a rede
+que impediu lixo silencioso na memoria.
+
+**Como diagnosticar e corrigir:** localizar com -match "\uFFFD" e inspecionar bytes
+com [System.Text.Encoding]::UTF8.GetBytes(). Quando o edit falha em casar
+por causa desses bytes, reescrever a linha **por indice**
+($lines[i] = ... + WriteAllLines) e o caminho que funciona. Ao validar este
+arquivo, procure tambem [\u0008\u0009], nao so \uFFFD: o scanEncoding
+acusa os tres, mas um olho humano so ve o U+FFFD.
+
+**FATO verificado:** Button.active = false e o jeito nativo de desabilitar sem
+remover o widget: ele continua desenhado (cinza, quando o Widget respeita o campo
+`active`) e o `onPress` deixa de rodar. Removê-lo do `children()` exigiria
+
+**Validacao:** `build` + `test` -> BUILD SUCCESSFUL (11s), `scanEncoding OK: 120
+arquivo(s). **NAO validado em jogo:** o botao cinza, o aviso e a reativacao ao
+digitar.
+
+---
+
+## 2026-10-01 — Campo CA na ficha (FATO verificado)
+
+### `RecordCodecBuilder.group()` tem LIMITE DURO de 16 campos (FATO verificado)
+`SheetModel` tinha **exatamente** 16 componentes. Adicionar o 17o (`caLabel`) fez o compilador recusar com
+`no suitable method found for group(...)`. Nao ha como contornar mantendo o builder: **16 e o maximo**, nao um
+acidente da sobrecarga escolhida.
+
+**Como resolver (decisao do usuario, 01/10/2026): "codec manual, chaves iguais".** O `SheetModel.CODEC`
+deixou de ser `RecordCodecBuilder` e passou a ser `Codec.of(Encoder, Decoder)` **escrito a mao**, em
+`CODEC_MANUAL`. O formato gravado **nao muda**: as chaves continuam planas e iguais
+(`nameLabel`, `raceLabel`, ..., `caLabel`) dentro de `model`. Nao e migracao.
+
+### APIs do DFU 9.0.19 verificadas com `javap` (FATO verificado)
+Preferi confirmar no jar a adivinhar. `javap.exe` esta em `C:\Program Files\Java\jdk-21.0.12\bin\` (**nao**
+esta no PATH deste ambiente) e o jar em
+`~/.gradle/caches/modules-2/files-2.1/com.mojang/datafixerupper/9.0.19/*/datafixerupper-9.0.19.jar`.
+
+- `Codec.parse(Object)` **NAO EXISTE**. `parse` so existe em `Decoder.parse(Dynamic<T>)` e
+  `Decoder.parse(DynamicOps<T>, T)`. Por isso nao da para decodificar um elemento cru de `Map<String,Object>`.
+- `MapCodec.of(MapEncoder, MapDecoder)`: **nao da para usar com lambda** — `MapEncoder` tem 2 metodos
+  abstratos (`encode` e `compressor`) e `MapDecoder` tambem (`decode` e `compressor`). Lambdas nao compilam.
+- `Encoder` e `Decoder` tem **1 metodo abstrato cada** → `Codec.of(Encoder, Decoder)` **aceita classe
+  anonima** (nao lambda: a assinatura e `<T>` e **lambda nao pode declarar parametro de tipo**, da
+  `cannot find symbol: class T`).
+- `RecordBuilder.add(String, E, Encoder<E>)`: a ordem e **(chave, VALOR, ENCODER)**. Com a ordem invertida
+  da `cannot infer type-variable(s) E`.
+- `MapLike.get(String)` devolve **`T`, nao `DataResult<T>`** → nao existe `flatMap` nisso (da
+  `flatMap ... location: class Object`).
+
+### Risco proprio do codec manual e o teste que o cobre (FATO verificado)
+Diferente do builder, **nao ha verificacao em tempo de compilacao** que amarre chave a campo. `"calabel"`
+vs `"caLabel"` compila, grava e volta como padrao, **em silencio**. Por isso
+`SheetModelCodecTest.java: caLabelSurvivesNbtAndNetworkAndLegacyNbtFallsBack` grava um rotulo **NAO padrao**
+("ARMADURA"): com o padrao "CA" o teste passaria mesmo com a chave errada, porque o padrao e a saida do
+caminho certo E do errado — ele nao distingue as duas falhas. Cobre NBT e `STREAM_CODEC`, que sao dois
+codigos manuais separados com ordens proprias.
+
+### `Progress` e a armadilha do construtor de conveniência (FATO verificado, BUG CORRIGIDO)
+Ao adicionar `ca` ao record `Progress`, criei um construtor **sobrecarregado de 3 campos** que delega com
+`ca = 0`. Isso resolveu as 7 chamadas espalhadas, mas **criou bug**: os ramos de `withField` de `level`,
+`xp` e `xptext` reconstroem o `Progress` inteiro para trocar **um** campo, e usavam esse construtor — entao
+**mexer no XP apagava o CA e vice-versa**. Como os dois campos estao na **mesma linha** da ficha, era a uma
+tecla de distancia. Corrigido repassando `progress.ca()` explicito em cada ramo.
+**Licao: construtor de conveniencia que tem valor default esconde a passagem de um campo novo.** O
+mesmo padrao foi usado no `SheetModel` (construtor de 16 sem `caLabel`) e ali **nao** ha o risco, porque
+todas as copias internas realmente devem manter o rotulo padrao.
+
+### CA: onde mora e por que (FATO verificado)
+Valor em `SheetData.java: Progress` (campo `ca`), **nao** nos atributos: CA nao entra em rolagem e nao tem
+piso/teto do Mestre. **Piso 0, teto 9999** (`SheetData.MAX_RESOURCE`, o mesmo do HP e da Mana) — CA
+negativo nao tem leitura, modificador negativo vive no atributo (que vai a -30).
+Rotulo em `SheetModel.java: caLabel` (padrao "CA", configuravel no Sheet Editor via `field_ca`, **sem
+toggle**). NBT: `Codec.INT.optionalFieldOf("ca", 0)` — ficha antiga abre com CA 0, igual a recem-criada.
+`LABELLED_FIELDS` ganhou `"ca"` (o `fieldLabelWidth` do StatusScreen mede por essa lista, entao o rotulo do
+CA entra na conta da largura reservada).
+
+### `addFieldPair` (FATO verificado)
+`CharacterSheetScreen.java: addFieldPair(first, second, x0, y, leftW, labelW, boxW)` com `PAIR_GAP = 8`.
+Cada metade reserva a **mesma** largura de rotulo das linhas de campo unico, de proposito: encolher faria um
+rotulo configurado ("Armadura") quebrar e invadir a caixa vizinha (o bug de 27/09/2026). Os rotulos quebram,
+as caixas nao se movem. A soma das metades fecha em `leftW`.

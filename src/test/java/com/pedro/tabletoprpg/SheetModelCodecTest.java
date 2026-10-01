@@ -105,6 +105,58 @@ void valueLimitsTravelAndLegacyNbtFallsBackToDefaults() {
 }
 
 /**
+ * O rotulo do CA no NBT gravado (01/10/2026).
+ *
+ * <p><b>Por que este teste existe:</b> o {@code SheetModel.CODEC} deixou de ser
+ * um {@code RecordCodecBuilder} e passou a ser um {@code Codec} escrito a mao,
+ * porque o builder aceita no maximo 16 campos e o {@code caLabel} levava o
+ * record a 17. Diferente do builder, <b>nao ha verificacao em tempo de
+ * compilacao</b> que amarre uma chave a um campo: escrever {@code "caLabel"}
+ * como {@code "calabel"} continua compilando, o NBT e gravado com a chave
+ * errada, e o rotulo volta como padrao "CA" em silencio -- sem erro, sem
+ * excecao, sem log. O mesmo vale para a ordem, que e o outro erro classico
+ * desses codecs manuais.
+ *
+ * <p>Por isso o teste grava um rotulo <b>nao padrao</b> e exige que ele volte
+ * exatamente igual. Com o padrao "CA" o teste passaria mesmo com a chave
+ * errada, porque o padrao e a saida tanto do caminho certo quanto do errado:
+ * ele nao distingue as duas falhas que importam aqui.
+ *
+ * <p>Os dois formatos sao conferidos porque a ficha e lida de dois jeitos: o
+ * NBT do mundo ({@code CODEC}) e o pacote de rede ({@code STREAM_CODEC}). Sao
+ * dois codigos separados, escritos a mao, e cada um tem a sua propria ordem de
+ * campos.
+ */
+@Test
+@DisplayName("O rotulo do CA sobrevive ao NBT e a rede, e NBT antigo abre no padrao")
+void caLabelSurvivesNbtAndNetworkAndLegacyNbtFallsBack() {
+    SheetModel custom = SheetModel.defaults().withLabel("ca", "ARMADURA");
+
+    // NBT gravado e relido: pega chave trocada e ordem errada.
+    Tag saved = SheetModel.CODEC.encodeStart(NbtOps.INSTANCE, custom).getOrThrow();
+    SheetModel reread = SheetModel.CODEC.parse(NbtOps.INSTANCE, saved).getOrThrow();
+    assertEquals("ARMADURA", reread.caLabel(),
+            "o rotulo do CA nao sobreviveu ao NBT: a chave ou a ordem esta errada");
+    assertEquals(custom, reread, "o modelo inteiro nao sobreviveu ao NBT");
+
+    // A mesma checagem no codec de rede, que tem uma ordem propria.
+    FriendlyByteBuf buf = new FriendlyByteBuf(Unpooled.buffer());
+    SheetModel.STREAM_CODEC.encode(buf, custom);
+    SheetModel streamed = SheetModel.STREAM_CODEC.decode(buf);
+    assertEquals("ARMADURA", streamed.caLabel(),
+            "o rotulo do CA nao sobreviveu a rede: encoder e decoder estao fora de ordem");
+
+    // Ficha de um mundo anterior ao CA: nao tem a chave, e tem de abrir assim
+    // mesmo -- e abrir com o padrao, que e o que uma ficha recem-criada mostra.
+    SheetModel legacy = SheetModel.CODEC.parse(NbtOps.INSTANCE, new CompoundTag()).getOrThrow();
+    assertEquals("CA", legacy.caLabel(), "um Sheet Model antigo nao deveria ter rotulo de CA proprio");
+
+    // Um rotulo vazio no editor volta ao padrao, e nao some da ficha.
+    assertEquals("CA", SheetModel.defaults().withLabel("ca", "").caLabel(),
+            "apagar o rotulo do CA tem de voltar ao padrao, nao deixar a linha sem nome");
+}
+
+/**
  * O piso e o teto podem chegar invertidos de um NBT editado a mao ou de um
  * payload forjado. Invertido nao pode significar "intervalo vazio", senao o clamp
  * da ficha cortaria <b>todo</b> valor para o piso, inclusive os que estavam
@@ -368,6 +420,43 @@ void invertedLimitsCollapseToTheFloor() {
      * {@code assertEquals(original, decoded)} passaria mesmo se os tres
      * {@code VAR_INT} fossem lidos na posicao errada.
      */
+    /**
+     * O CA e o Level nao podem se apagar (01/10/2026).
+     *
+     * <p><b>O bug que este teste cobre:</b> os ramos de {@code withField} de
+     * "level" e "xp" reconstroem o {@code Progress} inteiro a partir do antigo
+     * para trocar um campo so. Como o {@code ca} entrou no record depois, o
+     * construtor de 3 campos deixava o CA em 0 -- e o Level voltava a 0 sempre
+     * que o Mestre mexesse no XP. Os dois campos estao na MESMA linha da ficha,
+     * entao a troca de um apagava o outro a uma tecla de distancia.
+     *
+     * <p>E por isso que o teste edita os dois e confere os dois: Editing o Level
+     * preserva o CA, e editar o XP tambem.
+     */
+    @Test
+    @DisplayName("Editar Level ou XP nao apaga o CA, e vice-versa")
+    void editingLevelOrXpKeepsCa() {
+        SheetData base = SheetData.defaultSheet("Heroi").withField("ca", "16");
+
+        SheetData afterLevel = base.withField("level", "7");
+        assertEquals(7, afterLevel.progress().level(), "o Level nao foi aplicado");
+        assertEquals(16, afterLevel.progress().ca(), "mexer no Level apagou o CA");
+
+        SheetData afterXp = base.withField("xp", "120");
+        assertEquals(120, afterXp.progress().xp(), "o XP nao foi aplicado");
+        assertEquals(16, afterXp.progress().ca(), "mexer no XP apagou o CA");
+
+        SheetData afterCa = base.withField("ca", "18");
+        assertEquals(18, afterCa.progress().ca(), "o CA nao foi aplicado");
+        assertEquals(base.progress().level(), afterCa.progress().level(),
+                "mexer no CA mexeu no Level");
+
+        // O CA tem teto: o mesmo limite de HP e Mana (9999), e o piso e 0 porque
+        // um CA negativo nao tem leitura -- modificador negativo vive no atributo.
+        assertEquals(0, base.withField("ca", "-5").progress().ca(), "o CA aceitou valor negativo");
+        assertEquals(9999, base.withField("ca", "99999").progress().ca(), "o CA passou do teto");
+    }
+
     @Test
     @DisplayName("SheetData sobrevive a um round-trip pelo STREAM_CODEC")
     void sheetSurvivesStreamRoundTrip() {
@@ -381,7 +470,8 @@ void invertedLimitsCollapseToTheFloor() {
         // direto no construtor e o que testa o codec, e nao um caminho que a
         // tela usa.
         SheetData original = new SheetData(base.identity(), base.vitals(), base.progress(),
-                base.attributes(), base.skills(), base.pericias(), -5, 12, 7, base.inventory());
+                base.attributes(), base.skills(), base.pericias(), -5, 12, 7,
+                base.inventory(), base.spellbook());
 
         FriendlyByteBuf buf = new FriendlyByteBuf(Unpooled.buffer());
         SheetData.STREAM_CODEC.encode(buf, original);
@@ -601,7 +691,8 @@ void invertedLimitsCollapseToTheFloor() {
                         new SheetData.Pericia("", "Z", 3, "a"),
                         new SheetData.Pericia("", "W", 4, "a"),
                         new SheetData.Pericia("", "V", 5, "a")),
-                base.attributeValueMin(), base.attributeValueMax(), base.periciaValueMax(), base.inventory());
+                base.attributeValueMin(), base.attributeValueMax(), base.periciaValueMax(),
+                base.inventory(), base.spellbook());
 
         assertEquals(5, sheet.pericias().size(), "a ficha perdeu uma pericia sem id");
         assertEquals("pericia_3", sheet.pericias().get(2).id());
@@ -631,7 +722,8 @@ void invertedLimitsCollapseToTheFloor() {
                 base.attributes(), base.skills(),
                 List.of(new SheetData.Pericia("pericia_99", nameInModel, 5,
                         model.attributes().get(0).id())),
-                base.attributeValueMin(), base.attributeValueMax(), base.periciaValueMax(), base.inventory());
+                base.attributeValueMin(), base.attributeValueMax(), base.periciaValueMax(),
+                base.inventory(), base.spellbook());
 
         assertTrue(sheet.hasPericiaIds(), "a ficha tem id: e por isso que o nome nao pode casar");
         // A prova de que o nome casaria: por isso o fallback por nome seria um bug
