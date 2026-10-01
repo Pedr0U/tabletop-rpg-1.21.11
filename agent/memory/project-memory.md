@@ -2393,8 +2393,20 @@ push). `origin/main` continua em `5c39f00`. O ultimo **checkpoint** segue sendo 
 **FATO verificado:** o repositorio nao e shallow, e o remoto e
 `https://github.com/Pedr0U/tabletop-rpg-1.21.11.git`. Alem da `main`, existe a branch
 **`pasta-Net`** (`450d64c` "Correcao de Bugs e Adicoes") — e onde o outro desenvolvedor
-trabalha. Portanto **`git pull` na `main` nao traz o trabalho dele**: so traria se ele
-mesmo mesclar a `pasta-Net` na `main` e der push.
+trabalha. **REGRA (01/10/2026): este paragrafo esta ERRADO quanto a consequence.**
+
+**FATO corrigido em 01/10/2026:** o outro desenvolvedor **tambem** da push direto na `main`
+(`7868f1e`, pagina 3 da ficha + campo CA, 4 commits). A `pasta-Net` existe, mas nao e o
+unico caminho dele. **REGRA:** `git fetch` + comparar `HEAD..origin/main` **sempre** antes
+de comecar trabalho longo, e nao assumir que `pull` na `main` nao traz nada dele. Commitou-se
+local, depois `git merge origin/main`: assim o historico da Camera Tool nao e reescrito
+quando ha merge conflict, e a resolucao fica num commit so.
+
+Conflitos sao mais provaveis em `FUNCIONALIDADES-E-COMANDOS.md`,
+`agent/memory/project-memory.md` e `assets/tabletop-rpg/lang/en_us.json` (chaves diferentes
+no mesmo arquivo). JSON de lang mescla bem sozinho quando as chaves sao distintas, mas
+**sempre validar com `ConvertFrom-Json` e rodar `gradlew build`**, porque o build tambem roda
+`scanEncoding`.
 
 **FATO verificado:** nesta maquina `pull.rebase = false`, entao `git pull` faz **merge**
 (gera commit de merge), nao rebase. Consequencia pratica: se houver conflito, o pull
