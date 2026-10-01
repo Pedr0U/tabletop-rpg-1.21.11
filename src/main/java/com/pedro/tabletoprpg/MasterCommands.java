@@ -128,7 +128,15 @@ public class MasterCommands {
                 // (clique direito nele primeiro). 1 mob por execução.
                 .then(Commands.literal("remove")
                     .then(Commands.literal("enemy")
-                        .executes(MasterCommands::removeEnemy))));
+                        .executes(MasterCommands::removeEnemy)))
+
+                // /rpg block_lock          -> arma o pedido de TRAVAR; o próximo
+                //   clique do mestre num bloco tranca aquele bloco.
+                // /rpg block_lock remove   -> o mesmo, para DESTRANCAR.
+                .then(Commands.literal("block_lock")
+                    .executes(MasterCommands::blockLock)
+                    .then(Commands.literal("remove")
+                        .executes(MasterCommands::blockUnlock))));
     }
 
     // --- COMANDOS E LÓGICA ---
@@ -412,6 +420,43 @@ public class MasterCommands {
         } catch (Exception e) {
             TabletopRpg.LOGGER.error("[TabletopRPG] Error removing enemy: {}", e.getMessage());
             ctx.getSource().sendFailure(Component.literal("§c[RPG] Failed to remove enemy."));
+            return 0;
+        }
+    }
+
+    /**
+     * /rpg block_lock: arma o pedido de travar. O comando em si nao tranca
+     * nada — quem tranca e o <b>proximo clique do mestre num bloco</b>, para
+     * que ele veja qual bloco vai ser afetado antes de confirmar.
+     */
+    private static int blockLock(CommandContext<CommandSourceStack> ctx) {
+        if (!verifyMasterPermission(ctx)) return 0;
+        try {
+            ServerPlayer master = ctx.getSource().getPlayerOrException();
+            BlockLockManager.arm(master, BlockLockManager.PendingAction.LOCK);
+            master.sendSystemMessage(Component.translatable("message.tabletop-rpg.block_lock_arm_lock"));
+            return 1;
+        } catch (Exception e) {
+            TabletopRpg.LOGGER.error("[TabletopRPG] Error arming block lock: {}", e.getMessage());
+            ctx.getSource().sendFailure(Component.literal("§c[RPG] Failed to arm the block lock."));
+            return 0;
+        }
+    }
+
+    /**
+     * /rpg block_lock remove: arma o pedido de destrancar. Mesma troca
+     * comando-clique do {@code blockLock}, so que invertida.
+     */
+    private static int blockUnlock(CommandContext<CommandSourceStack> ctx) {
+        if (!verifyMasterPermission(ctx)) return 0;
+        try {
+            ServerPlayer master = ctx.getSource().getPlayerOrException();
+            BlockLockManager.arm(master, BlockLockManager.PendingAction.UNLOCK);
+            master.sendSystemMessage(Component.translatable("message.tabletop-rpg.block_lock_arm_unlock"));
+            return 1;
+        } catch (Exception e) {
+            TabletopRpg.LOGGER.error("[TabletopRPG] Error arming block unlock: {}", e.getMessage());
+            ctx.getSource().sendFailure(Component.literal("§c[RPG] Failed to arm the block unlock."));
             return 0;
         }
     }
@@ -1075,6 +1120,10 @@ public class MasterCommands {
             menu.append(Component.literal("\n\n"));
 
             // Ações Gerais
+            //
+            // Sem botao de tranca aqui (decisao do usuario em 30/09/2026): o
+            // comando `/rpg block_lock` e o item ja cobrem, e o botao seria uma
+            // terceira via para a mesma acao.
             menu.append(Component.literal("§f Actions: "));
             menu.append(createSuggestBtn("[Roll]", ChatFormatting.AQUA, "/rpg roll ", "Type a dice formula, ex: d20, 2d6+3"));
             menu.append(Component.literal(" "));

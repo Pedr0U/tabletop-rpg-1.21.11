@@ -274,7 +274,68 @@
   `project.minhaFn(...)`. Relatorio cosmetico com `collect`/`sort`/`countBy`
   em acao diferida tambem estoura: escrever imperativo.
 
-## Como o usuario TESTA: `runClient`, nunca jar instalado (26/09/2026)
+## PowerShell 5.1 le `.ps1` como ANSI: script com acento nao parseia (30/09/2026) - FATO
+
+- **FATO:** nesta maquina, um `.ps1` gravado em UTF-8 **sem BOM** e lido pelo
+  PowerShell 5.1 como Windows-1252. Um unico caractere acentuado no arquivo
+  (ex: uma regex com `[áàâã...]`) vira mojibake e o script morre com
+  `MissingEndParenthesisInMethodCall` em uma linha que esta correta no editor.
+  O mesmo `.ps1` com BOM funciona.
+- **REGRA:** script de verificacao em `%TEMP%\opencode` e **ASCII puro**.
+  Montar lista de caracteres por codepoint (`0x00E1`, `[char]0x00FA`), nunca
+  por literal. Vale para qualquer script temporario, nao so para encoding.
+- **ERRO REAL desta sessao:** o script de auditoria de encoding falhou com 6
+  erros de parser e eu quase culpei o arquivo do projeto. A causa era o
+  proprio script.
+
+## Licao: `UseBlockCallback` e array-backed e PARA no primeiro resultado
+## diferente de PASS (30/09/2026) - FATO verificado na fonte do Fabric API
+
+- **FATO:** `UseBlockCallback.EVENT = EventFactory.createArrayBacked(...)`, com a
+  semantica documentada de que `PASS` segue para os proximos handlers. Ordem de
+  registro = ordem de decisao.
+- **CONSEQUENCIA (bug real, corrigido no mesmo dia):** `CombatController`
+  devolve `FAIL` quando ha monstro selecionado (`CombatController.java`, ramo
+  do `UseBlockCallback`). Como o `BlockLockManager` era registrado **depois**,
+  ele **nunca executava** com monstro selecionado: o Mestre movia o monstro em
+  vez de trancar o bau, sem mensagem de erro nenhuma.
+- **REGRA:** ao registrar um handler novo de `UseBlockCallback`, perguntar
+  "quem ja esta registrado e devolve FAIL antes de mim?" e escolher a posicao
+  conscientemente. Registrar por ultimo nao e o mesmo coisa por padrao.
+
+## Cliente NUNCA pode devolver diferente de PASS no `UseBlockCallback` (30/09/2026) - FATO verificado em bytecode
+
+- **FATO (javap em `fabric-events-interaction-v0`, `MultiPlayerGameModeMixin.interactBlock`):**
+  o metodo mixado contem `hasMissTime`, a invocacao do evento, um `predict` e um
+  `setReturnValue`. **Nao ha `send` nem `ServerboundUseItemOnPacket` no corpo.**
+- **CONSEQUENCIA:** devolver `SUCCESS`/`FAIL` no cliente cancela
+  `MultiPlayerGameMode.useItemOn` **antes** do envio do pacote, entao o servidor
+  **nunca recebe o clique**. Um handler server-side que devolva `PASS` no
+  cliente funciona; o mesmo handler devolvendo `SUCCESS` no cliente some em
+  silencio.
+- **EFEITO COLATERAL ACEITO:** com `PASS` no cliente, a predicao local ainda
+  roda, e `DoorBlock.useWithoutItem` faz `setBlock` sem guarda de cliente: a
+  porta **abre na tela do Mestre** enquanto o servidor cancelou. Mitigado com
+  `sendBlockUpdated(pos, state, state, Block.UPDATE_CLIENTS)` depois de
+  aplicar a tranca, que sobrescreve o estado previsto pelo autoritativo.
+- **CORRECAO A UMA REVISAO:** um revisor afirmou que o mixin cliente envia o
+  pacote quando o resultado consome a acao. **Falso** -- o bytecode nao tem
+  `send`. Conferir bytecode antes de aceitar esse tipo de afirmacao.
+
+## Bloco trancavel sem tag do vanilla (30/09/2026) - FATO verificado com javap
+
+- **FATO:** em 1.21.11 `net.minecraft.tags.BlockTags` **nao tem** `OPENABLE`,
+  `CONTAINERS`, `SHOPIERS` nem `LEVERS`. Filtrar por tag deixaria de fora os
+  blocos de mod, que sao metade do motivo da feature.
+- **USADO:** `BlockState.getMenuProvider(level, pos) != null` (inventario) **ou**
+  a classe do bloco sobrescrever `useWithoutItem`/`useItemOn` (porta, alavanca,
+  botao, e qualquer mod que nao abre menu).
+- **ARMADILHA:** os dois metodos sao **protected** em `BlockBehaviour`; as
+  versoes publicas ficam em `BlockBehaviour$BlockStateBase`. Usar `getMethod`
+  (que so ve public) lancaria `NoSuchMethodException` para **todos** os blocos e
+  o teste viraria "tudo e interagivel" em silencio. Usar `getDeclaredMethod`
+  subindo a hierarquia e comparar com `BlockBehaviour.class`, tratando `null`
+  como "nao sobrescreve".
 
 - **FATO:** o usuario abre o jogo com `.\gradlew.bat runClient`, a partir da
   arvore de fontes. Nao instala jar em `build/libs` e nao usa o
@@ -1805,3 +1866,114 @@ nesse caso (e cumulativo desde o HEAD); confirmei com `Select-String` procurando
 novo (`Round.parts`, `round.parts()`) e so depois compilei. **Delegar nao substitui
 conferir o simbolo novo no arquivo.**
 
+
+---
+
+## 30/09/2026 - Block Lock, rodada 2 (correcoes de teste em jogo)
+
+**FACT (block parts): `DoubleBlockHalf` so tem `UPPER` e `LOWER`.** Nao existe valor
+"unico". `BlockStateProperties.DOUBLE_BLOCK_HALF` e o sinalizador correto de bloco de DUAS
+posicoes. Verificado com `javap` em `DoubleBlockHalf` e em `DoorBlock`, `TrapDoorBlock`.
+
+**FACT (block parts): `HALF` NAO significa segunda posicao.** Em slab, escada e armadilha
+`Half` e **formato** do mesmo bloco. Uma versao de `blockParts` que aceitava `HALF` trancava
+tambem o bloco de ar acima de uma escada. Cama usa `BED_PART` (`BedPart`), nao `HALF`.
+Conclusao: pare a deteccao de "outra metade" em `DOUBLE_BLOCK_HALF` e so.
+
+**FACT (API): `StateHolder` nao tem `hasValue`.** O nome do metodo e `hasProperty(Property<?>)`;
+`getValue(Property<T>)` existe. `hasValue` nem compila -- erro de symbol, nao de runtime.
+
+**FATO (Fabric API): `PlayerBlockBreakEvents.AFTER` so e disparado se NENHUM listener de
+`BEFORE` cancelar.** Confirmado no Javadoc da propria API. Consequencia pratica: nao use
+`AFTER` para limpar estado de um bloco, porque qualquer outro mod (ou este proprio
+`PlayerControlHandler`, que cancela quando o jogador nao pode quebrar) pode cancelar o
+`BEFORE` e o seu `AFTER` nunca roda. Limpou o estado no `BEFORE`, depois da checagem.
+
+**FATO (remapeamento): literal de string nao e remapeado.** O carregador reescreve
+referencias de classe do Minecraft (nomeado -> intermediario), mas o nome do metodo numa
+string literal continua literal. Portanto `getDeclaredMethod("useWithoutItem", ...)` pode
+lancar `NoSuchMethodException` num metodo que **existe**, e o resultado fica preso num
+cache estatico que nunca e reavaliado. Detecte sobrescrita por **assinatura**
+(`getDeclaredMethods` + comparar `getParameterTypes()`), que so usa referencias de classe.
+
+**FATO (do proprio relatorio do usuario): porta recusada como "sem interacao para
+travar".** `javap` mostra que `DoorBlock` **declara** `useWithoutItem` com a assinatura
+exata, ou seja o caminho por nome *deveria* funcionar; a recusa nao foi reproduzida em
+teste automatico. O defeito estrutural acima justifica a troca mesmo sem reproduzir o caso.
+
+**FATO (diagnostico dos 3 defeitos): porta de 2 alturas.** Trancar so a posicao clicada
+deixava a metade contraparia destrancada; clicar nela abria a porta. Isso explicou de uma
+vez "abre mesmo trancada", "abre a 5 blocos" e "abre de um nivel abaixo": **nao era
+alcance**, era outra posicao do mesmo bloco.
+
+**FATO (achado em arquivo pre-existente): homografo cirilico.** `TabletopRpgClient.java`
+linha 108 tinha "CYRILLIC ve + i + te" dentro de um comentario (`servidor` + `marcou`).
+Aparece como "vitou" quando o console renderiza. Encontrado por varredura de codepoint
+(CJK + cirilico + U+FFFD) em 104 arquivos. Reparo **byte a byte**: os bytes UTF-8 da
+sequencia, nunca um round trip do arquivo inteiro.
+
+**PowerShell 5.1 (relembrado):** `Get-ChildItem -Recurse -Include` com varios caminhos
+de uma vez, em paths relativos, devolveu 10 arquivos em vez de 104. Use caminho absoluto
+e filtre por `Extension` com `Where-Object`. E slicing de array de bytes (`[byte[]](...)[0..6]`)
+**perde o ultimo elemento**: use array de tamanho correto ou `Set-StrictMode`/validacao de
+comprimento antes de escrever.
+
+## 2026-09-30 - Block Lock: aura do Mestre (rodada 3)
+
+### FATO - write e edit podem reportar SUCESSO sem gravar
+Dois arquivos novos criados com `write` retornaram "Created" e NAO existiam no disco.
+Busca recursiva em todo o repo: zero resultados. Uma edicao de memoria tambem nao
+gravou. Conclusao: **o retorno da ferramenta nao e prova de gravacao**.
+REGRA: depois de criar arquivo, verificar com Test-Path + contagem de bytes.
+Depois de editar, verificar com grep do simbolo procurado.
+
+### FATO - build verde NAO prova que a feature existe
+O gradle so compila o que esta no disco; ele nao sabe o que DEVERIA existir. Compilei
+com sucesso um codigo que referenciava uma classe inexistente. Verificar que a classe
+esta DENTRO do jar (build/libs/*.jar) antes de dizer que a feature esta pronta.
+
+### FATO - cannot find symbol no consumidor costuma ser erro no DECLARANTE
+`TabletopRpgClient.java` acusava `cannot find symbol: variable BlockLockAura` (3x),
+mas a causa era `BlockLockAura.java` nao existir. Procurar o erro no arquivo apontado
+perde tempo.
+
+### FATO verificado por javap - API 1.21.11 (corrige suposicoes erradas desta rodada)
+- `WorldRenderEvents` e `WorldRenderContext`: pacote
+  `net.fabricmc.fabric.api.client.rendering.v1.world` (NAO `...rendering.v1`).
+- `Camera`: metodo `position()` (NAO `getPosition()`).
+- `MultiBufferSource`: pacote `net.minecraft.client.renderer`. A interface tem SO
+  `getBuffer(RenderType)`; `endBatch(RenderType)` esta em `MultiBufferSource.BufferSource`
+  (o nested chama-se `BufferSource`, NAO `Immediate`).
+- Classe de recurso: `Identifier` (NAO `ResourceLocation`).
+
+### FATO verificado - profundidade em 1.21.11 vive no RenderPipeline
+`RenderSystem.disableDepthTest()` nao sobrevive ao bind do pipeline no draw. Nenhum
+evento do Fabric entrega RenderType que atravessa parede. `RenderType.create` e
+package-private: a saida sem mixin e um split package em
+`net.minecraft.client.renderer.rendertype`.
+DECISAO DO USUARIO: split package + contorno (nao preenchimento).
+`ShapeRenderer.renderShape` desenha ARESTAS (`forAllEdges` + `setLineWidth`); o `float`
+e largura de linha, nao alpha.
+
+### PENDENTE - aura nunca validada em jogo
+O `RenderType` customizado e criado sob demanda, na primeira vez que a aura desenha.
+Se for invalido, estoura em RUNTIME, nao em build. Primeiro suspeito se estourar:
+`ShaderDefines` (nao copiados) ou `withColorLogic`.
+## 2026-09-30 - Block Lock: aura nao aparecia (causa raiz)
+
+### FATO - a aura nao desenhava porque o passe nunca foi registrado
+`onInitializeClient()` chamava `registerNetworking()` e `registerConnectionCleanup()`,
+mas NAO `BlockLockAura.register()`. Sem essa chamada, `WorldRenderEvents.END_MAIN`
+nunca recebia o listener: o estado das trancas chegava no cliente e ninguem lia.
+Build passava, item na mao nao fazia nada, e nao havia pista no jogo.
+
+### LICAO - feature que so existe no cliente precisa de prova de que foi LIGADA
+Compilar nao prova que algo roda. Para qualquer listener novo (render, evento, tick),
+confirmar com grep que o metodo de registro e CHAMADO em algum lugar, e nao apenas que
+existe. Sintoma tipico: "nao faz nada, sem erro" = registro faltando.
+
+### FATO - diagnostico barato para cliente invisivel
+`BlockLockAura` agora tem `diagnose(String)`: loga uma linha unica por motivo de
+bloqueio (isMaster falso / sem tranca na dimensao / sem item na mao / desenhando N).
+Deduplicado por `lastDiagnostic` para nao spammar a cada frame. Quando uma feature de
+cliente nao aparece, o log diz em qual etapa parou, sem precisar de adivinhacao.

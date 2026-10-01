@@ -23,15 +23,26 @@ public class TabletopRpg implements ModInitializer {
 		// Registra as regras de dano da sessão (jogadores e mobs imunes a dano físico)
 		DamageControlHandler.register();
 
-		// Registra o controle de combate (seleção/movimento de monstros, auras, highlight)
-		CombatController.register();
-
 		// Registra os comandos do Mestre (/rpg ...)
 		MasterCommands.register();
 
 		// Registra o Sheet Editor e a aba criativa do mod. Antes dos payloads:
 		// o item usa o payload `open_sheet_editor` quando clicado.
 		com.pedro.tabletoprpg.item.ModItems.register();
+
+		// Registra as regras de tranca de bloco (portas, baus, inventarios de
+		// mod). Precisa vir ANTES do CombatController: o UseBlockCallback e
+		// array-backed (confirmado na fonte do Fabric API) e para no primeiro
+		// resultado diferente de PASS, na ordem de registro. O CombatController
+		// devolve FAIL sempre que ha monstro selecionado, e nesse caso um handler
+		// registrado depois nunca executaria: o Mestre moveria o monstro em vez
+		// de trancar o bau, sem nenhuma mensagem explicando.
+		// Precisa vir DEPOIS de ModItems porque o item ja tem de existir para o
+		// `isBlockLock` usado no clique.
+		BlockLockManager.register();
+
+		// Registra o controle de combate (seleção/movimento de monstros, auras, highlight)
+		CombatController.register();
 
 		// Registra os payloads de rede (comum) e os receptores do lado servidor
 		RpgNetworking.registerPayloads();

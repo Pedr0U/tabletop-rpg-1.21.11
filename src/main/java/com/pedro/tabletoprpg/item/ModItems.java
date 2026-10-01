@@ -1,5 +1,6 @@
 package com.pedro.tabletoprpg.item;
 
+import com.pedro.tabletoprpg.BlockLockManager;
 import com.pedro.tabletoprpg.RpgNetworking;
 import com.pedro.tabletoprpg.SessionManager;
 import com.pedro.tabletoprpg.TabletopRpg;
@@ -43,6 +44,17 @@ public final class ModItems {
             ResourceKey.create(Registries.ITEM, TabletopRpg.id("sheet_editor"));
 
     /**
+     * Chave do registro do Block Locker.
+     *
+     * <p><b>Sprite provisorio:</b> a textura {@code minecraft:item/trial_key}
+     * (verificada no jar do cliente 1.21.11). O usuario pediu esse sprite
+     * "por enquanto"; trocar depois e so sobrescrever o {@code layer0} de
+     * {@code models/item/block_lock.json}, sem tocar em codigo.
+     */
+    public static final ResourceKey<Item> BLOCK_LOCK_KEY =
+            ResourceKey.create(Registries.ITEM, TabletopRpg.id("block_lock"));
+
+    /**
      * Chave da aba criativa.
      *
      * <p>Fica no <b>comum</b>, e nao no client: {@code CreativeModeTabs.bootstrap}
@@ -53,6 +65,8 @@ public final class ModItems {
             ResourceKey.create(Registries.CREATIVE_MODE_TAB, TabletopRpg.id("main"));
 
     private static Item sheetEditor;
+
+    private static Item blockLock;
 
     private ModItems() {
     }
@@ -71,11 +85,23 @@ public final class ModItems {
 
         Registry.register(BuiltInRegistries.ITEM, SHEET_EDITOR_KEY, sheetEditor);
 
+        // stacksTo(1): e uma ferramenta de Mesa, nao um consumivel. O
+        // `setId` nao e opcional pelo mesmo motivo do Sheet Editor
+        // ("Item id not set" ao abrir o inventario).
+        blockLock = new Item(new Item.Properties()
+                .setId(BLOCK_LOCK_KEY)
+                .stacksTo(1));
+
+        Registry.register(BuiltInRegistries.ITEM, BLOCK_LOCK_KEY, blockLock);
+
         Registry.register(BuiltInRegistries.CREATIVE_MODE_TAB, TAB_KEY, CreativeModeTab.builder(
                         CreativeModeTab.Row.TOP, 0)
                 .title(Component.translatable("itemGroup.tabletoprpg.main"))
                 .icon(() -> new ItemStack(sheetEditor))
-                .displayItems((parameters, output) -> output.accept(sheetEditor))
+                .displayItems((parameters, output) -> {
+                    output.accept(sheetEditor);
+                    output.accept(blockLock);
+                })
                 .build());
 
         UseItemCallback.EVENT.register(ModItems::onUseItem);
@@ -84,6 +110,22 @@ public final class ModItems {
     /** O item pronto, para testes e para a aba. */
     public static Item sheetEditor() {
         return sheetEditor;
+    }
+
+    /** O Block Locker pronto. */
+    public static Item blockLock() {
+        return blockLock;
+    }
+
+    /**
+     * O stack na mao e o Block Locker?
+     *
+     * <p>Usado pelo {@code BlockLockManager} para decidir se o clique do mestre
+     * deve alternar a tranca. Fica aqui, e nao la, porque a identidade do item
+     * e responsabilidade deste arquivo: e o lugar onde o item e registrado.
+     */
+    public static boolean isBlockLock(ItemStack stack) {
+        return blockLock != null && stack != null && stack.is(blockLock);
     }
 
     /**
@@ -122,6 +164,30 @@ public final class ModItems {
             RpgNetworking.sendOpenSheetEditor(serverPlayer);
             return InteractionResult.SUCCESS;
         }
+
+        // Block Locker: este e o caminho do clique NO AR (no chao e sem alvo de
+        // bloco), porque o clique num bloco e interceptedado antes, pelo
+        // BlockLockManager, e nunca chega aqui.
+        if (isBlockLock(stack)) {
+            // Cliente: consome o clique e nao decide nada.
+            if (!(player instanceof ServerPlayer serverPlayer)) {
+                return InteractionResult.SUCCESS;
+            }
+            if (!SessionManager.isMaster(serverPlayer)) {
+                serverPlayer.displayClientMessage(
+                        Component.translatable("item.tabletop-rpg.block_lock.denied"), false);
+                return InteractionResult.FAIL;
+            }
+            // Nao repetir a dica quando o clique ja foi num bloco: nesse caso o
+            // BlockLockManager respondeu (trancou, destrancou ou recusou), e o
+            // cliente ainda envia este segundo pacote.
+            if (!BlockLockManager.justHandledBlockClick(level)) {
+                serverPlayer.displayClientMessage(
+                        Component.translatable("message.tabletop-rpg.block_lock_pick_block"), true);
+            }
+            return InteractionResult.PASS;
+        }
+
         return InteractionResult.PASS;
     }
 }
