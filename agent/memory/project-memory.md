@@ -2270,3 +2270,71 @@ PATH** nesta maquina; o executavel e `C:\Program Files\Java\jdk-25\bin\javap.exe
 `[System.Text.Encoding]::GetEncoding(28591)`. (c) O `>` do PowerShell grava **UTF-16**: sempre
 `Out-File -Encoding utf8`. (d) `Select-String` e case-insensitive, entao um "texto velho
 sobrou: 1" pode ser o proprio trecho que marca o texto velho como errado.
+
+**FATO CONFIRMADO EM JOGO (30/09/2026) - a integracao com o Iris FUNCIONA.** A aura do Mestre
+atravessa parede **com e sem** shaders. Validado pelo usuario com o Complementary Unbound r5.5.1.
+
+**O QUE ERA (causa raiz real, e nao a que a analise anterior affirmou):** a aura usa um
+`RenderPipeline` proprio com `NO_DEPTH_TEST`. Sem shader esse pipeline e valido e funciona. Com
+o Iris ligado, o Iris **assume a ligacao do shader** e um pipeline que ele nao conhece simplesmente
+**nao e desenhado** — sem erro de GL, sem excecao, batch fechado normalmente. O log
+`Missing program ... in override list` era o SINTOMA disso, nunca a causa.
+
+**A CORRECAO (`IrisAuraSupport`):** antes do desenho, se `isModLoaded("iris")`, chamar
+`IrisPipelines.copyPipeline(LINES_TRANSLUCENT.pipeline(), pipelineThroughWalls())`. A **origem tem
+de ser `LINES_TRANSLUCENT`** porque e a base exata do pipeline da aura (mesmo vertex format, mesmo
+blend, mesma linha de shader); o Iris atribui o shader de linhas sem divergir do que o pipeline
+espera. O atravessa-parede sobrevive porque **profundidade vive no pipeline e shader e o
+programa** — trocar o shader nao mexe no `NO_DEPTH_TEST`.
+
+**LICAO — O BISECT DE UM FRAME COMO METODO.** A causa raiz anterior estava errada eso nao
+descobri lendo codigo: descobri **desenhando a mesma geometria duas vezes no mesmo frame**, com o
+pipeline do mod em uma cor e `RenderTypes.linesTranslucent()` do jogo em outra. Resultado: **so a
+do jogo apareceu**. Isso matou de uma vez alvo de render, timing do evento e geometria/camara
+(todas compartilhariam frame, pose e coordenadas) e deixou um so suspeito. **Regra:** quando o
+defeito e "algo nao aparece" e voce tem duas implementacoes concorrentes, **desenhe as duas no
+mesmo frame, com cores diferentes**. Custa um build e vale mais que qualquer leitura de codigo.
+Leia o resultado como tabela de decisao antes dedeeduzir causa.
+
+**LICAO — CAUSA RAIZ EM DOCUMENTO VIVO PRECISA DE EVIDENCIA, E A ERRADA FICA MARCADA.**
+Neste projeto a causa errada ("o Iris lanca excecao") foi escrita no catalogo, no relatorio e na
+memoria, e So foi corrigida quando o bisect trouxe evidencia. Vale para qualquer causa raiz: antes
+de escrever, tenha a evidencia; ao corrigir, **marque a versao errada como errada em vez de
+apaga-la** — foi o que impediu que ela voltasse a ser usada como "causa" numa sessao futura.
+
+**LICAO — MOD OPCIONAL = REFLEXAO, NUNCA DEPENDENCIA DE COMPILACAO.** O Iris entrou por
+`Class.forName` + `getMethod`, dentro de `if (FabricLoader.isModLoaded("iris"))`. Transformar um
+mod opcional em dependencia de compilacao faria o nosso mod nao carregar em quem nao o tem — o
+build local passaria (o jar esta no cache) e so o usuario descobriria. `build.gradle` continua sem
+nenhuma referencia ao Iris: isso e proposito e verificado no build.
+
+**APIs do Iris 1.10.7 (mc1.21.11), nomes confirmados por `javap`:** `IrisPipelines.copyPipeline(de,
+para)` — copia a atribuicao de shader de um pipeline para outro; so copia se a **origem** ja
+estiver no mapa, entao um shaderpack que nao mapeie `LINES_TRANSLUCENT` faz a copia virar no-op
+silencioso. `IrisApi.assignPipeline(RenderPipeline, IrisProgram)` e a API publica para mods. O mapa
+e **reconstruido a cada carga de shaderpack** — por isso o registro e reaplicado no caminho de
+desenho, todo frame em que a aura desenha (idempotente e barato), e nao uma vez na carga.
+
+**FATO (1.21.11, ja registrado acima, confirmado):** nao existe pipeline de LINHAS do jogo sem
+teste de profundidade — os 15 pipelines com `NO_DEPTH_TEST` sao todos QUADS texturizados de
+`OUTLINE_SNIPPET`. Logo o pipeline proprio da aura continua obrigatorio.
+
+**CORRECAO IMPORTANTE — o registro de "Iris lanca excecao" que ficou mais acima NUNCA foi verdade.**
+O que este arquivo afirma em um trecho anterior e **errado** e nao deve ser usado como causa raiz.
+Se voce leu aqui que o Iris "lanca excecao para qualquer programa fora da lista de override", ou
+que a aura "nao e compativel com o Iris", ou que o `Missing program` loga "a cada frame", ignore.
+
+O que e verdade, com evidencia de jogo (30/09/2026):
+
+1. O Iris **nao lanca excecao**. `MixinShaderManager_Overrides.redirectIrisProgram` nao tem
+   `athrow`; o `new Throwable()` serve so para a stack trace do log.
+2. O aviso sai **uma vez por pipeline**, nao a cada frame (guarda `missingShaders.add`).
+3. O nivel depende do namespace: `fatal` + "This is likely an Iris bug!!!" para `minecraft`;
+   `error` + "This is not a critical problem..." para namespace de mod, como o nosso.
+4. **A causa real** da aura sumir com shader ligado: o Iris **nao tinha shader atribuido** ao
+   pipeline do mod, e por isso nao desenhava as linhas. O aviso era sintoma, nao causa.
+5. **Resolvido** com `IrisAuraSupport.ensurePipelineRegistered()` (ver a secao "FATO CONFIRMADO
+   EM JOGO" adiante no arquivo). A aura atravessa parede com e sem shaders.
+
+Este paragrafo existe para que a frase errada, que ja foi copiada para o catalogo e para o
+relatorio, **nao volte a ser tratada como verdade** numa sessao futura.
