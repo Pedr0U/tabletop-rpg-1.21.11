@@ -79,14 +79,25 @@ Recriados os dois arquivos, corrigidas as 3 referencias, corrigidas as 4 assinat
 API, e a verificacao de artefato virou parte obrigatoria do fluxo.
 
 ## Remaining Issues
-1. **Nada foi testado em jogo.** O `RenderType` customizado e criado sob demanda, na
-   primeira vez que a aura desenha: se a construcao do pipeline for invalida, ela falha
-   em runtime, e nao em build. Riscos nao verificados:
-   - `ShaderDefines` do pipeline original NAO sao copiados. HYPOTHESIS: um pipeline de
-     linhas nao tem defines. Se tiver, o shader pode nao bater.
-   - `withUniform` so e chamado quando `type() != null`; uniforms baseados em textura
-     seriam pulados.
-   - A copia pode divergir em algum campo e o pipeline ser rejeitado no primeiro frame.
+1. **COM O IRIS INSTALADO A AURA NAO APARECE.** Este item SUBSTITUI a avaliacao de risco
+   original desta secao, escrita antes de o problema ser descoberto.
+   SINTOMA: com shaders ligados nada e desenhado e o log recebe, a cada frame enquanto o
+   Mestre segura o item, `Missing program tabletop-rpg:block_lock_aura_lines in override
+   list.`, com um `java.lang.Throwable` lancado de `redirectIrisProgram`.
+   ROOT CAUSE (FATO verificado nos jars, nao por deducao): a frase `"in override list"`
+   nao existe em nenhum `.class` do `minecraft-clientonly`, e existe dentro de
+   `iris-fabric-1.10.7+mc1.21.11.jar`. O Iris intercepta a ligacao de pipeline e Lanca
+   excecao para qualquer programa fora da lista de override dele; a lista e montada a
+   partir dos shaders do Iris e nenhum mod consegue se registrar nela.
+   CONCLUSAO: um `RenderType` com pipeline proprio NAO e compativel com o Iris. Nao e bug
+   de construcao do pipeline e nao ha correcao do lado do mod.
+   POR QUE O DEV NAO VIU: o ambiente `run/` nao tem Iris (pasta `mods` vazia, so Fabric
+   API), entao build e `runClient` nao reproduzem; so a instancia do usuario reproduz.
+   SAIDAS (decisao do usuario adiada): (a) usar `RenderTypes.LINES_TRANSLUCENT`, que o Iris
+   conhece: a aura aparece mas nao atravessa parede; (b) detectar o Iris e escolher a rota.
+   Sem Iris a aura funciona e atravessa parede normalmente.
+   CORRECAO DE AVALIACAO: a versao anterior desta secao tratava "pipeline rejeitado no
+   primeiro frame" como risco de codigo. Isso nao era a causa; nao usar como causa raiz.
 2. `Location` do pipeline e um `Identifier` literal novo; se o registro de pipelines
    colidir, o erro aparece em runtime.
 3. Nada com cleanup de estado de depth/blend e necessario: o estado vive no pipeline e
