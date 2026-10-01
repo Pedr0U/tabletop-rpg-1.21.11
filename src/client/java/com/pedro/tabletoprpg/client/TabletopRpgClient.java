@@ -27,6 +27,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.List;
+import net.minecraft.network.chat.Component;
+
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -351,6 +353,36 @@ public class TabletopRpgClient implements ClientModInitializer {
                         return;
                     }
                     context.client().setScreen(new SheetEditorScreen());
+                }));
+
+        // Resposta da criacao de preset pela tela de rolagem (01/10/2026).
+        //
+        // So o texto chega, sem nome nem formula: a tela precisa mostrar a frase, e
+        // qualquer campo novo no preset teria de ser empacotado de novo aqui sem
+        // ganho. Com `ok` verdadeiro a tela fecha e o aviso vai para o chat; com
+        // falso a tela fica aberta -- e e por isso que o texto e guardado num
+        // estatico da PresetCreateScreen: a resposta chega depois do clique e pode
+        // ser que a tela ja tenha sido fechada.
+        ClientPlayNetworking.registerGlobalReceiver(RpgNetworking.PresetCreateResultPayload.TYPE,
+                (payload, context) -> context.client().execute(() -> {
+                    if (payload.ok()) {
+                        PresetCreateScreen.clearStatus();
+                        if (context.client().player != null && payload.message() != null) {
+                            // Component.literal: o texto ja vem resolvido do servidor
+                            // (ver RpgNetworking.translatableText), entao nao ha chave
+                            // para traduzir aqui. O prefixo e o do mod, o resto e a
+                            // frase que o comando mostraria.
+                            context.client().player.displayClientMessage(
+                                    Component.literal("§6[Preset] §f" + payload.message()), false);
+                        }
+                        // Volta ao menu de rolagem, e nao a null: a jogadora pode criar
+                        // outro preset sem reabrir a tela de rolagem.
+                        if (context.client().screen instanceof PresetCreateScreen presetScreen) {
+                            context.client().setScreen(presetScreen.parentScreen());
+                        }
+                    } else {
+                        PresetCreateScreen.setStatus(payload.message());
+                    }
                 }));
 
         // O MODELO global da ficha. Vem no JOIN e de novo depois de cada edicao

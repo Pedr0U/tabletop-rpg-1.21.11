@@ -227,7 +227,9 @@ class LangKeyArgsTest {
         Map<String, Integer> percentCounts = percentCounts();
         List<String> required = List.of(
                 "item.tabletop-rpg.roll_preset",
-                "item.tabletop-rpg.roll_preset.named",
+                // "item.tabletop-rpg.roll_preset.named" saiu em 01/10/2026: o nome
+                // do item passou a ser o nome escolhido pela jogadora, escrito
+                // literal em ModItems.buildRollPresetStack, sem prefixo e sem lang.
                 "item.tabletop-rpg.roll_preset.formula",
                 "item.tabletop-rpg.roll_preset.color",
                 "item.tabletop-rpg.roll_preset.no_preset",

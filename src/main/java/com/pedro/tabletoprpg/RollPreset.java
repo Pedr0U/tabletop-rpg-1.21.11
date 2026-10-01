@@ -15,7 +15,7 @@ import java.util.Locale;
  *
  * @param name    nome escolhido pela jogadora, como ela digitou (espacos colapsados)
  * @param formula formula ja normalizada, sem espaco (ex.: {@code 1d20+5})
- * @param colorId id de {@link RollPresetColor} (ex.: {@code red}, {@code default})
+ * @param colorId id de {@link RollPresetColor} (ex.: {@code red}, {@code light_blue})
  */
 public record RollPreset(String name, String formula, String colorId) {
 
@@ -116,8 +116,10 @@ public record RollPreset(String name, String formula, String colorId) {
             throw new PresetException(e.getMessage());
         }
 
+        // Cor ausente cai em WHITE: a opcao "default" saiu em 01/10/2026 porque marrom
+        // sem tingir parecia a cor "brown" da lista, e o preset ficava indistinguivel.
         String colorId = rawColorId == null || rawColorId.isBlank()
-                ? RollPresetColor.DEFAULT.id()
+                ? RollPresetColor.WHITE.id()
                 : RollPresetColor.byId(rawColorId).orElseThrow(
                         () -> new PresetException("unknown color '" + rawColorId
                                 + "'. Valid colors: " + String.join(", ", RollPresetColor.ids()))).id();

@@ -1,5 +1,6 @@
 package com.pedro.tabletoprpg;
 
+import com.pedro.tabletoprpg.item.ModItems;
 import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
@@ -922,6 +923,77 @@ public final class RpgNetworking {
         }
     }
 
+    /**
+     * Cliente -&gt; Servidor: cria um preset de rolagem a partir do botao da tela de
+     * rolagem.
+     *
+     * <p><b>Por que um pacote e nao um comando montado pelo cliente:</b> o preset e
+     * salvo no NBT da jogadora e a validacao da formula tem de rodar no servidor -- se
+     * o cliente montasse o comando, a regra de "formula desconhecida" teria duas
+     * implementacoes. Enviando os tres campos crus, o servidor chama exatamente o
+     * {@link RollPreset#create} que o comando usa, entao as duas portas dizem a mesma
+     * coisa na cara da mesma falha.
+     *
+     * <p>Os limites de tamanho batem com o {@code ByteBufCodecs} porque o construtor
+     * do record corta no mesmo numero: se divergissem, o valor gravado seria rejeitado
+     * na leitura do outro lado do pacote.
+     */
+    public record PresetCreatePayload(String name, String formula, String colorId)
+            implements CustomPacketPayload {
+        public static final Type<PresetCreatePayload> TYPE = new Type<>(TabletopRpg.id("preset_create"));
+        public static final StreamCodec<FriendlyByteBuf, PresetCreatePayload> STREAM_CODEC =
+                StreamCodec.composite(
+                        ByteBufCodecs.stringUtf8(64), PresetCreatePayload::name,
+                        ByteBufCodecs.stringUtf8(128), PresetCreatePayload::formula,
+                        ByteBufCodecs.stringUtf8(32), PresetCreatePayload::colorId,
+                        PresetCreatePayload::new
+                );
+
+        public PresetCreatePayload {
+            name = clamp(name, 64);
+            formula = clamp(formula, 128);
+            colorId = clamp(colorId, 32);
+        }
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
+    /**
+     * Servidor -&gt; Cliente: resposta do {@link PresetCreatePayload}.
+     *
+     * <p><b>Por que a resposta volta em texto e nao em chave + argumentos:</b> a tela
+     * mostra a mensagem numa linha de status e nao sabe traduzir sozinha. O mod tem um
+     * unico arquivo de idioma ({@code en_us}), entao resolver a chave no servidor e
+     * mandar o texto pronto da a mesma frase que o comando mostra, sem duplicar a
+     * tabela de argumentos. Se um dia houver segundo idioma, este e o ponto a mudar:
+     * passar a chave e os valores, e deixar o cliente montar o {@code Component}.
+     *
+     * <p>{@code ok} decide se a tela fecha. Com {@code false} a tela fica aberta e
+     * mostra a frase, porque a jogadora ainda tem que corrigir o que digitou.
+     */
+    public record PresetCreateResultPayload(boolean ok, String message) implements CustomPacketPayload {
+        public static final Type<PresetCreateResultPayload> TYPE =
+                new Type<>(TabletopRpg.id("preset_create_result"));
+        public static final StreamCodec<FriendlyByteBuf, PresetCreateResultPayload> STREAM_CODEC =
+                StreamCodec.composite(
+                        ByteBufCodecs.BOOL, PresetCreateResultPayload::ok,
+                        ByteBufCodecs.stringUtf8(512), PresetCreateResultPayload::message,
+                        PresetCreateResultPayload::new
+                );
+
+        public PresetCreateResultPayload {
+            message = clamp(message, 512);
+        }
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
     // ------------------------------------------------------------------
     // REGISTRO (comum a servidor e cliente)
     // ------------------------------------------------------------------
@@ -959,6 +1031,9 @@ public final class RpgNetworking {
         PayloadTypeRegistry.playC2S().register(SheetPericiaPayload.TYPE, SheetPericiaPayload.STREAM_CODEC);
         // 30/09/2026 (FASE 2B): a lista de itens do inventario da ficha.
         PayloadTypeRegistry.playC2S().register(SheetItemPayload.TYPE, SheetItemPayload.STREAM_CODEC);
+        PayloadTypeRegistry.playC2S().register(PresetCreatePayload.TYPE, PresetCreatePayload.STREAM_CODEC);
+        PayloadTypeRegistry.playS2C().register(PresetCreateResultPayload.TYPE,
+                PresetCreateResultPayload.STREAM_CODEC);
         // 01/10/2026 (pagina 3 da ficha): a lista de magias.
         PayloadTypeRegistry.playC2S().register(SheetSpellPayload.TYPE, SheetSpellPayload.STREAM_CODEC);
         PayloadTypeRegistry.playS2C().register(DownedStatePayload.TYPE, DownedStatePayload.STREAM_CODEC);
@@ -967,6 +1042,21 @@ public final class RpgNetworking {
         // e sempre do Mestre.
         PayloadTypeRegistry.playS2C().register(SheetModelPayload.TYPE, SheetModelPayload.STREAM_CODEC);
         PayloadTypeRegistry.playC2S().register(SheetModelSavePayload.TYPE, SheetModelSavePayload.STREAM_CODEC);
+    }
+
+    /**
+     * Corta o texto no limite e trata nulo.
+     *
+     * <p><b>Por que no construtor do record e nao no {@code ByteBufCodecs}:</b> o
+     * codec de escrita aceita qualquer tamanho e so recusa na leitura. Um campo maior
+     * que o limite, entao, era gravado pelo cliente e explodia no servidor. Cortando
+     * aqui, o valor que sai e o mesmo que o codec aceita.
+     */
+    private static String clamp(String value, int max) {
+        if (value == null) {
+            return "";
+        }
+        return value.length() <= max ? value : value.substring(0, max);
     }
 
     /** Registra os receptores no lado do servidor. */
@@ -1339,6 +1429,9 @@ public final class RpgNetworking {
 
         // Registra o receptor de pausar/retomar ciclo dia e noite no servidor
         registerDayCycleReceiver();
+
+        // Preset de rolagem criado pela tela de rolagem (01/10/2026).
+        registerRollPresetReceiver();
     }
 
     // ------------------------------------------------------------------
@@ -1575,6 +1668,85 @@ public final class RpgNetworking {
                 player.sendSystemMessage(Component.literal("§6Day/night cycle §e" + (payload.enabled() ? "resumed" : "paused")));
             }
         });
+    }
+
+    /**
+     * Cria o preset pedido pela tela de rolagem.
+     *
+     * <p><b>Por que a tela e o comando usam o mesmo caminho:</b> as duas portas
+     * chamam {@link RollPreset#create} emede a resposta sai da MESMA chave de
+     * linguagem que o comando usaria, so que convertida em texto para a tela. Se as
+     * duas tivessem regras proprias, "formula desconhecida" seria recusada num lugar e
+     * aceita no outro, e a jogadora perderia a forma de descobrir o erro.
+     *
+     * <p><b>Por que nao ha checagem de Mestre:</b> o preset e pessoal (decisao do
+     * usuario em 01/10/2026), igual ao {@code /rpg roll}.
+     */
+    private static void registerRollPresetReceiver() {
+        ServerPlayNetworking.registerGlobalReceiver(PresetCreatePayload.TYPE, (payload, context) -> {
+            ServerPlayer player = context.player();
+            ServerPlayNetworking.send(player, createPresetFromScreen(player, payload));
+        });
+    }
+
+    /**
+     * Cria o preset e monta a resposta para a tela.
+     *
+     * <p><b>Por que separado do receptor:</b> o receptor so envia. A regra toda esta
+     * aqui, e aqui ela devolve <b>sempre</b> uma resposta -- sucesso ou recusa -- em
+     * vez de sair pela metade. Isso importa porque a tela fica esperando: sem
+     * resposta ela ficaria parada achando que salvou.
+     */
+    private static PresetCreateResultPayload createPresetFromScreen(ServerPlayer player,
+                                                                    PresetCreatePayload payload) {
+        String name = payload.name().trim();
+        if (name.isEmpty()) {
+            return refuse("message.tabletoprpg.preset_name_required");
+        }
+
+        RollPreset preset;
+        try {
+            preset = RollPreset.create(name, payload.formula(), payload.colorId());
+        } catch (RollPreset.PresetException e) {
+            // Formula nao reconhecida: e agora que a tela acusa, ao salvar.
+            return refuse("message.tabletoprpg.preset_create_failed", e.getMessage());
+        }
+
+        UUID uuid = player.getUUID();
+        RollPreset existing = RollPresetStore.find(uuid, preset.key()).orElse(null);
+        if (existing != null) {
+            // Mesma decisao do comando: create nao sobrescreve.
+            return refuse("message.tabletoprpg.preset_already_exists", existing.name());
+        }
+        if (RollPresetStore.count(uuid) >= RollPresetStore.MAX_PRESETS) {
+            return refuse("message.tabletoprpg.preset_limit", String.valueOf(RollPresetStore.MAX_PRESETS));
+        }
+
+        RollPresetStore.put(uuid, preset);
+        if (ModItems.giveRollPreset(player, preset) == null) {
+            // Sem espaco: o preset foi SALVO mesmo assim, so o item nao coube. Por
+            // isso a resposta e recusa com o texto do inventario cheio -- a jogadora
+            // ainda tem o preset, e `/rpg preset give` entrega o item depois.
+            return refuse("message.tabletoprpg.preset_no_room");
+        }
+        return new PresetCreateResultPayload(true, translatableText("message.tabletoprpg.preset_created",
+                preset.name(), preset.formula(), preset.color().displayName()));
+    }
+
+    /** Resposta de recusa: {@code ok} falso e o texto da chave. */
+    private static PresetCreateResultPayload refuse(String key, Object... args) {
+        return new PresetCreateResultPayload(false, translatableText(key, args));
+    }
+
+    /**
+     * Monta a mensagem de lang ja como texto.
+     *
+     * <p>Existe para o handler do preset ter uma linha so por recusa. A resolucao
+     * acontece com o idioma do servidor; o mod so tem {@code en_us}, entao o texto
+     * que chega na tela e o mesmo que apareceria no chat.
+     */
+    private static String translatableText(String key, Object... args) {
+        return Component.translatable(key, args).getString();
     }
 
     // ------------------------------------------------------------------

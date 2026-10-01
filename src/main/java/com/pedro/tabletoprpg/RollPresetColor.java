@@ -6,23 +6,27 @@ import java.util.Locale;
 import java.util.Optional;
 
 /**
- * As 17 opcoes de cor do Bundle para o Preset de Rolagem.
+ * As 16 cores de Bundle para o Preset de Rolagem.
  *
  * <p><b>01/10/2026:</b> o sprite do item e provisoriamente o do Bundle do vanilla
  * (copiado para {@code assets/tabletop-rpg/textures/item/roll_preset.png}, do mesmo jeito
- * que o Camera Tool copiou o da luneta). A cor entra pelo mesmo caminho do Bundle
- * vanilla, e nao por 17 texturas: {@link #DEFAULT} nao pinta nada e os outros 16 correspondem
- * um a um aos Sixteen {@code DyeColor} do jogo.
+ * que o Camera Tool copiou o da luneta), convertido em mascara de escala de cinza para
+ * que o tint {@code minecraft:dye} possa pintar. A cor entra por componente
+ * ({@code DataComponents.DYED_COLOR}), e nao por 17 texturas.
+ *
+ * <p><b>Feedback do usuario em 01/10/2026: a cor "default" saiu.</b> Antes havia uma
+ * opcao "default" que deixava o item sem pintar, com o marrom do Bundle vazio. Para quem
+ * abre a lista de cores, "default" e "brown" pareciam a mesma coisa -- e marrom nao e uma
+ * cor que se escolha de proposito. Agora toda cor e uma cor de verdade, e o preset
+ * sempre nasce pintado.
+ *
+ * <p><b>Por que os ids continuam em minusculo com {@code _}:</b> assim o comando aceita
+ * o mesmo nome que o jogador ve no vanilla e no {@code /give}.
  *
  * <p><b>Nao ha cor "magenta"/"rosa" confundidas:</b> {@code PINK} e o rosa claro e
- * {@code MAGENTA} e o roxo-rosado. Os ids seguem o vanilla em minusculas com
- * {@code _} ({@code light_gray}, {@code light_blue}), para o comando aceitar o mesmo
- * nome que o jogador ve no /give e no vanilla.
+ * {@code MAGENTA} e o roxo-rosado.
  */
 public enum RollPresetColor {
-
-    /** Sem cor: o sprite fica como esta. */
-    DEFAULT("default", "Default", 0xFF8B5A2B),
 
     WHITE("white", "White", 0xFFF9FFFE),
     LIGHT_GRAY("light_gray", "Light Gray", 0xFF9D9D97),
@@ -43,7 +47,7 @@ public enum RollPresetColor {
 
     /** Id usado no comando {@code /rpg preset create <nome> <formula> <cor>}. */
     private final String id;
-    /** Nome mostrado no botao "Color" da tela de criacao. */
+    /** Nome mostrado na lista de cores da tela de presets. */
     private final String displayName;
     /** Cor da amostra desenhada na tela (ARGB). */
     private final int argb;
@@ -73,7 +77,7 @@ public enum RollPresetColor {
      * jogador digita {@code RED}, {@code Red} ou {@code red} com a mesma intencao.
      * O espaco vira {@code _}, para {@code light gray} tambem funcionar.
      *
-     * @return a cor, ou {@link Optional#empty()} se o texto nao for nenhuma das 17
+     * @return a cor, ou {@link Optional#empty()} se o texto nao for nenhuma das 16
      */
     public static Optional<RollPresetColor> byId(String raw) {
         if (raw == null) {
@@ -81,7 +85,9 @@ public enum RollPresetColor {
         }
         String key = raw.trim().toLowerCase(Locale.ROOT).replace(' ', '_');
         if (key.isEmpty()) {
-            return Optional.of(DEFAULT);
+            // Cor ausente: cai na primeira da lista. Antes caia em DEFAULT, que saiu em
+            // 01/10/2026; escolher WHITE mantem o preset visivel em vez de sumir.
+            return Optional.of(WHITE);
         }
         for (RollPresetColor color : values()) {
             if (color.id.equals(key)) {
@@ -91,7 +97,7 @@ public enum RollPresetColor {
         return Optional.empty();
     }
 
-    /** Os 17 ids, para a mensagem de erro e para o autocomplete do comando. */
+    /** Os 16 ids, para a mensagem de erro e para o autocomplete do comando. */
     public static List<String> ids() {
         List<String> out = new ArrayList<>();
         for (RollPresetColor color : values()) {
@@ -105,10 +111,11 @@ public enum RollPresetColor {
      *
      * <p>Um preset malformado pode ter vindo de um NBT editado a mao ou de uma versao
      * futura do mod; a cor e so um detalhe visual e nao vale impedir o carregamento da
-     * ficha do jogador por causa dela. Por isso a leitura cai em {@link #DEFAULT} em vez
-     * de lancar.
+     * ficha do jogador por causa dela. Por isso a leitura cai em {@link #WHITE} em vez de
+     * lancar. Este caminho tambem e o que faz os presets salvos com o antigo id
+     * {@code default} continuarem carregando em vez de sumirem da lista.
      */
     public static RollPresetColor idOrDefault(String raw) {
-        return byId(raw).orElse(DEFAULT);
+        return byId(raw).orElse(WHITE);
     }
 }

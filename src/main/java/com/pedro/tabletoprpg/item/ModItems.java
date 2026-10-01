@@ -280,8 +280,11 @@ public final class ModItems {
     /** Monta o stack de um preset: nome, cor, formula e a chave que o liga ao preset salvo. */
     public static ItemStack buildRollPresetStack(RollPreset preset) {
         ItemStack stack = new ItemStack(rollPreset);
-        stack.set(DataComponents.CUSTOM_NAME,
-                Component.translatable("item.tabletop-rpg.roll_preset.named", preset.name()));
+        // Feedback do usuario em 01/10/2026: o nome do item e SO o nome que a
+        // jogadora escolheu, sem prefixo "Roll Preset:". O prefixo repetia a
+        // informacao em toda linha do inventario e nao ajudava a distinguir um
+        // preset do outro -- que e o que a cor e o nome fazem.
+        stack.set(DataComponents.CUSTOM_NAME, Component.literal(preset.name()));
 
         CompoundTag tag = new CompoundTag();
         tag.putString(NBT_PRESET, preset.key());
@@ -289,13 +292,11 @@ public final class ModItems {
         tag.putString(NBT_COLOR, preset.colorId());
         stack.set(DataComponents.CUSTOM_DATA, CustomData.of(tag));
 
-        // DEFAULT nao pinta o componente: sem ele o tint `minecraft:dye` do
-        // items/roll_preset.json usa o "default" do proprio JSON, que e o marrom
-        // do Bundle sem tingir. Os 16 ids pintam.
-        RollPresetColor color = preset.color();
-        if (color != RollPresetColor.DEFAULT) {
-            stack.set(DataComponents.DYED_COLOR, new DyedItemColor(color.argb()));
-        }
+        // Toda cor pinta: a opcao "default" saiu em 01/10/2026 porque marrom sem
+        // tingir parecia a cor "brown" da lista. Sem o componente, o tint
+        // minecraft:dye cairia no "default" do items/roll_preset.json -- que e o
+        // marrom do Bundle vazio, justamente o que nao se quer mais.
+        stack.set(DataComponents.DYED_COLOR, new DyedItemColor(preset.color().argb()));
         return stack;
     }
 
