@@ -2229,7 +2229,6 @@ lote so no mesmo arquivo e com trechos bem distintos; **sempre** confirmar com `
 `if (guarda)`/simbolo depois, e aplicar **uma de cada vez** quando o arquivo for critico.
 Nao confie no "applied" nem no "error" da ferramenta para garantir o estado do arquivo.
 
-
 **FATO verificado (Iris, 30/09/2026) - o Iris NAO lanca excecao por pipeline desconhecido.** A
 primeira analise registrou o contrario, e a causa errada foi parar no catalogo e no relatorio.
 O metodo e `MixinShaderManager_Overrides.redirectIrisProgram` e, por `javap`, faz: se
@@ -2338,3 +2337,43 @@ O que e verdade, com evidencia de jogo (30/09/2026):
 
 Este paragrafo existe para que a frase errada, que ja foi copiada para o catalogo e para o
 relatorio, **nao volte a ser tratada como verdade** numa sessao futura.
+
+**FATO verificado (30/09/2026, fim da sessao):** as tres fases da ficha (abas, campos de
+texto grandes, inventario) e todas as correcoes de layout foram **validadas em jogo** pelo
+usuario e commitadas em **`a16b3b7`** (12 arquivos, +3204/-47, branch `main`, sem tag e sem
+push). `origin/main` continua em `5c39f00`. O ultimo **checkpoint** segue sendo `7ace0fd` /
+`checkpoint-20260930-1412-antes-das-abas-da-ficha`, que e anterior a tudo isso.
+
+### Trabalho em paralelo de outra pessoa no mesmo repositorio (30/09/2026)
+
+**FATO verificado:** o repositorio nao e shallow, e o remoto e
+`https://github.com/Pedr0U/tabletop-rpg-1.21.11.git`. Alem da `main`, existe a branch
+**`pasta-Net`** (`450d64c` "Correcao de Bugs e Adicoes") — e onde o outro desenvolvedor
+trabalha. Portanto **`git pull` na `main` nao traz o trabalho dele**: so traria se ele
+mesmo mesclar a `pasta-Net` na `main` e der push.
+
+**FATO verificado:** nesta maquina `pull.rebase = false`, entao `git pull` faz **merge**
+(gera commit de merge), nao rebase. Consequencia pratica: se houver conflito, o pull
+**para** e deixa a arvore em estado de conflito para resolver — nada se perde, mas precisa
+de atencao.
+
+**Risco especifico deste projeto, e o que vale avisar:** os dois mexem em
+`SheetData.java`. Conflictos ali sao praticamente Certainos (o diff da fase 2B sozinho tem
++634 linhas), e o perigo **silencioso** e a **ordem dos campos no codec de NBT**: se uma
+resolucao manual deixar o `group(...)`/`forGetter` do `CODEC` em ordem diferente da do
+construtor do record, os testes de round-trip **continuam passando** (encoder e decoder
+concordam entre si) mas uma ficha salva pela outra versao e lida com campos trocados.
+Depois de qualquer pull que toque `SheetData`, conferir a ordem e testar com uma ficha
+salva **antes** do merge.
+
+**Procedimento seguro para o usuario:** `git fetch origin` -> `git log --oneline HEAD..origin/main`
+para ver o que veio -> `git pull` **so com a arvore limpa** (commit ou stash antes) ->
+`.\gradlew.bat build --no-daemon --console=plain` antes de testar em jogo.
+
+**FATO verificado (01/10/2026) - conflito de merge orfao foi resolvido antes de commitar.**
+O `agent/memory/project-memory.md` estava com marcadores `<<<<<<< Updated upstream` /
+`>>>>>>> Stashed changes` e status `UU`, **sem** `MERGE_HEAD` e **sem** entrada em
+`git stash list`: sobra de um `git stash pop` anterior que conflitou e foi abandonado.
+Resolvido **mantendo os dois lados** (os dois blocos eram blocos de memoria distintos e
+append-only, um do Iris e outro do fim da sessao das abas), na ordem upstream -> stashed.
+Nenhum conteudo foi descartado.
