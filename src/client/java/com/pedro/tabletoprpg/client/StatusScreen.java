@@ -8,13 +8,22 @@ import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.EditBox;
+import net.minecraft.client.gui.components.MultiLineEditBox;
+import net.minecraft.client.gui.components.Tooltip;
 import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.client.input.MouseButtonEvent;
 import net.minecraft.network.chat.Component;
+import net.minecraft.network.chat.Style;
+import net.minecraft.util.FormattedCharSequence;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
 
 /**
  * Tela "Status" da ficha: identidade, recursos (barras), progresso e atributos.
@@ -265,6 +274,324 @@ public class StatusScreen extends CharacterSheetScreen {
                            Button minusButton, Button plusButton) {
     }
 
+    // ------------------------------------------------------------------
+    // ABAS DA FICHA (decisao do usuario em 30/09/2026)
+    // ------------------------------------------------------------------
+
+    /**
+     * Altura reservada no rodape do conteudo para a barra de abas.
+     *
+     * <p>E uma altura <b>declarada</b>, e nao medida do botao, porque o
+     * {@code bottomY} que a aba 1 recebe ja vem lessenado em um valor: e assim que
+     * a ultima linha da coluna esquerda para de invadir a faixa das setinhas, sem
+     * depender de onde o botao foi desenhado. A barra fica logo acima do
+     * {@code contentBottom}, e o {@code Back} da base fica ainda mais abaixo (os
+     * dois nao se tocam).
+     */
+    private static final int TAB_BAR_H = 20;
+
+    /**
+     * Largura de cada setinha da barra de abas.
+     *
+     * <p>Um botao estreito porque o par e so navegacao: a aba 1 e a ficha inteira
+     * e nao sobrou largura para 3 botoes de verdade, e o nome da aba ativa no
+     * meio e o que diz onde o jogador esta.
+     */
+    private static final int TAB_ARROW_W = 20;
+
+    /**
+     * Quantas linhas a aba 2 reserva ao calcular a altura de linha
+     * ({@code fitRowHeight}).
+     *
+     * <p>Sao 2 titulos + 2 caixas; a altura das caixas nao entra na conta porque
+     * elas ocupam o que sobrar do painel ({@link #buildInfoTab}). Serve so para
+     * a altura de linha do titulo nao ficar maior do que o padrao da tela.
+     */
+    private static final int INFO_TAB_ROWS = 4;
+
+    /**
+     * Nome curto de cada aba, na ordem em que as setinhas percorrem.
+     *
+     * <p>Curto e em ingles por causa do resto do rodape ({@code Back}) e dos
+     * titulos das secoes: o nome cabe no meio da barra sem invadir as setinhas, e
+     * e o que o jogador le para saber em que pagina esta.
+     */
+    private static final String[] TAB_NAMES = {"Character", "Info/Inventory", "Skills/Spells"};
+
+    /**
+     * Aba visivel (0 = ficha, 1 = Info/Inventory, 2 = Skills).
+     *
+     * <p>30/09/2026: a aba 1 recebeu a coluna esquerda com os dois quadros de
+     * texto livre (FASE 2A) e a aba 2 continua VAZIA -- o inventario e a fase
+     * seguinte (2B), que vai reusar o que a 2A montou. A estrutura ja e a
+     * definitiva, porque trocar de aba e o que vai mudar depois, nao o esqueleto.
+     */
+    private int activeTab;
+
+    /**
+     * Os dois quadros de texto com rolagem da aba 2, por nome de campo
+     * (30/09/2026, FASE 2A).
+     *
+     * <p><b>Por que nao entram no {@code fieldBoxes} da base:</b> aquele mapa e
+     * {@code Map<String, EditBox>} e e percorrido pelo
+     * {@code CharacterSheetScreen.applySheetToWidgets}, que preenche a caixa com
+     * {@code getText}/{@code getNumeric} e cria o responder que envia a cada
+     * tecla. O {@code MultiLineEditBox} nao e um {@code EditBox} e nao tem
+     * {@code setResponder}, entao o guardado aqui e o que permite ter os dois
+     * lados: o preenchimento pelo servidor e o envio sob demanda.
+     */
+    private final Map<String, MultiLineEditBox> multiLineBoxes = new LinkedHashMap<>();
+
+    /**
+     * Campos cujo texto grande mudou e ainda nao foi enviado (30/09/2026).
+     *
+     * <p><b>Por que guardar e nao enviar a cada tecla (decisao do usuario):</b>
+     * o limite e de {@link SheetData#MAX_TEXT} (2000) caracteres, e cada tecla
+     * dispararia um pacote de ate 2 KB. O jogador soletra um paragrafo e saem
+     * 800 pacotes -- o caminho de saida do texto e o de salvar: fim do campo,
+     * troca de aba e fechamento da tela.
+     */
+    private final Set<String> pendingMultiLine = new LinkedHashSet<>();
+
+    /**
+     * Guarda do eco do servidor nas caixas grandes (30/09/2026).
+     *
+     * <p>O {@code setValue} do {@code MultiLineEditBox} chama o
+     * {@code setValueListener} mesmo com o valor vindo de codigo (confirmado
+     * no bytecode do 1.21.11: {@code setValue} sempre passa por
+     * {@code onValueChange}). Sem esta guarda, preencher a caixa com o que o
+     * servidor mandou marcaria o campo como pendente e reenviaria o eco para o
+     * servidor, em vao.
+     */
+    private boolean suppressMultiLine;
+
+    // ------------------------------------------------------------------
+    // INVENTARIO DA COLUNA DIREITA DA ABA 1 (30/09/2026, FASE 2B)
+    // ------------------------------------------------------------------
+
+    /**
+     * Alturas de uma linha de item (FASE 2B).
+     *
+     * <p><b>Por que altura fixa e nao {@code rowH}:</b> o bloco de um item tem
+     * nome, tipo, ate 2 linhas de descricao e a linha dos botoes, e isso nao cabe
+     * na altura de linha da tela (que no painel de referencia e 13px). Um bloco
+     * por item mais alto que a linha e o que permite que a coluna mostre item
+     * inteiro em vez de cortar a descricao; o preco e que sao poucos por vez, e e
+     * o que a rolagem da coluna existe para resolver.
+     */
+    private static final int INV_NAME_H = 11;
+    private static final int INV_DESC_ADV = 11;
+    private static final int INV_DESC_LINES = 2;
+    private static final int INV_BTN_H = 12;
+    private static final int INV_ITEM_GAP = 4;
+
+    /**
+     * Folga entre a borda da caixa do item e o conteudo, em cima e embaixo
+     * (pedido do usuario em 30/09/2026: as linhas estavam coladas na caixa).
+     */
+    private static final int INV_PAD = 5;
+
+    /**
+     * A mesma folga nas laterais.
+     *
+     * <p>Antes o texto comecava exatamente no {@code x} da caixa, entao a
+     * primeira letra encostava na borda.
+     */
+    private static final int INV_PAD_X = 4;
+
+    /**
+     * Largura util do texto dentro da caixa: a coluna menos as duas folgas.
+     *
+     * <p><b>Por que e um metodo e nao uma constante:</b> a coluna tem largura
+     * variavel (a tela pode ser estreita), e {@link #rightDescLines} e
+     * {@link #addInventoryItem} precisam medir com o MESMO numero -- se um usar
+     * a largura cheia e o outro a largura com folga, a contagem de linhas
+     * discorda e {@code parts.get(i)} estoura.
+     */
+    private int rightTextW(int w) {
+        return Math.max(8, w - INV_PAD_X * 2);
+    }
+
+    /**
+     * A linha cabe inteira na faixa visivel da lista de itens?
+     *
+     * <p>Toda linha e todo botao do item passam por aqui. Um item cortado pela
+     * borda mostra so o pedaco que cabe -- e um botao cortado **nao** e criado,
+     * senao daria para clicar num item que o jogador nao ve.
+     */
+    private boolean lineInList(int y, int h) {
+        return y >= rightListTop && y + h <= rightListBottom;
+    }
+
+    /**
+     * Fundo da "caixinha" de cada item (pedido do usuario em 30/09/2026).
+     *
+     * <p>Mais escuro que {@code COL_PANEL_BG} ({@code 0xF216161C}) em 6/6/8
+     * por canal: o suficiente para o item se destacar como bloco, sem virar
+     * outra cor de fundo.
+     */
+    private static final int COL_ITEM_BG = 0xF2101016;
+
+    /**
+     * Barra de rolagem da lista (pedido do usuario em 30/09/2026: a rolagem
+     * funcionava, mas nao havia nada mostrando que havia mais embaixo).
+     *
+     * <p><b>Mesmos numeros e cores do {@code SkillsScreen}:</b> duas telas com
+     * listas ought a ter a mesma barra, e quem conhece uma reconhece a outra.
+     *
+     * <p>A largura e 4 porque a barra fica **na folga interna** da caixa
+     * ({@link #INV_PAD_X}), e uma barra mais larga passaria por cima do texto do
+     * peso, que e encostado na direita.
+     */
+    private static final int BAR_W = 4;
+    private static final int BAR_PAD = 2;
+
+    /** Folga entre a borda direita da caixa do item e a barra de rolagem. */
+    private static final int BAR_GAP = 3;
+    private static final int COL_SCROLL_TRACK = 0xFF303038;
+    private static final int COL_SCROLL_THUMB = 0xFFE8E8EE;
+
+    /** Largura dos botoes Edit/Del: o nome do botao com folga. */
+    private static final int INV_BTN_W = 32;
+
+    /** Geometria da coluna direita da aba 1 (a do inventario). */
+    private int rightPanelX;
+    private int rightPanelW;
+
+    /** Faixa da lista de itens, e a mesma do clamp da rolagem. */
+    private int rightListTop;
+    private int rightListBottom;
+
+    /** Altura do conteudo inteiro da lista, medida no {@code buildInfoTab}. */
+    private int rightContentH;
+
+    /**
+     * Scroll da lista de itens, em pixels.
+     *
+     * <p><b>Em pixels e nao em linhas porque os blocos nao tem a mesma
+     * altura</b>: um item com descricao de 2 linhas e 9px mais alto que um sem
+     * descricao. Rolar por linhas socia as linhas de nome e de botao do bloco
+     * vizinho.
+     */
+    private int rightScroll;
+    /** Geometria da barra, montada em {@code addInventoryColumn}. */
+    private int rightBarX;
+    private int rightBarH;
+    /**
+     * Largura da caixa do item: a coluna MENOS a barra e a folga entre as duas.
+     *
+     * <p><b>Por que a caixa e menor que a coluna (pedido do usuario em
+     * 30/09/2026):</b> com a caixa na largura toda, a barra de rolagem ficava
+     * colada na borda dela. {@code rightDescLines} mede com este mesmo numero,
+     * senao a contagem de linhas discorda da quebra.
+     */
+    private int rightBoxW;
+    private int rightThumbY;
+    private int rightThumbH;
+    private boolean draggingRightBar;
+
+    /**
+     * Indice do item que espera o segundo clique no Del, ou {@code -1}.
+     *
+     * <p>O Del e irreversivel, e o item nao tem como voltar depois de apagado. O
+     * primeiro clique so marca e redesenha o botao pedindo confirmacao; o segundo
+     * clique <b>no mesmo indice</b> apaga. Qualquer outra coisa (trocar de aba,
+     * rolar, abrir o form, chegar estado novo do servidor) zera a marcacao, para
+     * que o segundo clique nao possa cair em um item diferente do que o jogador
+     * viu marcado.
+     */
+    private int delPendingIndex = -1;
+
+    /**
+     * Retangulo do botao Del marcado, para a moldura vermelha.
+     *
+     * <p>Guardado em vez de recalcular no render porque o botao so existe
+     * quando o bloco dele coube na janela da lista: um item rolado para fora nao
+     * tem widget, e nao tem o que contornar.
+     */
+    private ItemBox delPendingBox;
+
+    /**
+     * As caixinhas dos itens visiveis, redesenhadas a cada frame no
+     * {@link #render} (e nao no {@code textLines}, que e so texto).
+     *
+     * <p>Enche em {@code buildInfoTab} e zera em {@code clearTransientState};
+     * por isso so tem o que esta visivel na rolagem atual.
+     */
+    private final List<ItemBox> itemBoxes = new ArrayList<>();
+
+    /**
+     * A <b>caixa do limite de peso</b>, gerida por esta tela (FASE 2B).
+     *
+     * <p><b>Por que ela nao entra no {@code fieldBoxes} da base:</b> aquele mapa
+     * alimenta um {@code int} ({@code getNumeric}) e cria um responder que envia
+     * a cada tecla. O limite de peso e um {@code float} com 2 casas e o eco do
+     * servidor volta formatado ("12.00"), entao reescrever a caixa a cada tecla
+     * brigaria com o cursor e o filtro de digito impediria o texto do servidor.
+     * Aqui o preenchimento e o envio sao separados, como nos quadros grandes.
+     */
+    private EditBox maxWeightBox;
+
+    /** Guarda do eco do servidor na caixa do limite de peso. */
+    private boolean suppressMaxWeight;
+
+    /**
+     * O limite de peso foi digitado em texto que ainda nao e numero e nao foi
+     * enviado (FASE 2B).
+     *
+     * <p>E um valor so, e nao um conjunto como o {@link #pendingMultiLine}: a
+     * coluna tem uma unica caixa de peso, entao a marca mais recente e a unica que
+     * importa.
+     */
+    private boolean pendingMaxWeight;
+
+    /** Indice da linha do resumo do peso dentro de {@code textLines}, ou {@code -1}. */
+    private int weightSummaryIndex = -1;
+
+    /**
+     * O inventario do <b>ultimo estado desenhado</b> (FASE 2B).
+     *
+     * <p>E o que decide se a lista precisa ser remontada: o eco do servidor muda
+     * {@code sheet}, e sem esta comparacao os widgets ficariam mostrando a lista
+     * antiga -- o item apagado continuaria la e o novo nunca apareceria, ate o
+     * jogador trocar de aba.
+     */
+    private SheetData.Inventory lastInventory;
+
+    /**
+     * O inventario mudou e a lista ainda nao foi remontada (FASE 2B).
+     *
+     * <p>O conserto e um {@code rebuildWidgets()}, que e exatamente o que se
+     * precisa de uma lista de widgets. Ele <b>nao</b> roda dentro de
+     * {@code onSheetReceived}: recriar os widgets ali destrói a caixa que o
+     * jogador pode estar digitando e o texto que ele nao enviou ainda. O pedido
+     * fica marcado e e cumprido no {@code renderContent}, quando nada da coluna
+     * esta com o foco.
+     */
+    private boolean inventoryRebuildPending;
+
+    /** Retangulo de um botao da coluna do inventario. */
+    private record ItemBox(int x, int y, int w, int h) {
+    }
+
+    /**
+     * Scroll da coluna esquerda guardado por aba, e o mesmo da coluna de pericias.
+     *
+     * <p>30/09/2026: {@link #leftScroll} e {@link #perScroll} sao o valor <b>atual</b>,
+     * o que o {@code buildPanel} consome; o array e a memoria de cada aba. Sem
+     * ela, voltar para a aba 1 com a coluna rolada voltaria ao topo, e o
+     * jogador perderia a posicao a cada viagem de ida e volta entre paginas. A
+     * troca de aba salva o valor antigo no indice da aba antiga e carrega o novo
+     * ANTES do {@code rebuildWidgets()}, que refaz o layout.
+     */
+    private final int[] tabLeftScroll = new int[TAB_NAMES.length];
+    private final int[] tabPerScroll = new int[TAB_NAMES.length];
+
+    /** Quantas abas existem: o numero vive no {@link #TAB_NAMES}. */
+    private int tabCount() {
+        return TAB_NAMES.length;
+    }
+
     public StatusScreen(String targetName, Screen returnTo) {
         super("Character Status", targetName, returnTo);
     }
@@ -283,8 +610,459 @@ public class StatusScreen extends CharacterSheetScreen {
         return MAX_PANEL_W_STATUS;
     }
 
+    /**
+     * Escolhe o que a aba visivel monta (30/09/2026).
+     *
+     * <p>A barra de abas entra nos <b>3</b> casos, inclusive nas abas vazias: sem
+     * ela nao haveria como sair delas. A aba 1 e a 2 recebem o {@code bottomY}
+     * lessenado em {@link #TAB_BAR_H} para o conteudo parar antes das setinhas.
+     * A aba 3 (Skills) e a que fica dentro da aba 1 apos a coluna do inventario
+     * (FASE 2B).
+     *
+     * <p><b>Por que o estado do inventario e zerado AQUI:</b> e o unico lugar por
+     * onde toda montagem passa, e o indice da linha do resumo so vale para a lista
+     * de {@code textLines} da aba que o criou. Sem o zerar, o indice da aba 1
+     * continuaria valendo na aba 0 e o {@code applyWeightSummary} reescreveria uma
+     * linha qualquer daquela aba (o indice e um numero pequeno, e quase sempre
+     * cai dentro da lista nova).
+     */
     @Override
     protected void buildPanel(int x0, int panelW, int topY, int bottomY) {
+        maxWeightBox = null;
+        weightSummaryIndex = -1;
+        delPendingBox = null;
+        itemBoxes.clear();
+        if (activeTab == 0) {
+            buildCharacterTab(x0, panelW, topY, bottomY - TAB_BAR_H);
+        } else if (activeTab == 1) {
+            buildInfoTab(x0, panelW, topY, bottomY - TAB_BAR_H);
+        }
+        addTabBar(x0, panelW, bottomY);
+    }
+
+    /**
+     * Aba 2: a metade esquerda com os dois quadros de texto livre com rolagem
+     * (FASE 2A, 30/09/2026).
+     *
+     * <p><b>O que decide o desenho:</b> sao dois {@code MultiLineEditBox}
+     * empilhados, com o titulo de cada um acima ({@link #addSection}). A coluna
+     * direita fica <b>VAZIA</b> nesta fase: e o espaco do inventario, que e da
+     * fase 2B e vai reusar este layout.
+     *
+     * <p><b>Por que a coluna e a MESMA conta de largura da aba 1:</b> a largura
+     * da esquerda ({@code leftW}) e calculada com a mesma fracao e o mesmo teto
+     * de {@code buildCharacterTab}, para que as duas abas desenhem o texto
+     * na mesma coluna quando o jogador alterna entre elas. O que sobra da conta
+     * (a direita) e o que o inventario vai ocupar depois.
+     *
+     * <p><b>Por que cada lista do widget do {@code renderContent} e limpa:</b>
+     * {@code renderContent} desenha as barras, {@code attrRows} e
+     * {@code periciaRows} o que sobrou da <b>ultima aba montada</b>. Sem o
+     * {@code clear()}, voltar para a aba 2 depois de passar pela aba 1 deixaria
+     * a barra de HP e os numeros dos atributos desenhados por cima dos quadros.
+     */
+    private void buildInfoTab(int x0, int panelW, int topY, int bottomY) {
+        arrowButtons.clear();
+        attrRows.clear();
+        periciaRows.clear();
+        resourceSteps.clear();
+        hpBar = null;
+        manaBar = null;
+        // Os widgets da aba anterior morreram com o rebuildWidgets(): as caixas
+        // de texto nao podem sobreviver a ele, porque o texto que o jogador
+        // escreveu nelas e o que o `flush` le (ver rebuildWidgets).
+        multiLineBoxes.clear();
+
+        rowH = fitRowHeight(INFO_TAB_ROWS, topY, bottomY);
+
+        int innerX = x0 + PANEL_PAD;
+        int innerW = Math.max(120, panelW - 2 * PANEL_PAD);
+        int innerTop = topY + PANEL_PAD;
+        int innerBottom = bottomY - PANEL_PAD;
+
+        // Mesma conta de buildCharacterTab, so que aqui sobra so a metade
+        // esquerda (a direita e o inventario da fase 2B).
+        int perW = Math.max(140, Math.min(PER_W_MAX, (int) (innerW * PER_W_RATIO)));
+        int leftW = Math.max(120, innerW - perW - PER_GAP);
+
+        // Altura util dividida em 2: cada bloco e um titulo + a caixa dele, e o
+        // resto (impar) fica no segundo, que e o de baixo.
+        int usable = Math.max(2 * MIN_ROW_H, innerBottom - innerTop);
+        int blockH = usable / 2;
+        int split = innerTop + blockH;
+        addMultiLineBlock("appearance", innerX, leftW, innerTop, split);
+        addMultiLineBlock("backstory", innerX, leftW, split, innerBottom);
+
+        // A direita e a coluna do inventario (FASE 2B). A largura e a MESMA conta
+        // (`perW`) da aba 0, e nao o que sobrou: e o que faz os dois titulos
+        // ("Character Appearance" e "Inventory") nascerem na mesma coluna quando
+        // o jogador alterna entre as abas.
+        addInventoryColumn(innerX + leftW + PER_GAP, perW, innerTop, innerBottom);
+    }
+
+    /**
+     * Coluna direita da aba 1: o limite de peso, o resumo e a lista de itens
+     * (30/09/2026, FASE 2B).
+     *
+     * <p><b>O desenho, de cima para baixo:</b> titulo {@code Inventory}, a linha
+     * do {@code Max Weight} (rotulo + caixa), a linha do resumo
+     * {@code Weight: X.XX / Y.YY}, o botao {@code + Item} e a lista. A lista e o
+     * que sobra, e e a unica parte com rolagem.
+     *
+     * <p><b>Por que a lista comeca numa Y propria ({@link #rightListTop}) e nao no
+     * fim do cabecalho:</b> e o mesmo par que {@link #maxRightScroll} usa, para
+     * que o clamp e a area visivel concordem. Com o par errado, a ultima linha
+     * ficaria alcancavel so ate metade, que e o tipo de bug que so aparece com
+     * lista cheia.
+     *
+     * <p><b>Por que so o item inteiro e montado:</b> os botoes Edit e Del sao
+     * widgets, e um widget cortado pela borda continuaria clicavel em cima da barra
+     * de abas. O bloco inteiro que couber e montado, e o resto fica fora da tela
+     * (o mesmo criterio de {@link #drawY}).
+     */
+    private void addInventoryColumn(int x, int w, int top, int bottom) {
+        rightPanelX = x;
+        rightPanelW = w;
+        rightListTop = top;
+        rightListBottom = bottom;
+
+        int y = addSection("Inventory", x, top, w);
+
+        // Linha do Max Weight: o rotulo a esquerda e a caixa encostada na
+        // direita. A caixa e pequena (o valor tem 2 casas) e fica a direita
+        // porque e o rotulo que cresce quando o Mestre trocar o rotulo do campo.
+        int boxW = Math.max(40, Math.min(64, w / 3));
+        int boxX = x + w - boxW;
+        addWrappedLabel("Max Weight", x, y, Math.max(20, boxX - x - 4), COL_LABEL);
+        maxWeightBox = new EditBox(this.font, boxX, y, boxW, rowH - 2,
+                Component.literal("Max Weight"));
+        maxWeightBox.setMaxLength(8);
+        // Filtro de digito e UM ponto, com 2 casas (o mesmo do formulario do
+        // item): e o que impede "1.2.3", que nao parseia e cairia em 0 ao
+        // salvar. Confirmado no bytecode do 1.21.11 que EditBox.setFilter e
+        // java.util.function.Predicate<String>, e nao o EditBox.Filter do
+        // modded original.
+        maxWeightBox.setFilter(text -> text.matches(SheetData.InventoryItem.WEIGHT_PATTERN));
+        maxWeightBox.setResponder(this::onMaxWeightTyped);
+        addRenderableWidget(maxWeightBox);
+        y += rowH;
+
+        // Linha do resumo. Nasce preenchida com o que a ficha tem, e reescrita no
+        // applyExtraState (que e quem recebe o eco do servidor).
+        weightSummaryIndex = textLines.size();
+        textLines.add(new TextLine("", x, y + labelOffset(), COL_BOX_TEXT));
+        y += rowH;
+
+        addRenderableWidget(Button.builder(Component.literal("+ Item"), b -> openItemForm(-1, null))
+                .bounds(x, y, w, rowH - 2)
+                .tooltip(Tooltip.create(Component.literal("Novo item do inventario")))
+                .build());
+        y += rowH;
+
+        rightListTop = Math.max(y, top);
+
+        // Mede o conteudo inteiro ANTES de montar: e o que o clamp da rolagem
+        // precisa, e medir montando criaria widget para todo item da lista.
+        List<SheetData.InventoryItem> items = inventoryItems();
+        rightContentH = 0;
+        for (SheetData.InventoryItem item : items) {
+            rightContentH += rightItemHeight(item);
+        }
+        rightScroll = clampRightScroll(rightScroll);
+
+        int itemY = rightListTop - rightScroll;
+        // A caixa e mais estreita que a coluna para a barra nao encostar nela.
+        rightBoxW = Math.max(20, w - BAR_W - BAR_GAP);
+        for (int index = 0; index < items.size(); index++) {
+            int h = rightItemHeight(items.get(index));
+            // "Pelo menos um pedaco visivel" e nao "inteiro visivel" (pedido do
+            // usuario em 30/09/2026): com o corte antigo, um item sumia inteiro
+            // da tela e a lista dava a impressao de buraco. Quem corta e recorta
+            // e o {@link #addInventoryItem}.
+            if (itemY + h > rightListTop && itemY < rightListBottom) {
+                addInventoryItem(x, itemY, rightBoxW, items.get(index), index);
+            }
+            itemY += h;
+        }
+
+        // A barra ocupa a folga interna da borda direita da caixa dos itens. So
+        // e montada aqui, com a altura VISIVEL da lista -- o trilho e o pedaco
+        // que da para ver, e nao o conteudo inteiro.
+        rightBarX = x + w - BAR_W;
+        rightBarH = Math.max(0, rightListBottom - rightListTop);
+    }
+
+    /**
+     * Monta um item da lista: nome + peso, tipo, ate 2 linhas de descricao e os
+     * botoes Edit e Del.
+     *
+     * <p><b>O texto entra em {@code textLines} e nao no {@code render}:</b> o
+     * conteudo so muda quando a ficha muda, e a ficha so chega pelo
+     * {@code rebuildWidgets} (que recria {@code textLines}). Desenhar por item a
+     * cada frame seria o mesmo preco do {@code drawPericias} sem nenhum ganho --
+     * aqui nao ha valor otimista, so o que o servidor mandou.
+     */
+    private void addInventoryItem(int x, int y, int w, SheetData.InventoryItem item, int index) {
+        // A caixa e recortada na faixa visivel da lista: o item pode entrar e
+        // sair pela borda, mas o fundo dele nunca pinta em cima do cabecalho nem
+        // do rodape. E o que faz o item aparecer "pela metade" em vez de sumir.
+        int boxH = rightItemHeight(item) - INV_ITEM_GAP;
+        int boxTop = Math.max(y, rightListTop);
+        int boxBottom = Math.min(y + boxH, rightListBottom);
+        if (boxBottom <= boxTop) {
+            return;
+        }
+        itemBoxes.add(new ItemBox(x, boxTop, w, boxBottom - boxTop));
+        y += INV_PAD;
+
+        // Texto recuado da borda: `tx` e a margem esquerda e `tw` e a largura
+        // que sobra dentro da caixa.
+        int tx = x + INV_PAD_X;
+        int tw = rightTextW(w);
+
+        String weight = item.weightText();
+        int weightW = this.font.width(weight);
+        // Toda linha passa por `lineInList`: um item que entra pela borda de
+        // cima tem as primeiras linhas ACIMA da lista, e sem o guarda esse texto
+        // ia por cima do cabecalho e do botao "+ Item" -- o mesmo texto-por-cima-
+        // do-botao que a coluna esquerda ja tinha sofrido (bug do usuario em
+        // 30/09/2026).
+        if (lineInList(y, INV_NAME_H)) {
+            textLines.add(new TextLine(truncateWithEllipsis(item.name(), Math.max(8, tw - weightW - 4)),
+                    tx, y, COL_LABEL));
+            textLines.add(new TextLine(weight, x + w - INV_PAD_X - weightW, y, COL_BOX_TEXT));
+        }
+        y += INV_NAME_H;
+
+        if (!item.type().isEmpty() && lineInList(y, INV_NAME_H)) {
+            textLines.add(new TextLine(truncateWithEllipsis(item.type(), tw), tx, y, COL_MUTED));
+        }
+        y += INV_NAME_H;
+
+        int lines = rightDescLines(item);
+        if (lines > 0) {
+            List<FormattedCharSequence> parts =
+                    this.font.split(Component.literal(item.description()), tw);
+            for (int i = 0; i < lines; i++) {
+                FormattedCharSequence part = parts.get(i);
+                // Sobrou texto depois da ultima linha desenhada: sinaliza com as
+                // reticencias, para o jogador saber que a descricao esta cortada
+                // e nao que acaba ali.
+                if (i == lines - 1 && parts.size() > INV_DESC_LINES) {
+                    // Nao usar `part + TRUNCATION_MARK`: `part` nao e String, e o
+                    // `+` do Java resolve por String.valueOf(part), o que
+                    // desenhava o objeto lambda do client no lugar do texto (bug
+                    // do usuario em 30/09/2026).
+                    part = FormattedCharSequence.forward(plainText(part) + TRUNCATION_MARK,
+                            Style.EMPTY);
+                }
+                if (lineInList(y, INV_DESC_ADV)) {
+                    textLines.add(new TextLine(part, tx, y, COL_MUTED));
+                }
+                y += INV_DESC_ADV;
+            }
+        }
+
+        // Botao so quando a linha inteira cabe na faixa visivel: um botao cortado
+        // pela borda seria clicavel sem o jogador ve-lo.
+        if (lineInList(y, INV_BTN_H)) {
+            addRenderableWidget(Button.builder(Component.literal("Edit"), b -> openItemForm(index, item))
+                    .bounds(tx, y, INV_BTN_W, INV_BTN_H)
+                    .tooltip(Tooltip.create(Component.literal("Editar este item")))
+                    .build());
+            Button del = addRenderableWidget(Button.builder(
+                            delPendingIndex == index ? Component.literal("Del?") : Component.literal("Del"),
+                            b -> onDeleteItem(index))
+                    .bounds(tx + tw - INV_BTN_W, y, INV_BTN_W, INV_BTN_H)
+                    .tooltip(Tooltip.create(Component.literal(
+                            delPendingIndex == index
+                                    ? "Clique de novo para confirmar"
+                                    : "Apagar este item")))
+                    .build());
+            if (delPendingIndex == index) {
+                delPendingBox = new ItemBox(del.getX(), del.getY(), del.getWidth(), del.getHeight());
+            }
+        }
+    }
+
+    /**
+     * Achata um {@link FormattedCharSequence} em {@link String}.
+     *
+     * <p><b>Por que existe (bug do usuario em 30/09/2026):</b> o codigo fazia
+     * {@code part + TRUNCATION_MARK} num {@code part} que e
+     * {@code FormattedCharSequence}. O {@code +} do Java so aceita String de um
+     * dos lados, entao ele chamava {@code String.valueOf(part)} e a lista
+     * mostrava {@code net.minecraft.util.FormattedCharSequence$Lambda/0x...@...}
+     * no lugar da ultima linha da descricao -- e, com isso, o resto do texto
+     * sumia. Percorrer a sequencia e o jeito de ler os code points de verdade.
+     */
+    private static String plainText(FormattedCharSequence sequence) {
+        StringBuilder out = new StringBuilder();
+        sequence.accept((index, style, codePoint) -> {
+            out.appendCodePoint(codePoint);
+            return true;
+        });
+        return out.toString();
+    }
+
+    /** Quantas linhas de descricao o item ocupa (0, 1 ou o teto de 2). */
+    private int rightDescLines(SheetData.InventoryItem item) {
+        if (item.description().isEmpty()) {
+            return 0;
+        }
+        List<FormattedCharSequence> parts =
+                this.font.split(Component.literal(item.description()), rightTextW(rightBoxW));
+        return Math.min(INV_DESC_LINES, parts.size());
+    }
+
+    /** Altura do bloco de um item, a mesma que o {@code buildInfoTab} mediu. */
+    private int rightItemHeight(SheetData.InventoryItem item) {
+        return INV_PAD * 2 + INV_NAME_H * 2 + rightDescLines(item) * INV_DESC_ADV
+                + INV_BTN_H + INV_ITEM_GAP;
+    }
+
+    /**
+     * Desenha trilho e polegar da lista, no mesmo estilo do {@code SkillsScreen}.
+     *
+     * <p><b>Proporcional ao conteudo, como no popup do SkillsScreen:</b> quanto
+     * mais itens, menor o polegar, com minimo de 8 px para continuar clicavel.
+     *
+     * <p>Desenhado no {@link #render} e nao no {@code addInventoryColumn}, pelo
+     * mesmo motivo do SkillsScreen: a montagem guarda a <b>geometria</b> do
+     * trilho e o quadro o <b>pinta</b>. Roleira e grafico nao sao o mesmo dado.
+     */
+    private void renderRightScrollbar(GuiGraphics graphics) {
+        rightThumbH = 0;
+        if (activeTab != 1 || rightBarH <= 0 || maxRightScroll() <= 0) {
+            return;
+        }
+        graphics.fill(rightBarX, rightListTop, rightBarX + BAR_W,
+                rightListTop + rightBarH, COL_SCROLL_TRACK);
+        rightThumbH = Math.max(8, rightBarH * rightBarH / Math.max(1, rightContentH));
+        if (rightThumbH > rightBarH) {
+            rightThumbH = rightBarH;
+        }
+        int desloca = rightBarH - rightThumbH;
+        rightThumbY = rightListTop
+                + (maxRightScroll() == 0 ? 0 : desloca * rightScroll / maxRightScroll());
+        graphics.fill(rightBarX, rightThumbY, rightBarX + BAR_W,
+                rightThumbY + rightThumbH, COL_SCROLL_THUMB);
+    }
+
+    /** O cursor esta sobre a barra da lista? */
+    private boolean onRightScrollbar(double mouseX, double mouseY) {
+        if (activeTab != 1 || rightBarH <= 0 || maxRightScroll() <= 0) {
+            return false;
+        }
+        return mouseX >= rightBarX - BAR_PAD && mouseX < rightBarX + BAR_W + BAR_PAD
+                && mouseY >= rightListTop && mouseY < rightListTop + rightBarH;
+    }
+
+    /** Converte a posicao do mouse no trilho para o valor de scroll. */
+    private void setRightScrollFromMouse(double mouseY) {
+        int maxScroll = maxRightScroll();
+        if (maxScroll <= 0) {
+            rightScroll = 0;
+            return;
+        }
+        int useful = Math.max(1, rightBarH - rightThumbH);
+        int delta = (int) (mouseY - rightListTop - rightThumbH / 2);
+        int next = clampRightScroll(delta * maxScroll / useful);
+        if (next != rightScroll) {
+            rightScroll = next;
+            // Mesma regra da roda: a rolagem recria os widgets, e a marcacao do
+            // Del aponta para um item que pode ter saido da tela.
+            delPendingIndex = -1;
+            rebuildWidgets();
+        }
+    }
+
+    /** Os itens da ficha, ou lista vazia antes de a ficha chegar. */
+    private List<SheetData.InventoryItem> inventoryItems() {
+        return sheet == null ? List.of() : sheet.inventory().items();
+    }
+
+    /** Maior rolagem da lista: o que sobra quando o ultimo item chega no fim. */
+    private int maxRightScroll() {
+        return Math.max(0, rightContentH - Math.max(0, rightListBottom - rightListTop));
+    }
+
+    private int clampRightScroll(int value) {
+        return Math.max(0, Math.min(value, maxRightScroll()));
+    }
+
+    /**
+     * O mouse esta sobre a coluna do inventario? So ai a roda rola esta lista.
+     *
+     * <p>A area e a mesma faixa de {@link #maxRightScroll} ({@link
+     * #rightListTop} a {@link #rightListBottom}), e nao a da coluna inteira: o
+     * cabecalho (titulo, Max Weight, resumo, + Item) nao rola, e aceitar a roda
+     * la cima rolar uma lista que o jogador nem esta vendo seria confuso.
+     */
+    private boolean isOverRightPanel(double mouseX, double mouseY) {
+        return mouseX >= rightPanelX && mouseX < rightPanelX + rightPanelW
+                && mouseY >= rightListTop && mouseY < rightListBottom;
+    }
+
+    /**
+     * Um bloco da aba 2: o titulo e, abaixo dele, o quadro de texto com rolagem
+     * (FASE 2A).
+     *
+     * <p><b>Por que {@code setShowBackground(true)} e o quadro inteiro:</b> o
+     * proprio widget desenha o fundo e a borda, entao um retangulo desenhado por
+     * fora aqui seria um fundo por cima do fundo dele.
+     *
+     * <p><b>Por que {@code setCharacterLimit} e nao {@code setLineLimit}:</b> o
+     * primeiro conta o TOTAL de caracteres (e o teto que o servidor aplica, o
+     * {@link SheetData#MAX_TEXT}); o segundo conta as linhas visiveis, que sao
+     * quantas cabem na altura do bloco -- usalo como teto cortaria o texto no
+     * numero de linhas que cabem na tela, e nao no limite do campo.
+     *
+     * <p><b>Por que o listener so marca e nao envia:</b> ver
+     * {@link #pendingMultiLine}.
+     */
+    private void addMultiLineBlock(String field, int x, int w, int top, int bottom) {
+        String title = SheetData.labelOf(field);
+        int y = addSection(title, x, top, w);
+        int boxH = Math.max(MIN_ROW_H, bottom - y);
+        MultiLineEditBox box = MultiLineEditBox.builder()
+                .setX(x)
+                .setY(y)
+                .setPlaceholder(Component.literal("write here"))
+                .setTextColor(COL_BOX_TEXT)
+                .setTextShadow(false)
+                .setCursorColor(COL_BOX_TEXT)
+                .setShowBackground(true)
+                .setShowDecorations(true)
+                .build(this.font, w, boxH, Component.literal(title));
+        box.setCharacterLimit(SheetData.MAX_TEXT);
+        // O MultiLineEditBox nao tem setEditable: active = false faz
+        // isMouseOver() responder false (confirmado no bytecode do 1.21.11), o
+        // que impede clicar, focar e portanto digitar. Mesmo padrao do
+        // SkillsScreen.
+        box.active = canEdit;
+        box.setValueListener(value -> {
+            if (suppressMultiLine) {
+                return;
+            }
+            pendingMultiLine.add(field);
+        });
+        // **OBRIGATORIO**: sem este registro a caixa nao entra em
+        // Screen.children() e nao recebe clique, foco, teclado nem rolagem
+        // (a roda so chega no que o `getChildAt` encontra por hit test).
+        addRenderableWidget(box);
+        multiLineBoxes.put(field, box);
+    }
+
+    /**
+     * Aba 1: a ficha atual inteira, as duas colunas (esquerda com identidade,
+     * vida, Mana, progresso e atributos; direita com as pericias).
+     *
+     * <p>Nada da logica de layout mudou em 30/09/2026 -- a unica coisa que a fase
+     * das abas fez aqui foi trocar o nome do metodo e chamar por ele. O
+     * {@code bottomY} que chega ja vem lessenado pela barra de abas.
+     */
+    private void buildCharacterTab(int x0, int panelW, int topY, int bottomY) {
         arrowButtons.clear();
         attrRows.clear();
         periciaRows.clear();
@@ -574,6 +1352,472 @@ public class StatusScreen extends CharacterSheetScreen {
             addPericiaRow(perX, topY + perTitleH + i * perRowH, perW, perScroll + i);
         }
         addBonusHeader(topY, perTitleH);
+    }
+
+    /**
+     * As duas setinhas de navegacao, nas pontas da faixa reservada no rodape
+     * (30/09/2026).
+     *
+     * <p>Sao as duas unicas coisas que trocam de aba: o nome da aba ativa vai no
+     * meio e e texto, nao botao (ver o {@code render} desta tela), entao ele nao
+     * entra aqui.
+     *
+     * <p><b>Por que {@code "<"} e {@code ">"} e nao setas:</b> a fonte padrao do
+     * Minecraft nao tem glifo de seta, e o que apareceria no lugar seria um
+     * quadradinho. O par e o mesmo dos botoes de passo que a ficha ja usa, entao
+     * a tela inteira fala a mesma coisa.
+     *
+     * <p>A setinha da ponta que nao tem pagina ({@code active = false}) e o
+     * feedback de que acabou: sem isso o jogador clica e nada acontece, sem
+     * entender se o botao quebrou.
+     */
+    private void addTabBar(int x0, int panelW, int bottomY) {
+        int y = bottomY - TAB_BAR_H;
+        Button prev = addRenderableWidget(Button.builder(Component.literal("<"), b -> changeTab(-1))
+                .bounds(x0, y, TAB_ARROW_W, TAB_BAR_H)
+                .tooltip(Tooltip.create(Component.literal("Aba anterior")))
+                .build());
+        Button next = addRenderableWidget(Button.builder(Component.literal(">"), b -> changeTab(1))
+                .bounds(x0 + panelW - TAB_ARROW_W, y, TAB_ARROW_W, TAB_BAR_H)
+                .tooltip(Tooltip.create(Component.literal("Proxima aba")))
+                .build());
+        prev.active = activeTab > 0;
+        next.active = activeTab < tabCount() - 1;
+    }
+
+    /**
+     * Troca de aba, guardando o scroll de cada uma (30/09/2026).
+     *
+     * <p>A memoria das duas colunas ({@link #tabLeftScroll} e {@link #tabPerScroll})
+     * e salva e carregada aqui, e nao no {@code buildPanel}: o {@code init()} e
+     * chamado por motivos que nao tem nada a ver com troca de aba (resize, modelo
+     * novo, rolagem), e fazer a troca dentro dele perderia a posicao de qualquer
+     * um desses caminhos. O {@code clamp} de cada aba acontece no proprio
+     * {@code buildPanel}, ja com a geometria da aba recem-montada.
+     */
+    private void changeTab(int delta) {
+        int next = Math.max(0, Math.min(activeTab + delta, tabCount() - 1));
+        if (next == activeTab) {
+            return;
+        }
+        // Sai da aba 1 (ou 2): o texto grande que o jogador escreveu e enviado
+        // AGORA, porque o rebuildWidgets() logo abaixo destroe as caixas e o
+        // texto junto com elas.
+        flushMultiLineBoxes();
+        flushMaxWeight();
+        tabLeftScroll[activeTab] = leftScroll;
+        tabPerScroll[activeTab] = perScroll;
+        // A marcacao do Del e da ABA que esta saindo: o segundo clique que
+        // confirmaria a exclusao nao pode sobreviver para a aba outra, onde o
+        // mesmo indice e outro item.
+        delPendingIndex = -1;
+        activeTab = next;
+        leftScroll = tabLeftScroll[activeTab];
+        perScroll = tabPerScroll[activeTab];
+        rebuildWidgets();
+    }
+
+    /**
+     * Envia o texto grande que ficou pendente e so depois recria os widgets
+     * (FASE 2A, 30/09/2026).
+     *
+     * <p><b>Por que o flush e AQUI e nao so no {@link #changeTab}:</b> o
+     * {@code rebuildWidgets()} e o funil de TODO caminho que destroi os widgets
+     * desta tela -- troca de aba, resize, scroll das colunas, modelo novo do
+     * Mestre. O texto pendente vive dentro do widget, entao qualquer um desses
+     * caminhos perderia a ultima digitacao. O {@code changeTab} chama o flush
+     * tambem, e a segunda chamada e um no-op: {@link #flushMultiLineBoxes}
+     * limpa a marca de pendente, entao nao ha envio em duplicata.
+     */
+    @Override
+    protected void rebuildWidgets() {
+        flushMultiLineBoxes();
+        flushMaxWeight();
+        super.rebuildWidgets();
+    }
+
+    /**
+     * Qualquer saida de tela passa por aqui: ESC, botao Back, inventario, outra
+     * tela do mod, queda da conexao (FASE 2A).
+     *
+     * <p><b>Por que {@code removed()} e nao {@code onClose()}:</b> o
+     * {@code Minecraft.setScreen} chama {@code removed()} em <b>qualquer</b>
+     * troca de tela, e nao so no caminho do ESC -- o mesmo motivo que fez o
+     * {@code SheetEditorScreen} registrar o rascunho em {@code removed()} e nao
+     * no botao. Com o flush aqui, fechar a ficha (qualquer jeito) nao perde a
+     * ultima digitacao, e nao existe um caminho de fechamento paralelo.
+     */
+    @Override
+    public void removed() {
+        flushMultiLineBoxes();
+        flushMaxWeight();
+        super.removed();
+    }
+
+    /**
+     * Envia o texto pendente dos quadros grandes (FASE 2A).
+     *
+     * <p>Soh este metodo envia, e so o que esta marcado em
+     * {@link #pendingMultiLine}: digitar nao vira pacote (decisao do usuario, o
+     * limite e 2000 caracteres). A marca e limpa sempre, mesmo sem permissao de
+     * edicao, para que um texto marcado antes do {@code canEdit} virar {@code
+     * false} nao fique esperando para sempre.
+     */
+    private void flushMultiLineBoxes() {
+        if (pendingMultiLine.isEmpty()) {
+            return;
+        }
+        if (canEdit) {
+            for (String field : pendingMultiLine) {
+                MultiLineEditBox box = multiLineBoxes.get(field);
+                if (box != null) {
+                    ClientPlayNetworking.send(new RpgNetworking.SheetFieldPayload(
+                            targetName, field, box.getValue()));
+                }
+            }
+        }
+        pendingMultiLine.clear();
+    }
+
+    /**
+     * O clique tira o foco das caixas grandes? Entao e hora de enviar (FASE 2A).
+     *
+     * <p>Um dos tres momentos de saida do texto: sair do campo, trocar de aba e
+     * fechar a tela. O teste e o mesmo do roteamento do clique no vanilla
+     * ({@code getChildAt} -> {@code isMouseOver}), entao "o clique foi na outra
+     * caixa" tambem conta como saida: sair do Appearance para o Backstory
+     * envia o Appearance.
+     */
+    private void flushMultiLineOnFocusLoss(double mouseX, double mouseY) {
+        for (MultiLineEditBox box : multiLineBoxes.values()) {
+            if (box.isFocused() && !box.isMouseOver(mouseX, mouseY)) {
+                flushMultiLineBoxes();
+                return;
+            }
+        }
+    }
+
+    /**
+     * O clique e o terceiro momento de saida do texto grande (FASE 2A).
+     *
+     * <p><b>Por que o flush e ANTES do {@code super}:</b> e o {@code super} que
+     * move o foco para o widget clicado, entao depois do {@code super} o quadro
+     * ja perdeu o foco e nao daria para saber que era ele que estava sendo
+     * digitado. Antes, o unico quadro que pode estar com o foco e o que o
+     * clique nao acertou.
+     */
+    @Override
+    public boolean mouseClicked(MouseButtonEvent event, boolean doubleClick) {
+        // A barra tem prioridade sobre o `super`: ela e uma barra mesmo, e o
+        // clique nela e arrasto de barra, nao clique em widget.
+        if (onRightScrollbar(event.x(), event.y())) {
+            flushMultiLineOnFocusLoss(event.x(), event.y());
+            draggingRightBar = true;
+            setRightScrollFromMouse(event.y());
+            return true;
+        }
+        flushMultiLineOnFocusLoss(event.x(), event.y());
+        return super.mouseClicked(event, doubleClick);
+    }
+
+    /** Arrasto do polegar: o mesmo caminho de {@link #setRightScrollFromMouse}. */
+    @Override
+    public boolean mouseDragged(MouseButtonEvent event, double dragX, double dragY) {
+        if (draggingRightBar) {
+            setRightScrollFromMouse(event.y());
+            return true;
+        }
+        return super.mouseDragged(event, dragX, dragY);
+    }
+
+    @Override
+    public boolean mouseReleased(MouseButtonEvent event) {
+        if (draggingRightBar) {
+            draggingRightBar = false;
+            return true;
+        }
+        return super.mouseReleased(event);
+    }
+
+    /**
+     * Preenche os quadros grandes com o que o servidor tem (FASE 2A).
+     *
+     * <p><b>Por que nao sobrescreve a caixa com o foco:</b> mesma regra do
+     * {@code EditBox} no {@code applySheetToWidgets} da base. O eco do servidor
+     * chega enquanto o jogador ainda esta digitando (ele so envia ao sair do
+     * campo), e escrever por cima do texto parcial brigaria com o cursor -- o
+     * que apagaria o que esta sendo escrito. Quem esta digitando manda no
+     * proprio campo; o servidor so preenche os outros.
+     */
+    private void applyMultiLineBoxes() {
+        if (sheet == null) {
+            return;
+        }
+        suppressMultiLine = true;
+        try {
+            for (Map.Entry<String, MultiLineEditBox> entry : multiLineBoxes.entrySet()) {
+                MultiLineEditBox box = entry.getValue();
+                box.active = canEdit;
+                if (box.isFocused()) {
+                    continue;
+                }
+                String next = sheet.getText(entry.getKey());
+                // So escreve se mudou: evita reposicionar o cursor e a rolagem
+                // a cada tecla digitada pelo proprio usuario.
+                if (!next.equals(box.getValue())) {
+                    box.setValue(next);
+                }
+            }
+        } finally {
+            suppressMultiLine = false;
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // INVENTARIO: LIMITE DE PESO, LISTA E CONFIRMACAO DO DEL (FASE 2B)
+    // ------------------------------------------------------------------
+
+    /**
+     * O jogador digitou na caixa do limite de peso.
+     *
+     * <p><b>Envia a cada tecla que ja e um numero, e marca como pendente o que
+     * ainda nao e:</b> o texto "12." e o que existe entre digitar o ponto e o
+     * proximo digito, e ele nao parseia. Marcar so ele e o que evita gravar o
+     * limite antigo de novo e fazer o eco reescrever a caixa com o cursor no meio.
+     *
+     * <p><b>O flush e o {@link #flushMaxWeight()}, e nao este metodo</b> (ver o
+     * Javadoc dele), porque o {@code rebuildWidgets} destroi a caixa com o texto
+     * dentro.
+     */
+    private void onMaxWeightTyped(String value) {
+        if (suppressMaxWeight || !canEdit) {
+            return;
+        }
+        if (parseableWeight(value)) {
+            sendMaxWeight(value);
+        } else {
+            pendingMaxWeight = true;
+        }
+    }
+
+    /** O texto e um numero completo? "12." ainda nao e, e "12.5" e. */
+    private boolean parseableWeight(String value) {
+        if (value == null || value.isEmpty()) {
+            return false;
+        }
+        try {
+            Float.parseFloat(value);
+            return true;
+        } catch (NumberFormatException e) {
+            return false;
+        }
+    }
+
+    private void sendMaxWeight(String value) {
+        pendingMaxWeight = false;
+        ClientPlayNetworking.send(new RpgNetworking.SheetFieldPayload(targetName, "maxWeight", value));
+    }
+
+    /**
+     * Envia o limite de peso que ficou marcado (FASE 2B).
+     *
+     * <p><b>E o mesmo funil do {@link #flushMultiLineBoxes}, e pelos mesmos
+     * motivos:</b> o {@code rebuildWidgets} e o caminho que destroi a caixa (troca
+     * de aba, resize, rolagem da lista, estado novo do servidor), e o texto
+     * pendente vive dentro dela. Sem este flush, trocar de aba com "12." na caixa
+     * perderia o que o jogador digitou.
+     *
+     * <p><b>E um flush PROPRIO, e nao uma entrada a mais em
+     * {@code flushMultiLineBoxes}:</b> os dois guardam valores diferentes (a caixa
+     * e um {@code EditBox} de uma linha, os quadros sao {@code MultiLineEditBox})
+     * e a marca de pendente e de um valor so, nao de um conjunto.
+     */
+    private void flushMaxWeight() {
+        if (!pendingMaxWeight) {
+            return;
+        }
+        if (canEdit && maxWeightBox != null) {
+            // O que nao parseia vai formatado a partir do que parseia: se o
+            // jogador parou em "12.", o que ele quis dizer e 12, e nao 0.
+            sendMaxWeight(SheetData.formatWeight(parseWeightOrZero(maxWeightBox.getValue())));
+        }
+        pendingMaxWeight = false;
+    }
+
+    private static float parseWeightOrZero(String value) {
+        try {
+            return Float.parseFloat(value == null ? "" : value.trim());
+        } catch (NumberFormatException e) {
+            return 0f;
+        }
+    }
+
+    /**
+     * Preenche a caixa do limite de peso com o que o servidor tem (FASE 2B).
+     *
+     * <p><b>Nao sobrescreve a caixa com o foco:</b> a mesma regra do
+     * {@code EditBox} da base e dos quadros grandes. O eco chega enquanto o
+     * jogador ainda esta digitando, e o texto do servidor vem formatado
+     * ("12.00"), entao escrever por cima transformaria o "12." que ele esta
+     * digitando num "12.00" -- que o filtro de digito do jogador rejeitaria de
+     * volta.
+     */
+    private void applyMaxWeightBox() {
+        if (maxWeightBox == null) {
+            return;
+        }
+        maxWeightBox.setEditable(canEdit);
+        if (sheet == null || maxWeightBox.isFocused()) {
+            return;
+        }
+        String next = sheet.getText("maxWeight");
+        if (!next.equals(maxWeightBox.getValue())) {
+            suppressMaxWeight = true;
+            try {
+                maxWeightBox.setValue(next);
+            } finally {
+                suppressMaxWeight = false;
+            }
+        }
+    }
+
+    /**
+     * Reescreve a linha do resumo do peso (FASE 2B).
+     *
+     * <p><b>O vermelho vem so do {@link SheetData.Inventory#overweight()}:</b> o
+     * excesso e aviso, nunca bloqueio. Nenhuma regra de "carga maxima" existe no
+     * codigo -- quem decide se o personagem pode carregar o que carrega e o Mestre,
+     * em jogo, e o resumo existe para ele enxergar o numero.
+     *
+     * <p>E chamada no {@code applyExtraState} (que e quem recebe o eco) e nao no
+     * render: o {@code textLines} ja foi desenhado quando o {@code renderContent}
+     * roda, entao escrever la deixaria a cor e o total 1 frame atras.
+     */
+    private void applyWeightSummary() {
+        if (weightSummaryIndex < 0 || weightSummaryIndex >= textLines.size() || sheet == null) {
+            return;
+        }
+        SheetData.Inventory inventory = sheet.inventory();
+        String text = "Weight: " + SheetData.formatWeight(inventory.totalWeight())
+                + " / " + SheetData.formatWeight(inventory.maxWeight());
+        TextLine current = textLines.get(weightSummaryIndex);
+        textLines.set(weightSummaryIndex, new TextLine(text, current.x(), current.y(),
+                inventory.overweight() ? COL_DOWNED : COL_BOX_TEXT));
+    }
+
+    /**
+     * Abre o formulario do item: novo quando {@code index} e {@code -1}, edicao
+     * quando nao (FASE 2B).
+     */
+    private void openItemForm(int index, SheetData.InventoryItem item) {
+        delPendingIndex = -1;
+        this.minecraft.setScreen(new InventoryItemScreen(this, targetName, index, item));
+    }
+
+    /**
+     * O clique no Del: o primeiro so marca, o segundo no mesmo indice apaga
+     * (FASE 2B).
+     *
+     * <p><b>Por que confirmar:</b> apagar e o unico desta coluna sem volta -- o
+     * texto do item vai junto com ele -- e o botao fica do tamanho de "Del", ao
+     * lado de outros da mesma coluna.
+     */
+    private void onDeleteItem(int index) {
+        if (index < 0 || index >= inventoryItems().size()) {
+            delPendingIndex = -1;
+            return;
+        }
+        if (delPendingIndex != index) {
+            delPendingIndex = index;
+            rebuildWidgets();
+            return;
+        }
+        delPendingIndex = -1;
+        if (canEdit) {
+            ClientPlayNetworking.send(RpgNetworking.SheetItemPayload.remove(targetName, index));
+        }
+    }
+
+    /**
+     * Desenha a moldura vermelha no Del que espera o segundo clique (FASE 2B).
+     *
+     * <p><b>Uma moldura, e nao o fundo:</b> o {@code renderContent} roda DEPOIS
+     * de {@code super.render}, que e quem desenhou os widgets. PIntar o fundo do
+     * botao aqui cobriria o texto "Del?"; a moldura de 1px marca o botao sem
+     * passar por cima de nada.
+     */
+    private void drawDelConfirm(GuiGraphics graphics) {
+        ItemBox box = delPendingBox;
+        if (box == null) {
+            return;
+        }
+        graphics.fill(box.x(), box.y(), box.x() + box.w(), box.y() + 1, COL_DOWNED);
+        graphics.fill(box.x(), box.y() + box.h() - 1, box.x() + box.w(), box.y() + box.h(), COL_DOWNED);
+        graphics.fill(box.x(), box.y(), box.x() + 1, box.y() + box.h(), COL_DOWNED);
+        graphics.fill(box.x() + box.w() - 1, box.y(), box.x() + box.w(), box.y() + box.h(), COL_DOWNED);
+    }
+
+    /**
+     * Cumpre o pedido de remontar a lista quando o inventario mudou (FASE 2B).
+     *
+     * <p><b>E AQUI, e nao no {@code onSheetReceived}:</b> remontar recria todos os
+     * widgets da tela, e na aba 1 o jogador pode estar com o cursor num quadro de
+     * texto grande -- o texto que ele ainda nao enviou morreria com a caixa. O
+     * pedido fica marcado e e cumprido no primeiro frame em que nada da coluna
+     * esta com o foco.
+     *
+     * <p>Por que o rebuild sai logo depois: o {@code textLines} deste frame ja foi
+     * desenhado com a lista antiga (o {@code renderContent} roda no fim do
+     * {@code render}), entao continuar desenhando aqui seria por cima da lista nova.
+     * O proximo frame ja sai correto.
+     */
+    private void maybeRebuildInventory() {
+        if (!inventoryRebuildPending || activeTab != 1 || isEditingInventoryText()) {
+            return;
+        }
+        inventoryRebuildPending = false;
+        rebuildWidgets();
+    }
+
+    /** O jogador esta digitando em alguma caixa da coluna do inventario? */
+    private boolean isEditingInventoryText() {
+        if (maxWeightBox != null && maxWeightBox.isFocused()) {
+            return true;
+        }
+        for (MultiLineEditBox box : multiLineBoxes.values()) {
+            if (box.isFocused()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    @Override
+    public void render(GuiGraphics graphics, int mouseX, int mouseY, float delta) {
+        // As caixinhas ANTES de super.render(): e la dentro que o texto das
+        // linhas e os widgets sao desenhados, entao so assim o texto fica por
+        // cima da caixa. O fundo do painel ja foi pintado antes deste metodo
+        // (renderBackground), entao a caixa aparece sobre ele e nao some.
+        for (ItemBox box : itemBoxes) {
+            graphics.fill(box.x(), box.y(), box.x() + box.w(), box.y() + box.h(), COL_ITEM_BG);
+        }
+
+        super.render(graphics, mouseX, mouseY, delta);
+
+        // O nome da aba e o unico texto desta tela desenhado FORA de
+        // `textLines`, e e depois de super.render() de proposito: dentro da lista
+        // ele rolaria junto com o conteudo, e um rotulo que sobe e desce com a
+        // coluna deixa de dizer em que pagina o jogador esta. Aqui ele fica
+        // parado na barra. O `bottomY` do addTabBar e o `contentBottom` que a
+        // base calculou, entao a mesma conta posiciona o texto e os botoes.
+        String tab = TAB_NAMES[activeTab];
+        int x = panelX + (panelW - this.font.width(tab)) / 2;
+        int y = contentBottom - TAB_BAR_H + (TAB_BAR_H - 8) / 2;
+        graphics.drawString(this.font, tab, x, y, COL_SECTION, false);
+
+        // A barra vai DEPOIS do texto e dos widgets: ela mora na folga da borda
+        // direita, mas um polegar sobre a caixa de um item tem de ficar por cima.
+        renderRightScrollbar(graphics);
     }
 
     // ------------------------------------------------------------------
@@ -1389,6 +2633,14 @@ public class StatusScreen extends CharacterSheetScreen {
                         SheetData.Pericia.VALUE_MIN, periciaValueMax());
             }
         }
+        // Os quadros de texto da aba 2 nao estao no `fieldBoxes` da base, entao
+        // nao seriam preenchidos pelo laco de cima: e aqui que eles recebem o
+        // estado do servidor (FASE 2A).
+        applyMultiLineBoxes();
+        // Mesma coisa na coluna do inventario (FASE 2B): a caixa do limite de
+        // peso e a linha do resumo tambem nao estao no `fieldBoxes`.
+        applyMaxWeightBox();
+        applyWeightSummary();
     }
 
     /**
@@ -1426,6 +2678,20 @@ public class StatusScreen extends CharacterSheetScreen {
     protected void onSheetReceived() {
         reconcilePericiaValues();
         pendingPericiaAttribute.clear();
+        // 30/09/2026 (FASE 2B): o eco pode ter trazido uma lista de inventario
+        // diferente, e so o `rebuildWidgets` consegue trocar widgets. O pedido
+        // fica marcado e sai no `renderContent` ({@link #maybeRebuildInventory}).
+        // A comparacao e por `equals` do record, e nao por referencia: o
+        // servidor reconstroi a ficha a cada gravacao, entao sem o `equals`
+        // TODO eco contaria como mudanca.
+        SheetData.Inventory current = sheet == null ? null : sheet.inventory();
+        if (!Objects.equals(current, lastInventory)) {
+            lastInventory = current;
+            // Estado novo do servidor e a morte natural da marcacao do Del: o
+            // indice marcado pode ser outro item agora.
+            delPendingIndex = -1;
+            inventoryRebuildPending = true;
+        }
     }
 
     /**
@@ -1460,6 +2726,12 @@ public class StatusScreen extends CharacterSheetScreen {
 
     @Override
     protected void renderContent(GuiGraphics graphics, int mouseX, int mouseY) {
+        // 30/09/2026 (FASE 2B): primeiro mesmo, porque o `rebuildWidgets` refaz
+        // o layout e o resto do desenho deste frame usaria a geometria antiga.
+        maybeRebuildInventory();
+        // A moldura do Del e desenhada aqui porque o `renderContent` roda depois
+        // de `super.render`, que e quem desenhou o botao.
+        drawDelConfirm(graphics);
         // HP: negativo esvazia a barra (o servidor aplica o estado deitado).
         // O denominador NAO e forcado para 1: uma ficha pode legitimately ter
         // manaMax = 0 e precisa mostrar "0 / 0", nao "0 / 1".
@@ -1618,9 +2890,47 @@ public class StatusScreen extends CharacterSheetScreen {
      */
     @Override
     public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
+        // 30/09/2026 (FASE 2A): o quadro de texto da aba 2 e um widget, entao
+        // precisa receber a roda para rolar as linhas que nao cabem na altura
+        // dele. Este e o mesmo padrao do SkillsScreen: super PRIMEIRO, e o que
+        // sobrar da roda e nosso.
+        //
+        // <b>Por que isso nao muda o scroll da aba 1:</b> o `super` nao repassa a
+        // roda para a tela, ele pergunta ao widget que esta SOB o cursor
+        // (`getChildAt` faz hit test por `isMouseOver`) e so devolve true se
+        // algum deles consumir. Na aba 1 nao ha nenhum `MultiLineEditBox`, e
+        // `EditBox`/`Button` nao sobrescrevem `mouseScrolled` (confirmado no
+        // bytecode do 1.21.11: devolvem o false padrao), entao a roda chega
+        // inteira na logica de coluna logo abaixo, como antes.
+        if (super.mouseScrolled(mouseX, mouseY, scrollX, scrollY)) {
+            return true;
+        }
         // Convencao do vanilla: deltaY NEGATIVO e rolar para BAIXO, e rolar para
         // baixo avanca o conteudo (o mesmo de SkillsScreen.mouseScrolled).
         int step = scrollY < 0 ? 1 : -1;
+        // 30/09/2026 (FASE 2B): a coluna do inventario e da aba 1, e e a PRIMEIRA
+        // das tres a testar a posicao do mouse. Ela e a unica das tres que e o
+        // widget de rolagem mais da direita, e o `super` acima ja deu a roda ao
+        // quadro de texto que estiver sob o cursor -- entao o que sobra da roda
+        // aqui e de verdade da lista.
+        if (activeTab == 1 && isOverRightPanel(mouseX, mouseY)) {
+            int next = clampRightScroll(rightScroll + step * INV_DESC_ADV);
+            if (next != rightScroll) {
+                rightScroll = next;
+                // A rolagem recria os widgets, entao o texto meio digitado de um
+                // quadro morreria com a caixa -- e a marcacao do Del aponta para
+                // um item que pode ter saído da tela.
+                delPendingIndex = -1;
+                rebuildWidgets();
+            }
+            return true;
+        }
+        // 30/09/2026 (abas): so a aba 0 tem coluna de pericias/rolagem propria.
+        // Nas outras a geometria seria a da ultima aba montada, entao sem este
+        // guarda a roda moveria o scroll de uma aba que nao esta na tela.
+        if (activeTab != 0) {
+            return false;
+        }
         // A coluna de pericias tem preferencia: e dela que o scroll veio antes.
         if (isOverPericiaColumn(mouseX, mouseY)) {
             int next = clampPerScroll(perScroll + (int) -Math.signum(scrollY));

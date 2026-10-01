@@ -1977,3 +1977,255 @@ existe. Sintoma tipico: "nao faz nada, sem erro" = registro faltando.
 bloqueio (isMaster falso / sem tranca na dimensao / sem item na mao / desenhando N).
 Deduplicado por `lastDiagnostic` para nao spammar a cada frame. Quando uma feature de
 cliente nao aparece, o log diz em qual etapa parou, sem precisar de adivinhacao.
+## 2026-09-30 (fase 1 das abas) — 3 abas na ficha, so UI
+
+**FATO verificado:** as abas vivem em `StatusScreen`, **nao** em `CharacterSheetScreen`.
+A base e compartilhada com `SkillsScreen` (`CharacterSheetScreen.java:46`), entao mexer
+na base teria quebrado a tela de Skills. O gancho ja existia: `buildPanel(x0, panelW,
+topY, bottomY)` e abstrato, e `init()` so entrega as coordenadas e cuida do rodape
+(`:509-546`). `buildPanel` virou despachante e o corpo antigo virou
+`buildCharacterTab`; as abas 2 e 3 nao criam widget nenhum nesta fase.
+
+**FATO verificado:** guardar scroll por aba **nao** pode ser feito em `init()`, porque
+`init()` tambem roda em resize, troca de modelo e rolagem (`rebuildWidgets()` chama
+`init()`, `CharacterSheetScreen.java:505`). A troca mora em `changeTab`, que salva o valor
+antigo no array da aba antiga e carrega o da nova antes do `rebuildWidgets()`.
+
+**FATO verificado (API 1.21.11, conferido no jar remapeado):** `Button.Builder.tooltip`
+recebe **`Tooltip`**, nao `Component` — o certo e `Tooltip.create(Component.literal(...))`.
+`AbstractWidget.active` e um **campo publico** (mesmo padrao ja usado em
+`SheetEditorScreen`), e e assim que a setinha da ponta fica desabilitada.
+
+**FATO verificado:** o nome da aba precisa ser desenhado **fora** de `textLines` (a lista
+da base rola com o conteudo) e **depois** de `super.render()`. Dentro da lista, o rotulo
+sobe e desce com a coluna e deixa de dizer em que pagina o jogador esta.
+
+**FATO verificado:** a barra de abas **nao** colide com o `Back`. `contentBottom =
+height - 30`, a barra ocupa `contentBottom-20 .. contentBottom`, e o `Back` comeca em
+`height - 24` (`= contentBottom + 6`). Confirmado por conta, **nao** por imagem.
+
+**FATO verificado — o cliente subiu e nao deu crash:** `BUILD SUCCESSFUL in 1m 20s`,
+log sem `Exception`, `Tecla R pressionada -> abrindo RpgMenuScreen` e `Stopping!` com
+`All dimensions are saved`. **Mas ele ficou 7 segundos**: o usuario abriu o menu e fechou.
+Ou seja, **a aba em si ainda nao foi vista por ninguem** — nao afirmar que a fase 1 foi
+validada em jogo.
+
+**FATO verificado — caminho do detector de catalogo:** `check-catalogo.ps1` **nao esta no
+projeto nem na pasta `agent`**. Ele fica na pasta da skill:
+`C:\Users\Danylo Henrique\.config\opencode\skills\agente-tcc\catalogo-sync\check-catalogo.ps1`.
+Rodar com `-File .\scripts\check-catalogo.ps1` falha com "o argumento nao existe".
+Resultado atual: **1 divergencia**, `/rpg/roll/Pericia/0-2`, que e exemplo de entrada do
+jogador e nao literal do codigo — falso positivo conhecido.
+
+## 2026-09-30 (fase 2A das abas) — Character Appearance e Character Backstory
+
+**CORRECAO de um FATO que eu mesmo escrevi errado:** eu disse que
+`StreamCodec.composite` "tem teto de 6 pares" e que por isso o `Identity` de 7 campos
+precisaria de `StreamCodec.of`. **Falso**: `javap` no
+`minecraft-common-...layered+hash.2198-v2.jar` mostra sobrecargas de `composite` **ate
+12 pares** — havia uma de 7 que aceitaria `Identity::new`. A troca para `of` foi feita
+assim mesmo (bate com o `of` ja usado no topo do `SheetData` e deixa encoder/decoder
+visiveis lado a lado), mas **nao por impossibilidade de compilar**. Nao repita o limite
+de 6: ele nao existe.
+
+**FATO verificado:** `appearance` e `backstory` entraram no sub-record
+`SheetData.Identity` (7 `String`), **nao** como componente novo do `SheetData`. O motivo
+e risco: o NBT do `Identity` ja usa `optionalFieldOf` por chave (ficha antiga sem a chave
+carrega com `""`), enquanto o codec de topo do `SheetData` tem ordem sensivel e ~8
+pontos de construtor em `withField`. Teto novo `MAX_TEXT = 2_000` com `cleanText`, ao
+lado do `clean` de `MAX_NAME` (32); o `Identity` compacto escolhe o teto **pelo nome do
+componente**, e cada `withX` reconstroi passando os outros 6 preservados. `String` de
+2.000 no `STREAM_CODEC` usa `stringUtf8(MAX_TEXT)` no encoder e no decoder, nessa ordem:
+`appearance` antes de `backstory`.
+
+**FATO verificado:** `SheetFieldPayload.value` era `stringUtf8(64)` — **64 caracteres nao
+comportam 2.000**. Virou `stringUtf8(2048)`, com folga para o `cleanText` truncar no
+servidor antes do pacote estourar. O limite maior vale para **todos** os campos do
+payload, nao so para os novos.
+
+**FATO verificado:** `SheetModel.labelOf` tem `default` que devolve o proprio nome do
+campo, entao `SheetData.labelOf` (que so alcança o `switch` quando o modelo devolve
+**vazio**) nunca era chamado para campo novo, e a tela desenharia "appearance" cru. O
+fallback dos rotulos novos foi posto **no topo** de `SheetData.labelOf`, antes de
+consultar o modelo.
+
+**FATO verificado:** `MultiLineEditBox.setValue(String)` chama o `setValueListener`
+**mesmo quando quem chamou e o codigo** (o `boolean` da sobrecarga so controla overflow
+de `setLineLimit`). Logo, preencher a caixa no eco do servidor marca o campo como
+pendente e reenvia em vao: precisa de guarda (`suppressMultiLine`) e pular a caixa com
+foco.
+
+**FATO verificado:** o texto pendente mora **dentro do widget**, e `rebuildWidgets()` e o
+funil de todo caminho que destroi widgets (resize, scroll, troca de modelo). Por isso o
+`flush` esta tambem no `rebuildWidgets()`, alem de clique fora (antes do `super`, que e
+quem muda o foco), `changeTab` e `removed()` — e nao `onClose()`, para nao criar caminho
+de fechamento paralelo.
+
+**FATO verificado:** `AbstractWidget` e `EditBox` **nao** sobrescrevem `mouseScrolled`
+(devolvem `false`), e `ContainerEventHandler.mouseScrolled` faz hit test nos filhos. Entao
+`if (super.mouseScrolled(...)) return true;` no topo **nao altera** o scroll da aba 1:
+la nao ha `MultiLineEditBox`. Isso e o padrao que `SkillsScreen.java:929` ja usava.
+
+**FATO verificado:** `MultiLineEditBox` nao tem `setEditable`; `active = false` e o que
+bloqueia digitacao (o `isMouseOver` do `AbstractTextAreaWidget` testa `active && visible`).
+
+**FATO verificado:** `cleanText` faz `trim()`. Digitar espaco no fim e perder o espaco no
+eco do servidor e **esperado**, nao bug.
+
+**FATO verificado — o relatorio do subagente pode vir com caractere estranho e o codigo
+continuar limpo.** O texto do relatorio da fase 2A saiu com ideograma e palavra em
+ingles no meio. O `scanEncoding` do build reprovou **zero** arquivos: o codigo estava
+limpo e o defeito era so do texto do relatorio. Nao tratar o relatorio do subagente como
+fonte de verdade para o catalogo nem para a memoria — confira o codigo.
+
+**Armadilha minha, ja aconteceu duas vezes:** **nao copie o trecho defeituoso literal
+paraillustrates o problema.** Citar "um par de ideogramas chineses" e seguro; colar os
+caracteres dentro da aspas leva o defeito para o arquivo novo e reprova o
+`scanEncoding`. Descreva, nunca transcreva.
+
+## 2026-09-30 - PAUSA no meio da fase 2B (estado para retomar)
+
+**FATO verificado:** a fase 2A (Character Appearance e Character Backstory) foi
+**validada em jogo pelo usuario**: os dois quadrados grandes funcionam, com rolagem. O
+relatorio da fase 2A (`agent/reports/2026-09-30_abas-da-ficha-fase2a-texto-grande.md`)
+ainda diz "nao validado em jogo" porque foi escrito antes do teste; **esta entrada e a
+correcao**.
+
+**FATO verificado - a fase 2B foi CANCELADA no meio e deixou a arvore suja.** A
+delegacao do `Inventory` foi interrompida pelo usuario antes de devolver relatorio, e ela
+**ja tinha escrito arquivos** nesse instante. Estado da working tree depois do cancelamento:
+
+- esperados da 2B: `InventoryItemScreen.java` (novo) e `SheetDataInventoryTest.java` (novo);
+- **inesperado: `SheetModel.java` e `SheetModelCodecTest.java` foram alterados, e os dois
+  estavam explicitamente FORA da lista de arquivos que eu autorizei.** Nao aceite sem ler
+  o diff: pode ser ajuste legitimo ou pode ter sido o subagente cortando caminho;
+- `SheetData.java`, `RpgNetworking.java` e `StatusScreen.java` tem o diff grande da 2B
+  **misturado com o da 2A no mesmo arquivo**, entao **nao da para reverter a 2B sem
+  passar por cima da 2A**.
+
+**O build NAO rodou depois dessas mudancas: nao se sabe se a arvore compila.** O primeiro
+passo ao retomar e `.\gradlew.bat build --no-daemon --console=plain`, para saber em que
+estado o cancelamento deixou o codigo, **antes** de revisar ou escrever mais nada.
+**Nada foi revertido**: reverter parte seria apagar trabalho, e a 2A esta no mesmo diff.
+
+**FATO verificado:** cancelar uma delegacao **nao desfaz** o que o subagente ja
+escreveu. Conferir `git status --short` logo apos o cancelamento e barato e teria dito
+isto em segundos.
+
+## 2026-09-30 (fase 2B) — Inventory: itens, peso, e o bug de `<clinit>` no codec
+
+**FATO verificado — o bug mais serio que ja apareceu neste projeto.** Ler
+`Inventory.EMPTY` como padrao de `optionalFieldOf` **dentro de `SheetData.CODEC`** devolve
+`null` quando um save antigo chega enquanto o `<clinit>` de `Inventory`/`InventoryItem`
+ainda esta rodando: `InventoryItem.EMPTY` monta a ficha ao ser construido, o ciclo fecha, e
+o JVM devolve o `EMPTY` ainda nulo. O DataFixerUpper explode em `Optional.of(null)`. Como
+`SheetData.CODEC` e o codec do NBT da ficha (`PlayerSheetPersistenceMixin`), isso derrubava
+**login e salvamento da ficha**, nao so um teste. **Correcao:** construir o padrao na hora
+(`new Inventory(List.of(), 0f)`) em vez de ler a constante de outra classe.
+**Licao:** em codec com `optionalFieldOf`, o padrao tem de ser **construido**, nunca lido de
+uma classe que possa estar em `<clinit>`.
+
+**CORRECAO de FATO meu:** eu disse varias vezes que codec do `SheetData` **nao roda em JVM
+isolada** porque `SheetData.<clinit>` precisa do registro vanilla. **Falso.**
+`SheetModelCodecTest` faz round-trip de `SheetData.STREAM_CODEC` com `FriendlyByteBuf` e
+passa, e codec do DataFixerUpper roda em teste comum. **Exija teste de codec** — inclusive de
+NBT e de **ficha antiga sem a chave nova**, que e a garantia de compatibilidade. Esse FATO
+falso foi o que me fez escrever "nao tente escrever teste de codec" no briefing, e o
+trabalho veio sem a cobertura que teria pego o bug.
+
+**FATO verificado:** eu **proibi** o subagente de editar `SheetModel.java` e
+`SheetModelCodecTest.java`, e a restricao estava **errada**: `SheetModel.align()` monta
+`new SheetData(...)`, entao o 10o componente e **obrigatorio** ali. Restringir arquivo por
+nome quando a mudanca e mecanica e inevitavel so cria conflito com a tarefa.
+
+**FATO verificado:** peso com semantica de `float`: `Math.round(w * 100f) / 100f`.
+`1.005f` vale `1.00499999523`, entao arredonda para **1.0**, e nao 1.01 como daria
+`BigDecimal`. `totalWeight()` arredonda a soma **so no final**, senao 50 itens acumulando
+erro de float fariam o "passou do maximo" piscar. **Nao** teste peso em fronteira de float
+(`1.005`): o teste que falhou falhou por causa do valor escolhido, nao do codigo.
+
+**Risco latente, NAO corrigido (30/09/2026):** o lado oposto do mesmo ciclo. Se
+`InventoryItem` for tocada antes de `SheetData`, o `<clinit>` de `Inventory` roda enquanto
+`InventoryItem.STREAM_CODEC` ainda e `null` -> `ExceptionInInitializerError`. O suite do
+Gradle nao faz isso hoje. Consertar exige mexer na ordem das estaticas ou tornar
+`InventoryItem.EMPTY`/`Inventory.STREAM_CODEC` preguiçosos, o que muda a semantica de
+inicializacao de classe: e decisao de desenho, deixada em aberto.
+
+**FATO verificado:** a UI da fase 2B (`addInventoryColumn` + `InventoryItemScreen`) nao tem
+teste nenhum. Compilar e o unico gate ate a primeira vez que o jogador abrir a tela.
+
+### Armadilha de `FormattedCharSequence` (bug real, achado pelo usuario em 30/09/2026)
+
+**FATO verificado:** em 1.21.11 `FormattedCharSequence` **nao estende `CharSequence`** e
+**nao tem `length()`**. Duas consequencias, ambas vividas na pratica:
+
+1. `part + TRUNCATION_MARK` **compila** — o `+` do Java aceita um lado `String`
+   (`TRUNCATION_MARK` e String) e converte o outro com `String.valueOf(part)`. O que
+   aparece na tela e `net.minecraft.util.FormattedCharSequence$Lambda/0x...@...`, e o
+   texto some. **Nunca junte texto vindo de `font.split` com `+`:** o resultado e
+   `FormattedCharSequence`, nao `String`. Para achatar, percorrer
+   `accept((index, style, codePoint) -> { ...; return true; })` devolvendo `true` para
+   continuar. `StringBuilder(sequence.length())` tambem nao compila.
+2. `StringBuilder(sequence.length())` quebra a compilacao — use `new StringBuilder()`.
+
+**FATO verificado:** `renderBackground` pinta o fundo **antes** de `render`, e o texto das
+`textLines` e desenhado **dentro** de `super.render()`. Logo um fundo desenhado no topo do
+`render` da subclasse fica **sob** o texto e **sobre** o painel, sem mexer na classe base —
+foi assim que a caixinha do item entrou sem tocar `CharacterSheetScreen`.
+
+**Pedido do usuario (30/09/2026):** item de inventario desenhado **dentro de uma caixinha
+um pouco mais escura**, e nao solto na lista. Virou `COL_ITEM_BG` (0xF2101016, contra
+0xF216161C do painel) + `INV_PAD` (3) de folga interna.
+
+**Armadilhas de layout achadas no mesmo dia (valem para qualquer tela com lista):**
+
+- **Rotulo com largura fixa invade o widget.** `LABEL_W = 52` era fixo e
+  "Description" e a palavra mais larga do formulario: com `x = caixa - LABEL_W`, o
+  rotulo transbordava para dentro da caixa. **Meça o maior rotulo**
+  (`font.width("Description") + 6`) e **alinhe pela direita** (`direita - font.width(texto)`),
+  assim uma palavra larga cresce para a esquerda, nunca para dentro do campo.
+- **Rotulo tem que sair do `getY()` da caixa que ele nomeia, nao de uma Y de
+  formulario.** A caixa de descricao cresce ate o rodape, entao ela **nao** esta na
+  4a linha do formulario: o rotulo ficava uma linha acima da caixa que nomeava.
+- **Quem mede a quebra de linha e quem conta as linhas tem que usar a MESMA largura.**
+  Aqui o texto recuado dentro da caixa (`rightTextW(w)`) e a contagem de linhas
+  (`rightDescLines`) medem com larguras diferentes; se divergirem, `parts.get(i)`
+  estoura a lista. Por isso `rightTextW` e um metodo, e nao uma constante repetida.
+
+**Barra de rolagem (30/09/2026):** o projeto **ja tinha** o padrao, em `SkillsScreen.java`
+(`renderListScrollbar`, `onListScrollbar`, `setSkillScrollFromMouse`, campo
+`draggingScrollbar`): trilho `0xFF303038`, polegar `0xFFE8E8EE`, polegar
+proporcional ao conteudo com minimo de 8 px, e trilho do tamanho da area **visivel**
+(nao do conteudo). **Reutilize esse idiomado em vez de inventar outro.**
+
+- **API de mouse do 1.21.11 usa `MouseButtonEvent`**, nao os `double` antigos:
+  `mouseClicked(MouseButtonEvent, boolean)`, `mouseDragged(MouseButtonEvent, double, double)`
+  e `mouseReleased(MouseButtonEvent)`.
+- **A largura da barra e limitada pela folga interna da lista.** Com `INV_PAD_X` = 4 e o
+  texto do peso encostado na direita, uma barra de 6 px (a do SkillsScreen) passaria por
+  cima dele: a barra da lista de itens ficou com **4 px**, na propria folga.
+
+**Recorte de lista (30/09/2026):** o filtro "o item inteiro cabe na faixa" sumia com o item
+inteiro e a lista dava impressao de buraco. Agora o filtro e "**tem algum pedaco visivel**",
+e quem recorta e o proprio item:
+
+- **Fundo:** a caixa e a **intersecao** do bloco do item com a faixa visivel, entao o fundo
+  nunca pinta em cima do cabecalho nem do rodape.
+- **Texto e botao:** cada linha e cada botao passam por `lineInList(y, h)` e so existem
+  se couberem **inteiros**. Botao cortado **nao** pode existir: seria clicavel sem o jogador
+  ve-lo — que e exatamente o bug que o corte "linha inteira" da coluna esquerda ja tinha
+ bishado antes (texto por cima do botao `Back`).
+
+**Licao:** o filtro de visibilidade de uma lista com widgets tem **duas** camadas — o que e
+desenhado (pode ser recortado pela faixa) e o que e clicavel (nao pode ser recortado). Tratar
+os dois com a mesma regra ou esconde conteudo ou cria clique invisivel.
+
+**FATO verificado (processo, 30/09/2026) — edicao em lote no mesmo arquivo mente.** Varias
+`edit` no mesmo arquivo numa unica mensagem devolveram "Edit applied successfully" **sem ter
+aplicado um dos trechos**, e outra reportou "nao encontrado" **tendo aplicado**. O guarda de
+`textLines` que impedia o texto de sair da lista simplesmente nao entrou, e o build passou
+verde: o bug so apareceu em jogo (texto por cima do botao `+ Item`). **Regra:** edicao em
+lote so no mesmo arquivo e com trechos bem distintos; **sempre** confirmar com `grep` do
+`if (guarda)`/simbolo depois, e aplicar **uma de cada vez** quando o arquivo for critico.
+Nao confie no "applied" nem no "error" da ferramenta para garantir o estado do arquivo.
+
