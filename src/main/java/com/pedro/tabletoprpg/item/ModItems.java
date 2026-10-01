@@ -430,8 +430,10 @@ public final class ModItems {
             }
             CompoundTag tag = presetTag(stack);
             if (tag == null) {
+                // Item sem nenhum preset dentro. Situacao diferente da de baixo (preset
+                // apagado): aqui nem existe nome para dizer qual era.
                 serverPlayer.displayClientMessage(
-                        Component.translatable("message.tabletoprpg.preset_no_preset_on_item"), true);
+                        Component.translatable("message.tabletoprpg.preset_no_data_on_item"), true);
                 return InteractionResult.FAIL;
             }
 
