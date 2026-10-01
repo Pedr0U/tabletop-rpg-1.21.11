@@ -11,6 +11,7 @@ import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.Mob;
+import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.levelgen.Heightmap;
@@ -108,10 +109,24 @@ public final class CombatController {
             if (!(player instanceof ServerPlayer serverPlayer)) {
                 return InteractionResult.PASS;
             }
+            // Camera Tool responde ANTES da checagem de Mestre: um jogador comum com o
+            // item na mao precisa receber a recusa, senao o item seria um botao morto e
+            // silencioso. Se ela consumir o clique, a selecao normal nao roda -- no
+            // mesmo clique nao pode haver camera E selecao.
+            if (CameraToolManager.handleEntityClick(serverPlayer, (ServerLevel) level, hand, entity,
+                    hitResult != null)) {
+                return InteractionResult.FAIL;
+            }
             if (!SessionManager.isMaster(serverPlayer)) {
                 return InteractionResult.PASS;
             }
-            if (entity instanceof Mob mob) {
+            // O clique acerta a PARTE, nao a entidade. O Ender Dragon e montado de
+            // partes, e cada parte e uma entidade que NAO e um Mob -- entao o teste
+            // abaixo reprovava e o Mestre nao conseguia selecionar o dragao de jeito
+            // nenhum (bug relatado em 01/10/2026). Ver EntityTargets.
+            Entity target = EntityTargets.resolve(entity);
+
+            if (target instanceof Mob mob) {
                 // O cliente envia 2 pacotes por clique (interactAt + interact).
                 // O 2º pacote (interact, sem posição) chega com hitResult == null.
                 // Ignoramos para o toggle disparar apenas 1x por clique.
@@ -120,6 +135,17 @@ public final class CombatController {
                 }
                 toggleSelection((ServerLevel) level, serverPlayer, mob);
                 return InteractionResult.FAIL; // cancela a interação vanilla
+            }
+
+            // Diagnostico pedido em 01/10/2026: o clique chegou, o jogador e Mestre,
+            // mas a entidade nao serve para selecao. E o unico rastro possivel quando
+            // uma criatura de mod montada de partes falhar -- o 1.21.11 nao tem API
+            // generica para desembrulhar partes, entao este log e a pista.
+            // Jogador fica de fora de proposito: clicar num jogador e rotina.
+            // hitResult != null limita a 1 linha por clique (o 2o pacote vem nulo).
+            if (hitResult != null && !(target instanceof Player)) {
+                TabletopRpg.LOGGER.info("[TabletopRPG] Clique do Mestre sem alvo valido: {}",
+                        EntityTargets.describe(entity, target));
             }
             return InteractionResult.PASS;
         });
