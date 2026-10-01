@@ -780,6 +780,64 @@ public final class RpgNetworking {
     }
 
     /**
+     * Cliente -&gt; Servidor: cria/edita/apaga uma <b>magia</b> da pagina 3 da
+     * ficha (01/10/2026).
+     *
+     * <p><b>Por que um pacote so, e nao um por magia:</b> a identidade de uma
+     * magia e o <b>indice na lista guardada</b>, igual ao item do inventario
+     * (ver {@link SheetItemPayload}). O indice nao sobrevive a reordenacao, e por
+     * isso que {@link SheetData.Spellbook#visible(int)} devolve o indice
+     * <b>guardado</b> e nao a posicao exibida: o filtro ordena a tela, nunca a
+     * lista.
+     *
+     * <p><b>Nao existe {@code MOVE}:</b> a ordem exibida e sempreautomaticamente
+     * (circulo crescente, depois alfabetica), entao o jogador nao tem o que
+     * mover.
+     *
+     * <p><b>Por que o atributo de conjuracao e a CD nao vem aqui:</b> sao
+     * globais da pagina e nao pertencem a uma magia, entao viajam pelo
+     * {@link SheetFieldPayload} como os outros campos simples da ficha.
+     */
+    public record SheetSpellPayload(String targetName, SheetData.SpellOp op, int index,
+                                    SheetData.Spell spell) implements CustomPacketPayload {
+        public static final Type<SheetSpellPayload> TYPE = new Type<>(TabletopRpg.id("sheet_spell"));
+        public static final StreamCodec<FriendlyByteBuf, SheetSpellPayload> STREAM_CODEC = StreamCodec.composite(
+                ByteBufCodecs.stringUtf8(64), SheetSpellPayload::targetName,
+                SheetData.SpellOp.STREAM_CODEC, SheetSpellPayload::op,
+                ByteBufCodecs.VAR_INT, SheetSpellPayload::index,
+                SheetData.Spell.STREAM_CODEC, SheetSpellPayload::spell,
+                SheetSpellPayload::new
+        );
+
+        /** Atalho: criar uma magia nova (o indice nao importa no ADD). */
+        public static SheetSpellPayload add(String targetName, SheetData.Spell spell) {
+            return new SheetSpellPayload(targetName, SheetData.SpellOp.ADD, -1, spell);
+        }
+
+        /**
+         * Atalho: apagar a magia do indice.
+         *
+         * <p>O {@code spell} e' o {@link SheetData.Spell#EMPTY}, e nao
+         * {@code null}: o codec do record le os sete campos sempre, e um
+         * {@code null} aqui derrubaria o pacote inteiro no cliente em vez de
+         * exigir o campo. Mesmo motivo do {@link SheetItemPayload#remove}.
+         */
+        public static SheetSpellPayload remove(String targetName, int index) {
+            return new SheetSpellPayload(targetName, SheetData.SpellOp.REMOVE, index, SheetData.Spell.EMPTY);
+        }
+
+        /** Atalho: salvar a edicao da magia que esta no indice, no mesmo lugar. */
+        public static SheetSpellPayload update(String targetName, int index, SheetData.Spell spell) {
+            return new SheetSpellPayload(targetName, SheetData.SpellOp.UPDATE, index, spell);
+        }
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
+    /**
      * Cliente -&gt; Servidor: muda o <b>valor</b> ou o <b>atributo</b> de uma perícia.
      *
      * <p>Não existe "add" nem "remove" aqui, de propósito. A lista de perícias
@@ -901,6 +959,8 @@ public final class RpgNetworking {
         PayloadTypeRegistry.playC2S().register(SheetPericiaPayload.TYPE, SheetPericiaPayload.STREAM_CODEC);
         // 30/09/2026 (FASE 2B): a lista de itens do inventario da ficha.
         PayloadTypeRegistry.playC2S().register(SheetItemPayload.TYPE, SheetItemPayload.STREAM_CODEC);
+        // 01/10/2026 (pagina 3 da ficha): a lista de magias.
+        PayloadTypeRegistry.playC2S().register(SheetSpellPayload.TYPE, SheetSpellPayload.STREAM_CODEC);
         PayloadTypeRegistry.playS2C().register(DownedStatePayload.TYPE, DownedStatePayload.STREAM_CODEC);
         // Modelo global da ficha (27/09/2026, Sheet Editor). S2C para todo mundo
         // porque o modelo desenha a ficha dos OUTROS tambem; C2S porque a edicao
@@ -1180,6 +1240,31 @@ public final class RpgNetworking {
             broadcastSheet(target);
         });
 
+        // Cria/edita/apaga uma MAGIA da pagina 3 (01/10/2026). Mesma regra de
+        // permissao do item do inventario: o Mestre edita qualquer ficha, o
+        // jogador so a propria.
+        ServerPlayNetworking.registerGlobalReceiver(SheetSpellPayload.TYPE, (payload, context) -> {
+            ServerPlayer sender = context.player();
+            ServerPlayer target = resolveSheetTarget(sender, payload.targetName());
+            if (target == null || !canEditSheet(sender, target)) {
+                return;
+            }
+            SheetData current = SessionManager.getOrCreateSheet(target.getUUID(), target.getName().getString());
+            SheetData updated = switch (payload.op() == null ? SheetData.SpellOp.INVALID : payload.op()) {
+                case ADD -> current.withSpellAdded(payload.spell());
+                case UPDATE -> updateSpell(current, payload);
+                case REMOVE -> current.withSpellRemoved(payload.index());
+                // Pacote corrompido: melhor nao fazer nada do que transformar
+                // uma op invalida em "criar magia".
+                case INVALID -> current;
+            };
+            if (updated == current) {
+                return; // indice fora da lista, lista cheia, magia sem nome, ou nada mudou
+            }
+            SessionManager.setSheet(target.getUUID(), updated);
+            broadcastSheet(target);
+        });
+
         // Muda o VALOR ou o ATRIBUTO de uma PERÍCIA já existente. Criar e
         // remover perícia é do Mestre, no Sheet Editor; este pacote só ajusta os
         // dois campos, e vale a mesma regra de permissão dos outros campos da
@@ -1350,6 +1435,33 @@ public final class RpgNetworking {
             return current;
         }
         return current.withInventory(current.inventory().withItem(index, item));
+    }
+
+    /**
+     * Aplica o {@code SpellOp.UPDATE}: troca a magia que esta no indice do
+     * payload, <b>no mesmo lugar</b> da lista (01/10/2026, pagina 3).
+     *
+     * <p><b>Indice fora da lista e magia sem nome devolvem a ficha intacta</b>, e o
+     * receptor ve {@code updated == current} e sai sem gravar nem transmitir. E o
+     * mesmo argumento do {@link #updateItem}: sem o teste de faixa, um UPDATE
+     * atrasado (a magia foi apagada entre o clique e o pacote) viraria um ADD e a
+     * magia reapareceria sozinha.
+     *
+     * <p><b>Nao ha trava de nome como no {@link #updateSkill}:</b> duas magias
+     * com o mesmo nome sao legitimas ("Bola de Fogo" em duas schools), entao o
+     * indice e a unica identidade valida. O teto de cada campo e' do construtor
+     * de {@link SheetData.Spell}, e nao deste metodo.
+     */
+    private static SheetData updateSpell(SheetData current, SheetSpellPayload payload) {
+        int index = payload.index();
+        if (index < 0 || index >= current.spellbook().spells().size()) {
+            return current;
+        }
+        SheetData.Spell spell = payload.spell();
+        if (spell == null || spell.name().isEmpty()) {
+            return current;
+        }
+        return current.withSpellUpdated(index, spell);
     }
 
     /**

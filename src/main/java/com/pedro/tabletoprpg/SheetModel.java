@@ -971,9 +971,15 @@ public record SheetModel(
         // partir do modelo. A lista de itens pertence ao jogador, nao ao sistema:
         // sem esta linha, trocar o modelo do Mestre apagaria o que o jogador
         // carregava, porque o align roda no login e a cada edicao do modelo.
+        //
+        // 01/10/2026 (pagina 3): o grimorio segue o MESMO caminho do inventario,
+        // pelo mesmo motivo. A lista de magias e do jogador; alem disso o
+        // castingAttribute aponta para um id de atributo, e um atributo removido
+        // do modelo nao pode levar as magias junto.
         return new SheetData(sheet.identity(), sheet.vitals(), sheet.progress(),
                 new SheetData.Attributes(values), sheet.skills(), newPericias,
-                attributeValueMin, attributeValueMax, periciaValueMax, sheet.inventory());
+                attributeValueMin, attributeValueMax, periciaValueMax, sheet.inventory(),
+                sheet.spellbook());
     }
 
     // ------------------------------------------------------------------

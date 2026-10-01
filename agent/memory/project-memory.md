@@ -2377,3 +2377,114 @@ O `agent/memory/project-memory.md` estava com marcadores `<<<<<<< Updated upstre
 Resolvido **mantendo os dois lados** (os dois blocos eram blocos de memoria distintos e
 append-only, um do Iris e outro do fim da sessao das abas), na ordem upstream -> stashed.
 Nenhum conteudo foi descartado.
+
+---
+
+## 2026-10-01 - Pagina 3 (Skills/Magias): widget nao e recortado pela faixa da lista
+
+**FATO verificado (causa raiz do estouro de borda, por leitura de codigo em
+`StatusScreen.java`, confirmado pelo relato do usuario em 01/10/2026):** `ItemBox`
+e um retangulo desenhado pela propria tela, entao o `addSkillEntry`/`addSpellEntry`
+recorta o fundo na borda com `Math.max`/`Math.min`. Mas um **widget** (`Button`,
+`EditBox`) e desenhado pelo vanilla na posicao Y que recebeu, sem nenhuma ideia da
+faixa da lista. Resultado: o fundo era recortado e o botao nao, entao o jogador via o
+botao vazando por cima do `+ Skill`/`+ Magia` ou por cima da barra de abas.
+
+**FATO verificado:** a coluna de inventario ja resolvia isso com um guarda
+`lineInList`/equivalente; a coluna nova nao replicou o guarda. Agora existe
+`Column.lineFits(int y, int h)` em `StatusScreen`, usado pelo botao de nome de skill,
+pelo botao de nome de magia e por `addDeleteButton`. Texto continua guardado pela
+mesma regra. Correcao de geometria (`Column.prepare` antes do laco) sozinha **nao**
+resolve: ela arruma a faixa, nao o desenho do widget.
+
+**FATO verificado (armadilha de API do projeto):** em `addEntryNameButton` o
+parametro `right` controla DUAS coisas: `right == null` desliga o texto do circulo
+**e** o botao `Del` (`delW = right == null ? 0 : LIST_BTN_W`). Passar `null` para
+tirar o circulo apaga o `Del` junto. Para skill, que nao tem circulo, o valor correto
+e `""` (texto vazio, `Del` presente).
+
+**FATO verificado (01/10/2026):** `TextLine` cresce para DIREITA a partir do X que
+recebeu. No cabecalho de conjuracao o `Modifier` nasce em `cdX` (fim do botao de
+atributo), entao a largura util e `(panelX + panelW) - x`, nao `panelW`. Usar a
+largura total do painel fazia o `"Modifier: -"` transbordar para fora do painel.
+
+**Decisao do usuario (01/10/2026):** CD foi para a ESQUERDA na linha de baixo do
+cabecalho (rotulo `CD` + caixa encostados a esquerda); antes encostava a direita e
+invadia a area do `Modifier`. Cartao de magia na nova disposicao: nome largo e mais
+alto, `1º círculo` ate `5º círculo` (nome por extenso, minusculo, na linha), execucao
+abaixo, custo abaixo da execucao, e `Del` na direita da ultima linha com texto. O
+`Del` desceu porque na linha do circulo o usuario lia como se fosse botao do circulo.
+
+**HIPOTESE:** o `Del` sempre na ultima linha com texto (desce conforme execucao e custo
+aparecem) e o que resolve a leitura ambigua; se o usuario preferir Del sempre na mesma
+altura, e uma linha de altura fixa.
+
+**Validacao:** `gradlew build test --no-daemon --console=plain` -> `BUILD SUCCESSFUL`.
+**NAO validado:** o recorte visual em jogo -- build nao prova o desenho do widget na tela.
+Precisa do teste visual do usuario com rolagem nas duas colunas.
+### 2026-10-01 (tarde) - Pecao visivel na rolagem + validacao de nome obrigatorio
+
+**FATO verificado (por que o widget e recortado e nao pulado):** o primeiro corte
+usava so um guarda "cabe inteiro?". Isso matava o estouro de borda, mas o jogador
+passou a ver a linha **sumir de uma vez** ao rolar. A solucao nao e voltar a criar
+o widget inteiro: e criar o widget **com a altura que sobra na faixa**
+(Column.clippedHeight, minimo LIST_PEEK_MIN = 5) e empurrar o Y para
+listTop. O vanilla entao desenha um botao de 5 px, que e o "pedaco" pedido.
+Texto continua com o guarda "cabe inteiro?" (lineFits), porque TextLine e
+desenhado por nos e nao precisa de recorte.
+
+**FATO verificado:** o ItemBox (fundo do card) e desenhado por esta tela e
+encolhe ate 1 px -- e ele que faz a transicao parecer continua. O botao some aos
+5 px. Os dois juntos dao o efeito pedido.
+
+**Decisao do usuario (01/10/2026):** nome **obrigatorio** em Skill e Magia. Sem
+nome, save() marca showNameError, foca a caixa e **nao** envia pacote; o
+aviso "Name required" aparece em  xFF5555 sob a caixa de nome. Validado so no
+cliente: e conforto, nao seguranca -- o servidor ja normaliza e limita o texto.
+
+**FATO verificado (cabecalho):** o rotulo "CD" e medido por ont.width("CD") + 2,
+nao pela largura da caixa (que e o dobro) -- era o vao enorme entre o rotulo e a
+caixa. O botao de atributo agora e w - font.width("Modifier: -") - 2*PER_GAP, e
+o Modifier nasce em modX = x + attrW + PER_GAP, entao ele tem largura reservada
+e nao depende do resto da linha.
+
+**Validacao:** build + test -> BUILD SUCCESSFUL (18s).
+**NAO validado em jogo:** o efeito do pedaco visivel na rolagem, a proximidade da CD e o
+aviso de nome vazio -- build nao prova desenho nem interacao de widget.
+
+### 2026-10-01 (noite) - Botao Save desativado + armadilha de gravacao da memoria
+
+**Decisao do usuario (01/10/2026):** o aviso de "nome obrigatorio" vira botao
+**desabilitado**. saveButton.active = !nameBox.getValue().isBlank(), com
+
+ameBox.setResponder(text -> syncSaveEnabled()) para reavaliar a cada tecla, sem
+rebuild. O aviso "Name required" continua, mas agora nasce do mesmo estado do
+botao (
+ameBox.getValue().isBlank()) e nao de um clique -- que deixou de acontecer.
+Os dois nunca discordam porque leem a mesma expressao. A guarda em save() foi
+mantida como rede de seguranca: Save nao deve depender da UI para ser correto.
+
+**FATO verificado (armadilha REAL deste projeto):** gravar a memoria com
+[System.IO.File]::AppendAllText e seguro, mas o edit/write com texto em que
+`b` e `t` vem no inicio de palavra **trunca as letras**: "build" vira "uild" com um
+0x08 (backspace) no lugar do `b`, e "test" vira "est" com 0x09 (tab). Esses
+bytes de controle nao aparecem no 
+ead como caracteres visiveis, entao parece
+apenas palavra faltando letra. **scanEncoding do build.gradle pega isso e faz o
+`build` FALHAR** (`throw GradleException` em build.gradle:218), o que e bom: e a rede
+que impediu lixo silencioso na memoria.
+
+**Como diagnosticar e corrigir:** localizar com -match "\uFFFD" e inspecionar bytes
+com [System.Text.Encoding]::UTF8.GetBytes(). Quando o edit falha em casar
+por causa desses bytes, reescrever a linha **por indice**
+($lines[i] = ... + WriteAllLines) e o caminho que funciona. Ao validar este
+arquivo, procure tambem [\u0008\u0009], nao so \uFFFD: o scanEncoding
+acusa os tres, mas um olho humano so ve o U+FFFD.
+
+**FATO verificado:** Button.active = false e o jeito nativo de desabilitar sem
+remover o widget: ele continua desenhado (cinza, quando o Widget respeita o campo
+`active`) e o `onPress` deixa de rodar. Removê-lo do `children()` exigiria
+
+**Validacao:** `build` + `test` -> BUILD SUCCESSFUL (11s), `scanEncoding OK: 120
+arquivo(s). **NAO validado em jogo:** o botao cinza, o aviso e a reativacao ao
+digitar.
