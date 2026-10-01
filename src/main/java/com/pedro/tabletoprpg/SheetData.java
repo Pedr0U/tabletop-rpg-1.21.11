@@ -167,7 +167,7 @@ public record SheetData(
      */
     public static final List<String> LABELLED_FIELDS = List.of(
             "playerName", "characterName", "race", "characterClass", "background",
-            "hp", "mana", "level", "xp", "xptext"
+            "hp", "mana", "level", "xp", "xptext", "ca"
     );
     /**
      * Campos numericos que NAO sao atributos: vida, mana e progressao.
@@ -289,7 +289,11 @@ public record SheetData(
     private static final Codec<Progress> PROGRESS_CODEC = RecordCodecBuilder.create(i -> i.group(
             Codec.INT.optionalFieldOf("level", Progress.defaults().level()).forGetter(Progress::level),
             Codec.INT.optionalFieldOf("xp", Progress.defaults().xp()).forGetter(Progress::xp),
-            Codec.STRING.optionalFieldOf("xpText", "").forGetter(Progress::xpText)
+            Codec.STRING.optionalFieldOf("xpText", "").forGetter(Progress::xpText),
+            // 01/10/2026: o CA entra como optionalFieldOf com padrao 0, entao uma
+            // ficha salva ANTES do CA existir continua abrindo -- e abre com CA 0,
+            // que e o mesmo que uma ficha recem-criada.
+            Codec.INT.optionalFieldOf("ca", 0).forGetter(Progress::ca)
     ).apply(i, Progress::new));
 
     /**
@@ -701,11 +705,27 @@ public record SheetData(
      * campos coexistem e <b>so um deles e lido</b>, escolhido pelo
      * {@link SheetModel.XpMode}: e o que mantem cada modo simples.
      */
-    public record Progress(int level, int xp, String xpText) {
+    /**
+     * O progresso do personagem: nivel, XP e o CA (Classe de Armadura).
+     *
+     * <p><b>01/10/2026, o campo {@code ca}:</b> o usuario pediu um campo CA na
+     * mesma linha do Level, com caixa numerica propria. Ele mora AQUI e nao na
+     * {@link Attributes} porque ele nao e um atributo: nao entra em rolagem, nao
+     * tem piso/teto do Mestre e nao e uma das pericias. E um valor absoluto do
+     * personagem, como o Level e o XP.
+     *
+     * <p><b>Por que o limite e {@code 0..MAX_RESOURCE}:</b> e o mesmo teto que o
+     * HP e a Mana ja usam ({@link #MAX_RESOURCE}), por decision do usuario. O
+     * piso 0 significa que CA nao aceita negativo: um CA abaixo de zero nao tem
+     * leitura em regra de RPG, e o campo serve para mostrar a classe de armadura,
+     * nao um modificador (modificadores vivem nos atributos, que vao a -30).
+     */
+    public record Progress(int level, int xp, String xpText, int ca) {
         public static final StreamCodec<FriendlyByteBuf, Progress> STREAM_CODEC = StreamCodec.composite(
                 ByteBufCodecs.VAR_INT, Progress::level,
                 ByteBufCodecs.VAR_INT, Progress::xp,
                 ByteBufCodecs.stringUtf8(MAX_NAME), Progress::xpText,
+                ByteBufCodecs.VAR_INT, Progress::ca,
                 Progress::new
         );
 
@@ -713,10 +733,25 @@ public record SheetData(
             level = clamp(level, 1, MAX_LEVEL);
             xp = clamp(xp, 0, MAX_XP);
             xpText = clean(xpText);
+            ca = clamp(ca, 0, MAX_RESOURCE);
+        }
+
+        /**
+         * Construtor de 3 campos, kept para os chamadores antigos.
+         *
+         * <p><b>Por que ele existe:</b> sem ele, adicionar o {@code ca} obrigaria
+         * a editar as sete chamadas de {@code new Progress(...)} espalhadas por
+         * {@link #withField} e pelo resto do arquivo, e um delas esquecida seria
+         * um erro de compilacao em um lugar que nao tem nada a ver com CA. Com o
+         * construtor antigo, o CA entra no lugar certo ({@code 0}) por padrao e
+         * so o codigo que realmente mexe no CA precisa falar dele.
+         */
+        public Progress(int level, int xp, String xpText) {
+            this(level, xp, xpText, 0);
         }
 
         public static Progress defaults() {
-            return new Progress(1, 0, "");
+            return new Progress(1, 0, "", 0);
         }
     }
 
@@ -2009,18 +2044,37 @@ public record SheetData(
             case "mana" -> replaceVitals(new Vitals(vitals.hp(), vitals.hpMax(), parseInt(value, vitals.mana()), vitals.manaMax()));
             case "manamax" -> replaceVitals(new Vitals(vitals.hp(), vitals.hpMax(), vitals.mana(), parseInt(value, vitals.manaMax())));
 
+            // <b>01/10/2026: o {@code progress.ca()} e repassado aqui e nos
+            // ramos de XP abaixo.</b> Estes ramos reconstroem o Progress inteiro a
+            // partir do antigo para trocar UM campo. Usar o construtor de 3 campos
+            // (que deixa o CA em 0) faria o Level voltar a 0 sempre que o Mestre
+            // mexesse no XP, e vice-versa -- o CA e a mesma linha do Level, entao
+            // as duas edicoes estao a uma tecla de distancia e o sumico seria
+            // facil de encontrar e impossivel de explicar.
             case "level" -> new SheetData(identity, vitals,
-                    new Progress(parseInt(value, progress.level()), progress.xp(), progress.xpText()),
+                    new Progress(parseInt(value, progress.level()), progress.xp(), progress.xpText(),
+                            progress.ca()),
+                    attributes, skills, pericias, attributeValueMin, attributeValueMax, periciaValueMax, inventory, spellbook);
+            // 01/10/2026: o CA (Classe de Armadura), na mesma linha do Level na
+            // ficha. Fica ANTES do `default` pelo mesmo motivo do "level": sem
+            // esta linha "ca" cairia em attributes.withValue, que devolveria a
+            // propria ficha -- a caixa aceitaria a tecla e o valor sumiria no
+            // proximo eco do servidor.
+            case "ca" -> new SheetData(identity, vitals,
+                    new Progress(progress.level(), progress.xp(), progress.xpText(),
+                            parseInt(value, progress.ca())),
                     attributes, skills, pericias, attributeValueMin, attributeValueMax, periciaValueMax, inventory, spellbook);
             // Com o modelo em modo TEXT, o campo da barra mostra o texto que o
             // Mestre digitou (ex.: "Fiel aogrupo"). O numero continua guardado
             // para quando o modelo voltar para NUMBER.
             case "xp" -> SheetModelHolder.current().xp() == SheetModel.XpMode.TEXT
-                    ? new SheetData(identity, vitals, new Progress(progress.level(), progress.xp(), value),
+                    ? new SheetData(identity, vitals, new Progress(progress.level(), progress.xp(), value,
+                            progress.ca()),
                             attributes, skills, pericias,
                             attributeValueMin, attributeValueMax, periciaValueMax, inventory, spellbook)
                     : new SheetData(identity, vitals,
-                            new Progress(progress.level(), parseInt(value, progress.xp()), progress.xpText()),
+                            new Progress(progress.level(), parseInt(value, progress.xp()), progress.xpText(),
+                                    progress.ca()),
                             attributes, skills, pericias,
                             attributeValueMin, attributeValueMax, periciaValueMax, inventory, spellbook);
 
@@ -2035,7 +2089,8 @@ public record SheetData(
             // a tela nao mostra essa caixa, entao um pacote com "xptext" so pode
             // vir de um cliente forjado.
             case "xptext" -> SheetModelHolder.current().xp() == SheetModel.XpMode.TEXT
-                    ? new SheetData(identity, vitals, new Progress(progress.level(), progress.xp(), value),
+                    ? new SheetData(identity, vitals, new Progress(progress.level(), progress.xp(), value,
+                            progress.ca()),
                             attributes, skills, pericias,
                             attributeValueMin, attributeValueMax, periciaValueMax, inventory, spellbook)
                     : this;
@@ -2374,6 +2429,10 @@ public record SheetData(
             case "manamax" -> vitals.manaMax();
             case "level" -> progress.level();
             case "xp" -> progress.xp();
+            // 01/10/2026: o CA da mesma linha do Level. Entra antes do `default`
+            // pelo mesmo motivo de level/xp: sem ele, "ca" seria lido como id de
+            // atributo e devolveria 0 sempre.
+            case "ca" -> progress.ca();
             // 01/10/2026 (pagina 3): a CD das magias. Entra no switch antes do
             // `default` pelo mesmo motivo de hp/level: sem esta linha, "cd" cairia
             // em `attributes.valueOf("cd")` e a caixa mostraria 0 sempre.

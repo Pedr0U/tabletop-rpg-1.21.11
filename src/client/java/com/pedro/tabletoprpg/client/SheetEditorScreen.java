@@ -241,6 +241,12 @@ public class SheetEditorScreen extends Screen {
                 v -> staged = staged.withLabel("level", v));
         y = labelField(y, "field_xp", staged.xpLabel(),
                 v -> staged = staged.withLabel("xp", v));
+        // 01/10/2026: o rotulo do CA, que o Mestre edita como os outros. Na ficha
+        // o CA divide a linha com o Level, entao ele precisa de rotulo proprio --
+        // sem este campo o Mestre nao teria como trocar "CA" por "Armadura" sem
+        // editar o NBT na mao.
+        y = labelField(y, "field_ca", staged.caLabel(),
+                v -> staged = staged.withLabel("ca", v));
         y = xpModeField(y);
         y = header(y, "value_limits");
         y = limitField(y, "attribute_min", staged.attributeValueMin(), true,
