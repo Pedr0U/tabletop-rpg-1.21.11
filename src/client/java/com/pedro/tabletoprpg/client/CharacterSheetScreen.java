@@ -22,7 +22,8 @@ import java.util.Map;
 /**
  * Base das telas de ficha do personagem (FASE 3b).
  *
- * <p>Subclasses: {@link StatusScreen} (Status) e {@link SkillsScreen} (Skills).
+ * <p>Subclasses: {@link StatusScreen} (Status, que hoje e a unica -- a antiga
+ * tela de Skills foi absorvida pela aba 3 dele em 01/10/2026).
  * A base concentrationa o que as duas compartilham: fundo escuro, painel
  * responsivo, sincronia com o servidor, campos editaveis e o botao Back.
  *
@@ -637,6 +638,90 @@ public abstract class CharacterSheetScreen extends Screen {
         fieldBoxes.put(field, createFieldBox(field, boxX, y, boxW, numeric, NO_CEILING));
         return y + rowH;
     }
+
+    /** Entre as duas colunas de um par de campos. */
+    protected static final int PAIR_GAP = 8;
+
+    /**
+     * Dois campos numericos na MESMA linha, cada um com o seu rotulo (01/10/2026).
+     *
+     * <p><b>Por que existe:</b> o Level e o CA sao dois numeros curtos, e cada
+     * um numa linha inteira deixava a coluna com uma linha so para duas digitas.
+     * O usuario pediu os dois lado a lado.
+     *
+     * <p><b>Como a linha e dividida:</b> cada metade reserva a mesma largura de
+     * rotulo que as linhas de um campo so, e a caixa fica com a largura restante
+     * da metade. A reserva de rotulo nao e encolhida de proposito: se encolhesse,
+     * um rotulo configurado pelo Mestre ("Armadura") quebraria em 2 linhas e
+     * Invadiria a caixa vizinha -- exatamente o bug de 27/09/2026 que o
+     * {@code addField} ja resolve com {@link #addWrappedLabel}. Os rotulos
+     * quebram, as caixas nao se movem.
+     *
+     * <p>Cada metade tem o seu X e o seu {@code boxX}; {@code boxX} e relativo
+     * ao inicio da metade, e a soma das duas metades fecha em {@code leftW} sem
+     * sobra nem falta, entao a coluna de caixas continua alinhada com as linhas
+     * de cima e de baixo.
+     */
+    protected int addFieldPair(String firstField, String secondField, int x0, int y,
+                               int leftW, int labelW, int boxW) {
+        int halfW = (leftW - PAIR_GAP) / 2;
+
+        // <b>01/10/2026, o bug que este codigo corrigiu:</b> a primeira versao
+        // usava o `boxW` da LINHA INTEIRA (ate `FIELD_W_MAX`, 240) como a largura
+        // de cada metade. Uma caixa de 240 numa metade de ~60 nao cabe: ela
+        // comecava no `x0` (por causa do `boxXFor`, que dava 0 quando o `boxW` era
+        // maior que a metade) e invadia a outra metade e a coluna da direita. O
+        // usuario viu "os dois campos entrados no nome" e "grandes demais", que
+        // sao o mesmo erro visto de dois jeitos.
+        //
+        // <b>A ordem aqui importa: primeiro o rotulo, depois a caixa.</b> Com a
+        // caixa primeiro (primeira versao), ela tomava a metade inteira e o
+        // rotulo sobrava com 8px — voltava exatamente o bug de rotulo invadindo
+        // a caixa que o `addWrappedLabel` existe para impedir. O rotulo e o
+        // conteudo que o Mestre configura e nao pode ser espremido; a caixa e um
+        // numero de 2 a 4 digitos e aguenta ser estreito.
+        int usable = Math.max(MIN_PAIR_HALF_W, halfW - 4);
+        int pairLabelW = Math.min(labelW, Math.max(PAIR_MIN_LABEL_W, usable / 3));
+
+        // A caixa e o que sobra da metade, com teto nas duas pontas: o `boxW` da
+        // linha (para nao esticar mais que as linhas normais em coluna larga) e
+        // `PAIR_BOX_MAX` (para nao virar uma faixa vazia em coluna estreita).
+        int room = usable - pairLabelW - 4;
+        int pairBoxW = Math.min(Math.min(boxW, PAIR_BOX_MAX), room);
+        pairBoxW = Math.max(Math.min(MIN_PAIR_BOX_W, room), pairBoxW);
+
+        addPairHalf(firstField, x0, y, pairLabelW, pairBoxW);
+        // A segunda metade comeca depois da folga e repete exatamente a mesma
+        // geometria, entao as duas linhas de rotulo ficam na mesma altura e as
+        // duas caixas na mesma coluna dentro do seu par.
+        addPairHalf(secondField, x0 + halfW + PAIR_GAP, y, pairLabelW, pairBoxW);
+
+        return y + rowH;
+    }
+
+    /** Escreve o rotulo e a caixa de uma das metades do par. */
+    private void addPairHalf(String field, int x0, int y, int labelW, int boxW) {
+        addWrappedLabel(SheetData.labelOf(field), x0, y, Math.max(8, labelW), COL_LABEL);
+        // A caixa comeca **depois** do rotulo e nunca e maior que a metade, entao
+        // nao invade o vizinho nem a coluna seguinte.
+        fieldBoxes.put(field, createFieldBox(field, x0 + Math.max(8, labelW) + 4, y, boxW,
+                true, NO_CEILING));
+    }
+
+    /** Menor largura util de uma metade, para a caixa nao sumir em janela estreita. */
+    protected static final int MIN_PAIR_HALF_W = 40;
+    /** Largura minima de uma caixa de par: cabe "-999" com folga. */
+    protected static final int MIN_PAIR_BOX_W = 34;
+    /** Rotulo minimo reservado antes da caixa ("Level" precisa de ~24). */
+    protected static final int PAIR_MIN_LABEL_W = 26;
+    /**
+     * Teto da caixa de par.
+     *
+     * <p>Level vai a 99 e CA a 9999: 4 digitos. Uma caixa de 60 ja sobra, e o
+     * que sobra e o problema — 240 (o {@code FIELD_W_MAX} das linhas normais)
+     * deixaria uma faixa vazia enorme ao lado de "Level".
+     */
+    protected static final int PAIR_BOX_MAX = 60;
 
     /**
      * Registra um rotulo e devolve quantas linhas ele ocupou (1 ou 2).
