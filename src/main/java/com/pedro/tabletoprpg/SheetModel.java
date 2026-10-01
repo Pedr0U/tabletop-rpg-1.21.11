@@ -1,6 +1,12 @@
 package com.pedro.tabletoprpg;
 
+import com.mojang.datafixers.util.Pair;
 import com.mojang.serialization.Codec;
+import com.mojang.serialization.DataResult;
+import com.mojang.serialization.Decoder;
+import com.mojang.serialization.DynamicOps;
+import com.mojang.serialization.Encoder;
+import com.mojang.serialization.MapLike;
 import com.mojang.serialization.codecs.RecordCodecBuilder;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.network.codec.ByteBufCodecs;
@@ -68,6 +74,7 @@ public record SheetModel(
         boolean manaEnabled,
         String levelLabel,
         String xpLabel,
+        String caLabel,
         XpMode xp,
         List<AttributeDef> attributes,
         List<PericiaDef> pericias,
@@ -255,6 +262,7 @@ public record SheetModel(
                 true,
                 "Level",
                 "XP",
+                "CA",
                 XpMode.NUMBER,
                 List.of(
                         new AttributeDef("strength", "STR", "Strength"),
@@ -330,6 +338,10 @@ public record SheetModel(
         manaLabel = clean(manaLabel, LABEL_MAX, "Mana");
         levelLabel = clean(levelLabel, LABEL_MAX, "Level");
         xpLabel = clean(xpLabel, LABEL_MAX, "XP");
+        // 01/10/2026: o CA tem rotulo configuravel por decisao do usuario, igual ao
+        // Level e ao XP. O padrao "CA" e o mesmo motivo dos outros dois: um rotulo
+        // vazio na ficha e pior que um rotulo repetido.
+        caLabel = clean(caLabel, LABEL_MAX, "CA");
         attributes = sanitizeAttributes(attributes);
         pericias = sanitizePericias(pericias);
         attributeValueMin = clamp(attributeValueMin, VALUE_LIMIT_MIN, VALUE_LIMIT_MAX);
@@ -341,6 +353,41 @@ public record SheetModel(
         // investimento do jogador e um numero negativo ali seria penalidade, e
         // penalidade pertence ao atributo.
         periciaValueMax = clamp(periciaValueMax, 0, VALUE_LIMIT_MAX);
+    }
+
+    /**
+     * Construtor de 16 campos, sem o {@code caLabel}, para as copias internas.
+     *
+     * <p><b>Por que ele existe (01/10/2026):</b> o {@code caLabel} foi o
+     * campo 17 do record. Sem esta sobrecarga, as dezenove chamadas de
+     * {@code new SheetModel(...)} espalhadas por {@link #withLabel},
+     * {@link #withEnabled} e {@link #withPericia}teriam de ser editadas uma a
+     * uma, e o erro de uma delas apareceria num arquivo e numa linha sem
+     * nenhuma relacao com CA. Com esta sobrecarga, todas elas seguem
+     * compilando e com o rotulo CA padrao, que e o que elas queriam mesmo: uma
+     * copia que muda outra coisa nao deve trocar o rotulo por acidente.
+     */
+    public SheetModel(
+            String nameLabel,
+            String raceLabel,
+            boolean raceEnabled,
+            String classLabel,
+            String backgroundLabel,
+            String hpLabel,
+            String manaLabel,
+            boolean manaEnabled,
+            String levelLabel,
+            String xpLabel,
+            XpMode xp,
+            List<AttributeDef> attributes,
+            List<PericiaDef> pericias,
+            int attributeValueMin,
+            int attributeValueMax,
+            int periciaValueMax
+    ) {
+        this(nameLabel, raceLabel, raceEnabled, classLabel, backgroundLabel, hpLabel, manaLabel,
+                manaEnabled, levelLabel, xpLabel, "CA", xp, attributes, pericias, attributeValueMin,
+                attributeValueMax, periciaValueMax);
     }
 
     private static List<AttributeDef> sanitizeAttributes(List<AttributeDef> raw) {
@@ -463,6 +510,9 @@ public record SheetModel(
             case "mana" -> manaLabel;
             case "level" -> levelLabel;
             case "xp" -> xpLabel;
+            // 01/10/2026: o CA (Classe de Armadura), na mesma linha do Level na
+            // ficha. Rotulo configuravel, como o Level e o XP.
+            case "ca" -> caLabel;
             // XP em modo TEXT e o MESMO campo de XP (numero ou texto sao modos
             // de exibicao, nao campos diferentes), entao usa o mesmo rotulo.
             // Sem este caso o `default` devolvia a chave crua e a ficha
@@ -560,8 +610,15 @@ public record SheetModel(
                     attributes, pericias, attributeValueMin, attributeValueMax, periciaValueMax);
             case "xp" -> new SheetModel(nameLabel, raceLabel, raceEnabled, classLabel,
                     backgroundLabel, hpLabel, manaLabel, manaEnabled, levelLabel,
-                    value.isEmpty() ? xpLabel : value, xp, attributes, pericias, attributeValueMin,
-                    attributeValueMax, periciaValueMax);
+                    value.isEmpty() ? xpLabel : value, caLabel, xp, attributes, pericias,
+                    attributeValueMin, attributeValueMax, periciaValueMax);
+            // 01/10/2026: o CA, na mesma linha do Level. `value.isEmpty()` com o
+            // padrao, pelo mesmo motivo do XP acima: um rotulo apagado no editor
+            // volta ao padrao em vez de virar string vazia na ficha.
+            case "ca" -> new SheetModel(nameLabel, raceLabel, raceEnabled, classLabel,
+                    backgroundLabel, hpLabel, manaLabel, manaEnabled, levelLabel, xpLabel,
+                    value.isEmpty() ? caLabel : value, xp, attributes, pericias,
+                    attributeValueMin, attributeValueMax, periciaValueMax);
             default -> this;
         };
     }
@@ -1008,31 +1065,116 @@ public record SheetModel(
     // CODEC DE NBT
     // ------------------------------------------------------------------
 
-    public static final Codec<SheetModel> CODEC = RecordCodecBuilder.create(i -> i.group(
-            Codec.STRING.optionalFieldOf("nameLabel", "Name").forGetter(SheetModel::nameLabel),
-            Codec.STRING.optionalFieldOf("raceLabel", "Race").forGetter(SheetModel::raceLabel),
-            Codec.BOOL.optionalFieldOf("raceEnabled", true).forGetter(SheetModel::raceEnabled),
-            Codec.STRING.optionalFieldOf("classLabel", "Class").forGetter(SheetModel::classLabel),
-            Codec.STRING.optionalFieldOf("backgroundLabel", "Background").forGetter(SheetModel::backgroundLabel),
-            Codec.STRING.optionalFieldOf("hpLabel", "HP").forGetter(SheetModel::hpLabel),
-            Codec.STRING.optionalFieldOf("manaLabel", "Mana").forGetter(SheetModel::manaLabel),
-            Codec.BOOL.optionalFieldOf("manaEnabled", true).forGetter(SheetModel::manaEnabled),
-            Codec.STRING.optionalFieldOf("levelLabel", "Level").forGetter(SheetModel::levelLabel),
-            Codec.STRING.optionalFieldOf("xpLabel", "XP").forGetter(SheetModel::xpLabel),
-            Codec.STRING.xmap(XpMode::decode, XpMode::name)
-                    .optionalFieldOf("xp", XpMode.NUMBER).forGetter(SheetModel::xp),
-            Codec.list(AttributeDef.CODEC).optionalFieldOf("attributes", List.of()).forGetter(SheetModel::attributes),
-            Codec.list(PericiaDef.CODEC).optionalFieldOf("pericias", List.of()).forGetter(SheetModel::pericias),
-            // Os tres limites de valor (28/09/2026). Todos opcionais com o padrao:
-            // um modelo salvo antes deles nao pode falhar de ler, e a ausencia
-            // significa "o Mestre ainda nao mudou a regra", que e o padrao.
-            Codec.INT.optionalFieldOf("attributeValueMin", DEFAULT_ATTRIBUTE_VALUE_MIN)
-                    .forGetter(SheetModel::attributeValueMin),
-            Codec.INT.optionalFieldOf("attributeValueMax", DEFAULT_ATTRIBUTE_VALUE_MAX)
-                    .forGetter(SheetModel::attributeValueMax),
-            Codec.INT.optionalFieldOf("periciaValueMax", DEFAULT_PERICIA_VALUE_MAX)
-                    .forGetter(SheetModel::periciaValueMax)
-    ).apply(i, SheetModel::new));
+    /**
+     * Escrito a mao, e nao com {@code RecordCodecBuilder}.
+     *
+     * <p><b>Por que (01/10/2026):</b> {@code RecordCodecBuilder.group} tem
+     * overloads ate <b>16 campos</b>, e este record tem 17 depois do campo
+     * {@code caLabel}. Ao passar de 16 o compilador recusa -- nao existe como
+     * encaixar mais um campo naquele builder. Como o {@code caLabel} e um rotulo
+     * como os outros (decisao do usuario), o codec e reescrito aqui como
+     * {@link MapCodec} com encoder e decoder proprios, que nao tem esse limite.
+     *
+     * <p><b>O formato salvo nao muda.</b> As chaves do mapa sao exatamente as
+     * mesmas do builder anterior ({@code nameLabel}, {@code raceLabel}, ...,
+     * {@code caLabel}), todas planas dentro de "model". Um Sheet Model salvo
+     * antes do CA continua abrindo, e um modelo novo abre num save antigo sem
+     * perda: a ausencia de {@code caLabel} significa "o Mestre ainda nao
+     * configurou", que e o padrao "CA". Trocar o builder por um MapCodec nao e
+     * migracao, e so trocar quem escreve as mesmas chaves.
+     *
+     * <p><b>Risco proprio deste metodo:</b> diferente do builder, nao existe
+     * verificacao em tempo de compilacao que amarre uma chave a um campo. Uma
+     * chave escrita com nome diferente da que o decoder le continua compilando e
+     * falha so em runtime, com o campo virando o padrao silenciosamente. Por
+     * isso o teste de ida e volta do {@code SheetModel} e obrigatorio, e nao
+     * opcional: ele grava num mapa e le de volta, o que pega essa troca de
+     * letra.
+     */
+    private static final Codec<SheetModel> CODEC_MANUAL = Codec.of(
+            new Encoder<SheetModel>() {
+                @Override
+                public <T> DataResult<T> encode(SheetModel model, DynamicOps<T> ops, T prefix) {
+                    return ops.mapBuilder()
+                            .add("nameLabel", model.nameLabel(), Codec.STRING)
+                            .add("raceLabel", model.raceLabel(), Codec.STRING)
+                            .add("raceEnabled", model.raceEnabled(), Codec.BOOL)
+                            .add("classLabel", model.classLabel(), Codec.STRING)
+                            .add("backgroundLabel", model.backgroundLabel(), Codec.STRING)
+                            .add("hpLabel", model.hpLabel(), Codec.STRING)
+                            .add("manaLabel", model.manaLabel(), Codec.STRING)
+                            .add("manaEnabled", model.manaEnabled(), Codec.BOOL)
+                            .add("levelLabel", model.levelLabel(), Codec.STRING)
+                            .add("xpLabel", model.xpLabel(), Codec.STRING)
+                            .add("caLabel", model.caLabel(), Codec.STRING)
+                            .add("xp", model.xp().name(), Codec.STRING)
+                            .add("attributes", model.attributes(), Codec.list(AttributeDef.CODEC))
+                            .add("pericias", model.pericias(), Codec.list(PericiaDef.CODEC))
+                            .add("attributeValueMin", model.attributeValueMin(), Codec.INT)
+                            .add("attributeValueMax", model.attributeValueMax(), Codec.INT)
+                            .add("periciaValueMax", model.periciaValueMax(), Codec.INT)
+                            .build(prefix);
+                }
+            },
+            new Decoder<SheetModel>() {
+                @Override
+                public <T> DataResult<Pair<SheetModel, T>> decode(DynamicOps<T> ops, T input) {
+                    return ops.getMap(input).map(map -> new SheetModel(
+                            read(ops, map, "nameLabel", Codec.STRING, "Name"),
+                            read(ops, map, "raceLabel", Codec.STRING, "Race"),
+                            read(ops, map, "raceEnabled", Codec.BOOL, true),
+                            read(ops, map, "classLabel", Codec.STRING, "Class"),
+                            read(ops, map, "backgroundLabel", Codec.STRING, "Background"),
+                            read(ops, map, "hpLabel", Codec.STRING, "HP"),
+                            read(ops, map, "manaLabel", Codec.STRING, "Mana"),
+                            read(ops, map, "manaEnabled", Codec.BOOL, true),
+                            read(ops, map, "levelLabel", Codec.STRING, "Level"),
+                            read(ops, map, "xpLabel", Codec.STRING, "XP"),
+                            read(ops, map, "caLabel", Codec.STRING, "CA"),
+                            XpMode.decode(read(ops, map, "xp", Codec.STRING, XpMode.NUMBER.name())),
+                            read(ops, map, "attributes", Codec.list(AttributeDef.CODEC), List.<AttributeDef>of()),
+                            read(ops, map, "pericias", Codec.list(PericiaDef.CODEC), List.<PericiaDef>of()),
+                            read(ops, map, "attributeValueMin", Codec.INT, DEFAULT_ATTRIBUTE_VALUE_MIN),
+                            read(ops, map, "attributeValueMax", Codec.INT, DEFAULT_ATTRIBUTE_VALUE_MAX),
+                            read(ops, map, "periciaValueMax", Codec.INT, DEFAULT_PERICIA_VALUE_MAX)
+                    )).map(decoded -> Pair.of(decoded, input));
+                }
+            }
+    );
+
+    /**
+     * Le um campo do mapa do NBT, com o padrao quando ele nao estiver gravado.
+     *
+     * <p><b>Por que a ausencia vira o padrao e nao um erro:</b> e o contrato dos
+     * campos opcionais do codec anterior, e ele tem de ser preservado aqui. Um
+     * Sheet Model salvo antes do campo existir tem de continuar abrindo; se a
+     * ausencia fosse erro, o jogador perderia o modelo inteiro por causa de um
+     * rotulo que ele nem configurou.
+     *
+     * <p><b>Por que ler pelo Codec e nao por cast cru:</b> cada leitura usa o
+     * mesmo {@code Codec} que escreveria o campo, entao o tipo do valor no NBT e
+     * conferido pelo proprio Codec. Um cast cru lancaria {@code
+     * ClassCastException} se um save editado a mao tivesse o valor no tipo
+     * errado, e essa excecao derrubaria o Sheet Model inteiro. Aqui o valor
+     * ilegivevel vira o padrao, e o construtor compacto ainda limpa e corta
+     * tudo -- nenhuma leitura deste metodo consegue produzir um modelo fora de
+     * faixa, mesmo com o NBT hostil.
+     *
+     * <p>Isso e uma troca consciente com o codec antigo: la um tipo errado era
+     * erro de leitura e o save era recusado; aqui vira o padrao. Perdi a
+     * diagnosis, ganhei a garantia de nao perder o modelo do Mestre por causa de
+     * um campo so. E o mesmo trade-off que o {@code XpMode.decode} ja fazia com
+     * o valor desconhecido.
+     */
+    private static <T, A> A read(DynamicOps<T> ops, MapLike<T> map, String key, Codec<A> codec, A fallback) {
+        T value = map.get(key);
+        if (value == null) {
+            return fallback;
+        }
+        return codec.parse(ops, value).result().orElse(fallback);
+    }
+
+    public static final Codec<SheetModel> CODEC = CODEC_MANUAL;
 
     // ------------------------------------------------------------------
     // CODEC DE REDE
@@ -1073,6 +1215,12 @@ public record SheetModel(
         ByteBufCodecs.BOOL.encode(buf, model.manaEnabled());
         ByteBufCodecs.stringUtf8(LABEL_MAX).encode(buf, model.levelLabel());
         ByteBufCodecs.stringUtf8(LABEL_MAX).encode(buf, model.xpLabel());
+        // 01/10/2026: rotulo do CA, na MESMA posicao do DECODER abaixo. Este par
+        // de lambdas nao tem nenhuma amarra em tempo de compilacao -- se um campo
+        // entra num lado e nao no outro, o pacote continua compilando e quebra so
+        // em runtime. Por isso a regra de ouro do arquivo: a ordem do ENCODER tem
+        // de ser igual a do DECODER.
+        ByteBufCodecs.stringUtf8(LABEL_MAX).encode(buf, model.caLabel());
         ByteBufCodecs.VAR_INT.encode(buf, model.xp().ordinal());
         ATTRIBUTES_CODEC.encode(buf, model.attributes());
         PERICIAS_CODEC.encode(buf, model.pericias());
@@ -1094,6 +1242,9 @@ public record SheetModel(
             ByteBufCodecs.stringUtf8(LABEL_MAX).decode(buf),
             ByteBufCodecs.BOOL.decode(buf),
             ByteBufCodecs.stringUtf8(LABEL_MAX).decode(buf),
+            ByteBufCodecs.stringUtf8(LABEL_MAX).decode(buf),
+            // 01/10/2026: rotulo do CA (posicao 11, depois de xpLabel). Precisa
+            // ficar entre xpLabel e o XpMode para bater com o ENCODER acima.
             ByteBufCodecs.stringUtf8(LABEL_MAX).decode(buf),
             XpMode.byOrdinal(ByteBufCodecs.VAR_INT.decode(buf)),
             ATTRIBUTES_CODEC.decode(buf),

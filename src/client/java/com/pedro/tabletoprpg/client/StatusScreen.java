@@ -2252,8 +2252,11 @@ public class StatusScreen extends CharacterSheetScreen {
         // ---------------- Progress ----------------
         addSection("Progress", x0, drawY(y), leftW);
         y += rowH;
-        addField("level", x0, drawY(y), boxX, boxW, labelW, true);
-        y += rowH;
+        // Level e CA dividem a MESMA linha (01/10/2026, por pedido do usuario).
+        // Cada metade tem o seu rotulo ("Level" e o rotulo do CA, que o Mestre
+        // edita no Sheet Editor) e a sua caixa numerica.
+        y = addFieldPair("level", "ca", x0, drawY(y), leftW, labelW, boxW);
+
         // XP em modo TEXT vira caixa de texto (o campo "xpText"); em NUMBER
         // continua numerico; em HIDDEN a linha inteira nao existe.
         if (model.xp() == SheetModel.XpMode.TEXT) {

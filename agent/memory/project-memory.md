@@ -2488,3 +2488,67 @@ remover o widget: ele continua desenhado (cinza, quando o Widget respeita o camp
 **Validacao:** `build` + `test` -> BUILD SUCCESSFUL (11s), `scanEncoding OK: 120
 arquivo(s). **NAO validado em jogo:** o botao cinza, o aviso e a reativacao ao
 digitar.
+
+---
+
+## 2026-10-01 — Campo CA na ficha (FATO verificado)
+
+### `RecordCodecBuilder.group()` tem LIMITE DURO de 16 campos (FATO verificado)
+`SheetModel` tinha **exatamente** 16 componentes. Adicionar o 17o (`caLabel`) fez o compilador recusar com
+`no suitable method found for group(...)`. Nao ha como contornar mantendo o builder: **16 e o maximo**, nao um
+acidente da sobrecarga escolhida.
+
+**Como resolver (decisao do usuario, 01/10/2026): "codec manual, chaves iguais".** O `SheetModel.CODEC`
+deixou de ser `RecordCodecBuilder` e passou a ser `Codec.of(Encoder, Decoder)` **escrito a mao**, em
+`CODEC_MANUAL`. O formato gravado **nao muda**: as chaves continuam planas e iguais
+(`nameLabel`, `raceLabel`, ..., `caLabel`) dentro de `model`. Nao e migracao.
+
+### APIs do DFU 9.0.19 verificadas com `javap` (FATO verificado)
+Preferi confirmar no jar a adivinhar. `javap.exe` esta em `C:\Program Files\Java\jdk-21.0.12\bin\` (**nao**
+esta no PATH deste ambiente) e o jar em
+`~/.gradle/caches/modules-2/files-2.1/com.mojang/datafixerupper/9.0.19/*/datafixerupper-9.0.19.jar`.
+
+- `Codec.parse(Object)` **NAO EXISTE**. `parse` so existe em `Decoder.parse(Dynamic<T>)` e
+  `Decoder.parse(DynamicOps<T>, T)`. Por isso nao da para decodificar um elemento cru de `Map<String,Object>`.
+- `MapCodec.of(MapEncoder, MapDecoder)`: **nao da para usar com lambda** — `MapEncoder` tem 2 metodos
+  abstratos (`encode` e `compressor`) e `MapDecoder` tambem (`decode` e `compressor`). Lambdas nao compilam.
+- `Encoder` e `Decoder` tem **1 metodo abstrato cada** → `Codec.of(Encoder, Decoder)` **aceita classe
+  anonima** (nao lambda: a assinatura e `<T>` e **lambda nao pode declarar parametro de tipo**, da
+  `cannot find symbol: class T`).
+- `RecordBuilder.add(String, E, Encoder<E>)`: a ordem e **(chave, VALOR, ENCODER)**. Com a ordem invertida
+  da `cannot infer type-variable(s) E`.
+- `MapLike.get(String)` devolve **`T`, nao `DataResult<T>`** → nao existe `flatMap` nisso (da
+  `flatMap ... location: class Object`).
+
+### Risco proprio do codec manual e o teste que o cobre (FATO verificado)
+Diferente do builder, **nao ha verificacao em tempo de compilacao** que amarre chave a campo. `"calabel"`
+vs `"caLabel"` compila, grava e volta como padrao, **em silencio**. Por isso
+`SheetModelCodecTest.java: caLabelSurvivesNbtAndNetworkAndLegacyNbtFallsBack` grava um rotulo **NAO padrao**
+("ARMADURA"): com o padrao "CA" o teste passaria mesmo com a chave errada, porque o padrao e a saida do
+caminho certo E do errado — ele nao distingue as duas falhas. Cobre NBT e `STREAM_CODEC`, que sao dois
+codigos manuais separados com ordens proprias.
+
+### `Progress` e a armadilha do construtor de conveniência (FATO verificado, BUG CORRIGIDO)
+Ao adicionar `ca` ao record `Progress`, criei um construtor **sobrecarregado de 3 campos** que delega com
+`ca = 0`. Isso resolveu as 7 chamadas espalhadas, mas **criou bug**: os ramos de `withField` de `level`,
+`xp` e `xptext` reconstroem o `Progress` inteiro para trocar **um** campo, e usavam esse construtor — entao
+**mexer no XP apagava o CA e vice-versa**. Como os dois campos estao na **mesma linha** da ficha, era a uma
+tecla de distancia. Corrigido repassando `progress.ca()` explicito em cada ramo.
+**Licao: construtor de conveniencia que tem valor default esconde a passagem de um campo novo.** O
+mesmo padrao foi usado no `SheetModel` (construtor de 16 sem `caLabel`) e ali **nao** ha o risco, porque
+todas as copias internas realmente devem manter o rotulo padrao.
+
+### CA: onde mora e por que (FATO verificado)
+Valor em `SheetData.java: Progress` (campo `ca`), **nao** nos atributos: CA nao entra em rolagem e nao tem
+piso/teto do Mestre. **Piso 0, teto 9999** (`SheetData.MAX_RESOURCE`, o mesmo do HP e da Mana) — CA
+negativo nao tem leitura, modificador negativo vive no atributo (que vai a -30).
+Rotulo em `SheetModel.java: caLabel` (padrao "CA", configuravel no Sheet Editor via `field_ca`, **sem
+toggle**). NBT: `Codec.INT.optionalFieldOf("ca", 0)` — ficha antiga abre com CA 0, igual a recem-criada.
+`LABELLED_FIELDS` ganhou `"ca"` (o `fieldLabelWidth` do StatusScreen mede por essa lista, entao o rotulo do
+CA entra na conta da largura reservada).
+
+### `addFieldPair` (FATO verificado)
+`CharacterSheetScreen.java: addFieldPair(first, second, x0, y, leftW, labelW, boxW)` com `PAIR_GAP = 8`.
+Cada metade reserva a **mesma** largura de rotulo das linhas de campo unico, de proposito: encolher faria um
+rotulo configurado ("Armadura") quebrar e invadir a caixa vizinha (o bug de 27/09/2026). Os rotulos quebram,
+as caixas nao se movem. A soma das metades fecha em `leftW`.
