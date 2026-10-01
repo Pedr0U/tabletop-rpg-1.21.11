@@ -16,8 +16,6 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.phys.Vec3;
 import net.minecraft.world.phys.shapes.Shapes;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.util.HashMap;
 import java.util.HashSet;
@@ -41,20 +39,8 @@ public final class BlockLockAura {
 
     private static boolean isMaster;
     private static final Map<String, Set<BlockPos>> locksByDimension = new HashMap<>();
-    private static final Logger LOGGER = LoggerFactory.getLogger("TabletopRPG-BlockLockAura");
-
-    /** Ultimo motivo registrado; evita repetir a mesma linha a cada frame. */
-    private static String lastDiagnostic;
 
     private BlockLockAura() {
-    }
-
-    private static void diagnose(String message) {
-        if (message.equals(lastDiagnostic)) {
-            return;
-        }
-        lastDiagnostic = message;
-        LOGGER.info("[BlockLockAura] {}", message);
     }
 
     public static void register() {
@@ -78,9 +64,6 @@ public final class BlockLockAura {
             }
             locksByDimension.computeIfAbsent(entry.dimension(), key -> new HashSet<>()).add(entry.pos());
         }
-
-        diagnose("snapshot recebido: isMaster=" + master + ", entradas=" + locks.size()
-                + ", dimensoes=" + locksByDimension.keySet());
     }
 
     public static void clear() {
@@ -105,23 +88,17 @@ public final class BlockLockAura {
         String dimensionKey = level.dimension().identifier().toString();
 
         if (!isMaster) {
-            diagnose("snapshot chegou com isMaster=false (voce nao e o Mestre)");
             return;
         }
 
         Set<BlockPos> locks = locksByDimension.get(dimensionKey);
         if (locks == null || locks.isEmpty()) {
-            diagnose("nenhuma tranca na dimensao " + dimensionKey
-                    + "; dimensoes conhecidas=" + locksByDimension.keySet());
             return;
         }
 
         if (!holdingLockItem(player)) {
-            diagnose("Mestre sem o Block Locker na mao");
             return;
         }
-
-        diagnose("desenhando " + locks.size() + " bloco(s) trancado(s)");
 
         PoseStack poseStack = context.matrices();
         Vec3 camera = client.gameRenderer.getMainCamera().position();

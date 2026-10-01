@@ -168,6 +168,31 @@ Raiz única `/rpg`, **sem aliases**. Todos registrados em
     ação, e o botão seria uma terceira via para o mesmo efeito. Os botões `[Lock]`/`[Unlock]`
     existiram entre a entrega inicial e esta revisão e foram removidos de `buildAsciiMenu`
     (`MasterCommands.java`).
+  - **A aura dos blocos trancados é só do Mestre e só com o item na mão** (30/09/2026): o Mestre
+    segurando o `Block Locker` vê um contorno âmbar translúcido em volta de **todos** os blocos
+    trancados da dimensão atual; jogador comum nunca vê. Desaparece ao destrancar, porque o desenho
+    lê o retrato que o servidor reenvia a cada mudança (`BlockLockAura.java: render`). Desenhado em
+    `WorldRenderEvents.END_MAIN`, que é o último evento do terreno e ainda fica abaixo da HUD.
+  - **O retrato vai inteiro, não em delta**: `BlockLocksPayload` leva todas as trancas mais o
+    `isMaster` **deste** jogador, no JOIN e a cada tranca/destranca (`BlockLockManager.java:
+    sendSnapshotTo`). O `isMaster` vem no payload para o cliente não deduzir nada — quem sabe quem é
+    o Mestre é o servidor. Reenviar tudo converge sem estado incremental no cliente, já que o
+    transporte é ordenado e confiável.
+  - **O contorno atravessa parede porque o `RenderType` não testa profundidade.** Em 1.21.11 o
+    estado de profundidade mora no `RenderPipeline` e não no `RenderSystem`, então
+    `RenderSystem.disableDepthTest()` não sobrevive ao bind do pipeline — nenhum evento do Fabric
+    entrega um `RenderType` que atravessa parede. `BlockLockAuraRenderType` vive no pacote
+    `net.minecraft.client.renderer.rendertype` de propósito: `RenderType.create` é package-private e
+    essa é a via sem mixin. O pipeline é **copiado** do `LINES_TRANSLUCENT` do jogo mudando só o
+    `DepthTestFunction`, para não adivinhar nome de shader (literal de string não passa pelo
+    remapeamento, então um nome errado só quebra em runtime).
+  - **LIMITE CONHECIDO: com o Iris instalado a aura não aparece e o log recebe `Missing program ...
+    in override list` a cada frame** (verificado em 30/09/2026: a mensagem não existe em nenhum
+    `.class` do vanilla e existe dentro de `iris-fabric`). O Iris intercepta a ligação de pipeline e
+    rejeita programa fora da lista dele, e nenhum mod consegue se registrar nessa lista. Sem Iris a
+    aura funciona normalmente. Alternativa se for preciso funcionar com shaders: usar o
+    `RenderTypes.LINES_TRANSLUCENT` do jogo, que o Iris conhece — a aura passa a aparecer, mas
+    **sem** atravessar parede.
  - **O parser de dados é o `DiceFormula.java` (29/09/2026), uma classe nova, sem Minecraft.** Antes disso a
    rolagem vivia inteira em `MasterCommands.rollDice` e aceitava só termo simples (`4d20`) somado ou subtraído
    (`d8-1`). O motor antigo continua em uso apenas para o texto legado; **a aritmética é a do `DiceFormula`**.
