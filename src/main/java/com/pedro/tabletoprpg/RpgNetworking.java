@@ -3,6 +3,7 @@ package com.pedro.tabletoprpg;
 import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
+import net.minecraft.core.BlockPos;
 import net.minecraft.core.UUIDUtil;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.network.chat.Component;
@@ -217,6 +218,54 @@ public final class RpgNetworking {
         public Type<? extends CustomPacketPayload> type() {
             return TYPE;
         }
+    }
+
+    /**
+     * Servidor -> Cliente: retrato de tudo que esta trancado, mais a flag de
+     * Mestre <b>deste</b> jogador.
+     *
+     * <p><b>Por que a flag viaja aqui e nao numa payload so do Mestre:</b> o
+     * cliente precisa saber se <i>ele</i> e o Mestre para decidir se desenha a
+     * aura. Como o payload vai para cada jogador com o valor proprio, um
+     * jogador comum recebe {@code false} e nunca ve nada.
+     *
+     * <p><b>Por que o retrato inteiro, e nao um delta:</b> trancas sao poucas e
+     * mudam raramente. O estado completo evita o modo de falha caro: o cliente
+     * ficar com uma posicao trancada que o servidor ja destravou (ou o
+     * contrario) por causa de um estado que os dois lados discordam. Como o
+     * transporte e ordenado e confiavel, reenviar tudo converge sem manutencao
+     * de estado incremental.
+     */
+    public record BlockLocksPayload(boolean isMaster, List<BlockLockEntry> locks) implements CustomPacketPayload {
+        public static final Type<BlockLocksPayload> TYPE = new Type<>(TabletopRpg.id("block_locks"));
+
+        public static final StreamCodec<FriendlyByteBuf, BlockLocksPayload> STREAM_CODEC = StreamCodec.composite(
+                ByteBufCodecs.BOOL, BlockLocksPayload::isMaster,
+                BlockLockEntry.STREAM_CODEC.apply(ByteBufCodecs.list()), BlockLocksPayload::locks,
+                BlockLocksPayload::new
+        );
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
+    /**
+     * Uma posicao trancada como vai pela rede: id da dimensao em texto e a
+     * posicao.
+     *
+     * <p><b>Por que dimensao em texto e nao o {@code ResourceKey}:</b> o cliente
+     * so precisa comparar o id com o da dimensao em que esta. Serializar o
+     * {@code ResourceKey} exigiria o codec dele no cliente tambem, sem ganho
+     * nenhum.
+     */
+    public record BlockLockEntry(String dimension, BlockPos pos) {
+        public static final StreamCodec<FriendlyByteBuf, BlockLockEntry> STREAM_CODEC = StreamCodec.composite(
+                ByteBufCodecs.STRING_UTF8, BlockLockEntry::dimension,
+                BlockPos.STREAM_CODEC, BlockLockEntry::pos,
+                BlockLockEntry::new
+        );
     }
 
     /** Cliente -> Servidor: o mestre define o horário do mundo (0-24000 ticks). */
@@ -752,6 +801,7 @@ public final class RpgNetworking {
         PayloadTypeRegistry.playS2C().register(OpenSheetEditorPayload.TYPE,
                 OpenSheetEditorPayload.STREAM_CODEC);
         PayloadTypeRegistry.playS2C().register(PlayerLockPayload.TYPE, PlayerLockPayload.STREAM_CODEC);
+        PayloadTypeRegistry.playS2C().register(BlockLocksPayload.TYPE, BlockLocksPayload.STREAM_CODEC);
         PayloadTypeRegistry.playC2S().register(TimeSetPayload.TYPE, TimeSetPayload.STREAM_CODEC);
         PayloadTypeRegistry.playC2S().register(DayNightCycleSetPayload.TYPE, DayNightCycleSetPayload.STREAM_CODEC);
         PayloadTypeRegistry.playC2S().register(DayNightCycleQueryPayload.TYPE, DayNightCycleQueryPayload.STREAM_CODEC);

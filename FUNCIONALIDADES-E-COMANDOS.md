@@ -93,6 +93,8 @@ Raiz única `/rpg`, **sem aliases**. Todos registrados em
 | `/rpg session set <nome>` | só o Mestre | Define o nome da sessão; nomes vazios são recusados e o texto é cortado em 64 caracteres | `MasterCommands.java: onRegister` (handler `setSessionName: setSessionName`) |
 | `/rpg insert enemy <tipo> <cam_perm>` | só o Mestre | Invoca um mob 2 blocos à frente do Mestre, na direção do olhar dele. `tipo` aceita `zombie` ou `minecraft:zombie`; a sugestão só oferece criaturas da categoria `MONSTER` (vanilla e de outros mods). `cam_perm` é `true`/`false` | `MasterCommands.java: onRegister` (sugestões `suggestEntityTypes: suggestEntityTypes`, handler `insertEnemy: insertEnemy`) |
 | `/rpg remove enemy` | só o Mestre | Remove **1 mob por execução**: o que estiver selecionado no momento. Exige ter clicado com o botão direito no mob antes | `MasterCommands.java: onRegister` (handler `removeEnemy: removeEnemy`) |
+| `/rpg block_lock` | só o Mestre | **Não tranca nada sozinho**: arma o pedido e responde `Click a block to LOCK it. Players will not be able to use it.` O **próximo clique do Mestre num bloco** tranca aquele bloco. O pedido vale para 1 clique | `MasterCommands.java: onRegister` (handler `blockLock: blockLock`, que chama `BlockLockManager.arm`) |
+| `/rpg block_lock remove` | só o Mestre | O mesmo para **destrancar**: arma o pedido, e o próximo clique do Mestre no bloco o destrava | `MasterCommands.java: onRegister` (idem) (handler `blockUnlock: blockUnlock`) |
 
 ### Detalhes que valem uma linha cada
 
@@ -108,6 +110,64 @@ Raiz única `/rpg`, **sem aliases**. Todos registrados em
 - **`/rpg remove enemy`** sem seleção devolve
   `§c[RPG] No enemy selected. Right-click an enemy first, then run /rpg remove enemy.`
   (`MasterCommands.java: removeEnemy`).
+- **Trancar blocos (`/rpg block_lock`, `/rpg block_lock remove` e o item `Block Lock`)**: as trancas
+  valem **para os jogadores** (não-mestre); o Mestre nunca é bloqueado, nem com o item na mão. A
+  recusa vale **independente do turno**: mesmo o jogador do turno recebe `Block Locked`, porque a
+  tranca é uma regra do Mestre e não uma consequência da ordem de jogada
+  (`BlockLockManager.java: onUseBlock`).
+  - **O comando arma, o clique aplica** (`BlockLockManager.arm` grava em `pendingActions`, e o handler
+    consome com `pendingActions.remove`), na mesma troca comando-clique do `/rpg remove enemy`. O
+    pedido é de **1 clique** e é cancelado se o Mestre usar o item antes (`BlockLockManager.clearPending`).
+  - **Comando e item se comportam diferente no bloco já no estado desejado**: o comando executa a
+    **ordem** e responde `That block is already locked.` / `That block is not locked.`; o item
+    **alterna**. Inverter as duas coisas faria o comando destravar um baú por engano, e o item
+    seria inútil (a mesma sequência de cliques daria o mesmo resultado).
+  - **O clique é consumido**: trancar não abre o baú nem gira a porta
+    (`BlockLockManager.java: onUseBlock` devolve `InteractionResult.SUCCESS`). É o mesmo motivo pelo
+    qual a implementação está no `UseBlockCallback` e não no `Item#use`: o `Item#use` roda
+    **depois** do `useWithoutItem` do bloco, então o baú já teria aberto
+    (`BlockLockManager`, Javadoc de classe).
+  - **O cliente nunca decide**: `onUseBlock` devolve `PASS` quando o jogador não é um `ServerPlayer`.
+    Devolver algo diferente cancelaria o pacote **antes** de ele chegar ao servidor, e o Mestre
+    ficaria sem trancar nada sem receber erro.
+  - **As trancas sobrevivem ao reinício**: ficam num `SavedData` do overworld, em
+    `data/tabletop_rpg_block_locks.dat` (`BlockLockStore.java: get`, que usa `computeIfAbsent` e nunca
+    `get` — ver o Javadoc da classe e `SheetModelStore` para a armadilha do `null`). A chave é
+    **dimensão + posição**, e não só a posição, porque Overworld/Nether/End compartilham o arquivo.
+  - **O que é trancável: qualquer bloco com interação** — baú, barril, fornalha, porta, alavanca,
+    botão, e inventário de qualquer mod. A verificação é `BlockState.getMenuProvider` (inventário) ou
+    a classe do bloco sobrescrever `useWithoutItem`/`useItemOn` (`BlockLockManager.java: isInteractable`).
+    **Não** foi usada tag do vanilla: nesta versão `BlockTags` **não tem** `OPENABLE`, `CONTAINERS`,
+    `SHOPIERS` nem `LEVERS` (verificado com `javap` no jar nomeado 1.21.11), e depender delas
+    deixaria de fora os blocos de mod.
+    A sobrescrita é detectada por **assinatura** (`getDeclaredMethods` comparando os **tipos de
+    parâmetro**), e não por nome: o nome do método é um literal de string, e literais não passam pelo
+    remapeamento que o carregador aplica às referências de classe do Minecraft, então um
+    `getDeclaredMethod("useWithoutItem", ...)` pode engolir a sobrescrita num `NoSuchMethodException`
+    silencioso e guardar o resultado num cache que nunca é reavaliado. Isso foi observado em teste em
+    jogo em 30/09/2026 (porta recusada como "sem interação para travar"); a assinatura usa só
+    referências de classe e vale nas duas situações de mapeamento.
+  - **A porta é uma unidade, não dois blocos** (30/09/2026): trancar/destravar/consultar opera no
+    **conjunto** de posições ligado por `BlockStateProperties.DOUBLE_BLOCK_HALF`, não só na posição
+    clicada (`BlockLockManager.java: blockParts`, `anyPartLocked`, `dropLocksOf`). Sem isso o jogador
+    travava a metade de baixo, clicava na de cima — posição diferente, fora da lista — e a porta
+    abria; foi o que chegou como "abre mesmo trancada" e "abre de longe ou de um nível abaixo", e
+    não era alcance, era a outra metade. Só `DOUBLE_BLOCK_HALF` entra (verificado com `javap`:
+    `DoubleBlockHalf` só tem `UPPER` e `LOWER`): `HALF` existe em slab, escada e armadilha mas
+    significa **formato** do mesmo bloco, não uma posição vizinha — usá-lo trancava também o ar
+    acima da escada. Cama usa `BED_PART`, e não passa em `isInteractable`.
+  - **Bloco trancado é indestrutível para jogador; só o Mestre quebra** (30/09/2026, pedido do
+    usuário). O jogador recebe `This block is locked. Only the Master can break it.` e a tranca
+    permanece; o Mestre quebra normalmente e a tranca é removida junto, senão o próximo bloco
+    colocado ali nasceria trancado. Tudo num único listener de `PlayerBlockBreakEvents.BEFORE`
+    (`BlockLockManager.java: register`): o **`AFTER` não serve** porque só é disparado se nenhum
+    listener de `BEFORE` cancelar (confirmado no Javadoc do Fabric API) e o `PlayerControlHandler`
+    cancela quando o jogador não pode quebrar — com `AFTER` a limpeza não chegava a rodar, e era o
+    defeito de "quebra e recoloca na mesma posição continua trancado".
+  - **Não há botão no menu ASCII** (30/09/2026, decisão do usuário): o comando e o item cobrem a
+    ação, e o botão seria uma terceira via para o mesmo efeito. Os botões `[Lock]`/`[Unlock]`
+    existiram entre a entrega inicial e esta revisão e foram removidos de `buildAsciiMenu`
+    (`MasterCommands.java`).
  - **O parser de dados é o `DiceFormula.java` (29/09/2026), uma classe nova, sem Minecraft.** Antes disso a
    rolagem vivia inteira em `MasterCommands.rollDice` e aceitava só termo simples (`4d20`) somado ou subtraído
    (`d8-1`). O motor antigo continua em uso apenas para o texto legado; **a aritmética é a do `DiceFormula`**.

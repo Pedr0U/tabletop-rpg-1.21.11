@@ -1,0 +1,6 @@
+{
+  "model": {
+    "type": "minecraft:model",
+    "model": "tabletop-rpg:item/block_lock"
+  }
+}

@@ -105,7 +105,7 @@ public class TabletopRpgClient implements ClientModInitializer {
     public static volatile boolean downed = false;
 
     /**
-     * UUIDs de TODOS os personagens que o servidorвітou como deitados.
+     * UUIDs de TODOS os personagens que o servidor marcou como deitados.
      *
      * <p><b>FACT (por que um conjunto e nao so a flag acima):</b> o cliente
      * recalcula a pose de todos os jogadores a cada tick
@@ -232,6 +232,10 @@ public class TabletopRpgClient implements ClientModInitializer {
             // pericias do mundo anterior ate o payload do JOIN chegar -- e se o
             // mundo novo nao tem Sheet Editor, o JOIN nao mandaria nada.
             SheetModelHolder.set(SheetModel.defaults());
+            // Trancas e a flag de Mestre tambem sao estado do mundo anterior. Sem
+            // isto, um Mestre que sai de um mundo onde havia trancas e entra em
+            // outro ve a aura do mundo anterior ate o payload do JOIN chegar.
+            BlockLockAura.clear();
             // O rascunho e as marcas de nome pendente do Sheet Editor sao estado
             // do MESMO mundo, e sao estaticos (a tela e remontada a cada
             // abertura do item, e o texto digitado precisa sobreviver a uma
@@ -278,6 +282,9 @@ public class TabletopRpgClient implements ClientModInitializer {
 
         registerNetworking();
         registerConnectionCleanup();
+        // Sem esta chamada nao existe passe de desenho: o estado das trancas chega
+        // no cliente e ninguem le, entao a aura nunca aparece.
+        BlockLockAura.register();
         AuraRenderer.register();
 
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
@@ -375,6 +382,14 @@ public class TabletopRpgClient implements ClientModInitializer {
                 int ordinal = payload.modeOrdinal();
                 gameModeOrdinal = (ordinal >= 0 && ordinal <= 2) ? ordinal : 0;
             });
+        });
+
+        // Trancas visiveis -> alimenta a aura do Mestre (ver BlockLockAura).
+        // O `isMaster` vem no mesmo payload porque o cliente precisa saber se
+        // ELE e o Mestre: e o unico lugar onde essa decisao e feita, e ela e
+        // feita no servidor, que e a unica parte que conhece quem e o Mestre.
+        ClientPlayNetworking.registerGlobalReceiver(RpgNetworking.BlockLocksPayload.TYPE, (payload, context) -> {
+            context.client().execute(() -> BlockLockAura.setState(payload.isMaster(), payload.locks()));
         });
 
         // Estado do ciclo dia/noite -> atualiza o campo e a tela de Settings aberta.
