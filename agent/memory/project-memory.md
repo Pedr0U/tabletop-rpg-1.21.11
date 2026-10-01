@@ -2338,3 +2338,48 @@ O que e verdade, com evidencia de jogo (30/09/2026):
 
 Este paragrafo existe para que a frase errada, que ja foi copiada para o catalogo e para o
 relatorio, **nao volte a ser tratada como verdade** numa sessao futura.
+
+## Clique em entidade: o alvo nao e o que foi clicado (01/10/2026)
+
+**FATO (`javap` no `minecraft-common` 1.21.11):** `EnderDragon extends Mob`, mas
+`EnderDragonPart extends Entity`. O cliente manda o clique na **parte**, nao no corpo. Um teste
+`entity instanceof Mob` feito sobre a entidade **crua** do clique falha para o dragao, e o handler
+devolve `PASS` **em silencio**.
+
+- Foi essa a causa do "o Mestre nao consegue selecionar nem mover o dragao do Fim". Nao era
+  hitbox, nao era distancia, nao era permissao.
+- **FATO:** 1.21.11 **nao tem** API generica de partes. `net.minecraft.world.entity.EntityPart`
+  nao existe e `Entity` nao tem `getParts()`. O unico desembrulho e por tipo:
+  `EnderDragonPart.parentMob` (public final).
+- **REGRA:** desembrulhar a entidade clicada **antes** de testar o tipo. Ver
+  `EntityTargets.resolve`. Mob de outro mod montado em partes precisa do caso dele ali.
+- **REGRA:** caminho de clique recusado **merece log**. Um `PASS` silencioso esconde o defeito por
+  semanas. Ver `Clique do Mestre sem alvo valido` no `CombatController`.
+
+## O vanilla re-dispara o uso com o botao SEGURADO (~200 ms) (01/10/2026)
+
+Descoberto por revisao propria **antes** de entregar; o build nao acusa.
+
+- **FATO de codigo:** com o botao direito pressionado, o cliente re-dispara o uso do item a cada
+  ~200 ms (o mesmo fenomeno que o `CombatController` ja documentava para bloco).
+- **O defeito que isso cria:** um handler que consome estado de uso **unico** (ex.: "pedido armado
+  pelo comando") e o **limpa** no primeiro pacote deixa o re-disparo cair no caminho **seguinte**.
+  No caso da camera armada, o resultado era aplicar a camera **e** selecionar o mob para mover no
+  mesmo gesto.
+- **REGRA:** handler de clique com estado de uso unico precisa de **janela de debounce** *e* de
+  **renovacao do carimbo a cada re-disparo**. Sem a renovacao, o carimbo envelhece com o botao ainda
+  apertado, a janela cai no meio do gesto e o caminho seguinte assume o clique.
+- **REGRA:** usar a **mesma** janela dos caminhos vizinhos que disputam o mesmo gesto
+  (`RECENT_MS = 400`, igual a selecao de monstros), para os dois concordarem sobre "o mesmo clique".
+
+## Sprite temporario: copiar para dentro do mod, nao referenciar (01/10/2026)
+
+Decisao do usuario para o `Camera Tool`, e vale como regra geral para sprite de rascunho.
+
+- **FATO:** a textura e copia da luneta do jogo (`minecraft:textures/item/spyglass.png`, 16x16),
+  extraida do jar do cliente para `assets/tabletop-rpg/textures/item/camera_tool.png`.
+- **Motivo:** o sprite e **temporario** e vai ser editado depois. Com a copia, trocar o visual e
+  sobrescrever o PNG. Referenciando `minecraft:item/spyglass`, o item ficaria preso a textura do
+  jogo -- e uma mudanca de textura do vanilla mudaria o item sem ninguem pedir.
+- **Assinatura de PNG valido:** `89 50 4E 47 0D 0A 1A 0A`; largura/altura nos bytes 16..23
+  (big-endian). Conferir depois de extrair do jar.

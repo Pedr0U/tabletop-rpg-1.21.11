@@ -55,6 +55,22 @@ public final class ModItems {
             ResourceKey.create(Registries.ITEM, TabletopRpg.id("block_lock"));
 
     /**
+     * Chave do registro do Camera Tool.
+     *
+     * <p><b>Sprite:</b> copia da luneta do proprio jogo
+     * ({@code minecraft:textures/item/spyglass.png}, 16x16) extraida do jar do cliente
+     * 1.21.11 para {@code assets/tabletop-rpg/textures/item/camera_tool.png}.
+     *
+     * <p><b>Por que copia, e nao referencia direta</b> (decisao do usuario em
+     * 01/10/2026): o sprite e <b>temporario</b>. Referenciar {@code minecraft:item/spyglass}
+     * deixaria o item preso a textura do jogo -- trocar depois exigiria mexer em codigo, e
+     * uma mudanca de textura do vanilla no futuro mudaria o item sem ninguem pedir. Com a
+     * copia, trocar o visual e sobrescrever {@code camera_tool.png}, sem tocar em codigo.
+     */
+    public static final ResourceKey<Item> CAMERA_TOOL_KEY =
+            ResourceKey.create(Registries.ITEM, TabletopRpg.id("camera_tool"));
+
+    /**
      * Chave da aba criativa.
      *
      * <p>Fica no <b>comum</b>, e nao no client: {@code CreativeModeTabs.bootstrap}
@@ -67,6 +83,8 @@ public final class ModItems {
     private static Item sheetEditor;
 
     private static Item blockLock;
+
+    private static Item cameraTool;
 
     private ModItems() {
     }
@@ -94,6 +112,14 @@ public final class ModItems {
 
         Registry.register(BuiltInRegistries.ITEM, BLOCK_LOCK_KEY, blockLock);
 
+        // Camera Tool: mesma forma do Block Locker (ferramenta de Mesa, nao
+        // consumivel, um por stack). O sprite e so no JSON do modelo.
+        cameraTool = new Item(new Item.Properties()
+                .setId(CAMERA_TOOL_KEY)
+                .stacksTo(1));
+
+        Registry.register(BuiltInRegistries.ITEM, CAMERA_TOOL_KEY, cameraTool);
+
         Registry.register(BuiltInRegistries.CREATIVE_MODE_TAB, TAB_KEY, CreativeModeTab.builder(
                         CreativeModeTab.Row.TOP, 0)
                 .title(Component.translatable("itemGroup.tabletoprpg.main"))
@@ -101,6 +127,7 @@ public final class ModItems {
                 .displayItems((parameters, output) -> {
                     output.accept(sheetEditor);
                     output.accept(blockLock);
+                    output.accept(cameraTool);
                 })
                 .build());
 
@@ -126,6 +153,22 @@ public final class ModItems {
      */
     public static boolean isBlockLock(ItemStack stack) {
         return blockLock != null && stack != null && stack.is(blockLock);
+    }
+
+    /** O Camera Tool pronto, para a aba. */
+    public static Item cameraTool() {
+        return cameraTool;
+    }
+
+    /**
+     * O stack na mao e o Camera Tool?
+     *
+     * <p>Usado pelo {@code CameraToolManager} para decidir se o clique numa entidade
+     * vira camera. Fica aqui pelo mesmo motivo do {@link #isBlockLock}: a identidade do
+     * item e responsabilidade de quem o registra.
+     */
+    public static boolean isCameraTool(ItemStack stack) {
+        return cameraTool != null && stack != null && stack.is(cameraTool);
     }
 
     /**
@@ -185,6 +228,29 @@ public final class ModItems {
                 serverPlayer.displayClientMessage(
                         Component.translatable("message.tabletop-rpg.block_lock_pick_block"), true);
             }
+            return InteractionResult.PASS;
+        }
+
+        // Camera Tool: tambem e o caminho do clique NO AR. Numa entidade quem responde
+        // primeiro e o CameraToolManager (pelo UseEntityCallback), entao se o codigo
+        // chegou aqui o Mestre clicou em nada e so precisa da dica.
+        //
+        // O item NAO arma pedido nenhum: quem arma e o `/rpg insert camera`. Enquanto o
+        // item esta na mao ele ja basta (o CameraToolManager checa a mao), e armar aqui
+        // faria o pedido sobreviver a troca de item, aplicando camera na proxima criatura
+        // que o Mestre tocasse com outra coisa na mao -- surpresa que ninguem pediu.
+        if (isCameraTool(stack)) {
+            // Cliente: consome o clique e nao decide nada.
+            if (!(player instanceof ServerPlayer serverPlayer)) {
+                return InteractionResult.SUCCESS;
+            }
+            if (!SessionManager.isMaster(serverPlayer)) {
+                serverPlayer.displayClientMessage(
+                        Component.translatable("item.tabletop-rpg.camera_tool.denied"), false);
+                return InteractionResult.FAIL;
+            }
+            serverPlayer.displayClientMessage(
+                    Component.translatable("message.tabletop-rpg.camera_tool_pick_entity"), true);
             return InteractionResult.PASS;
         }
 

@@ -92,6 +92,7 @@ Raiz única `/rpg`, **sem aliases**. Todos registrados em
 | `/rpg hoverdistance <1-256>` | só o Mestre | Define, **em blocos**, a distância máxima do destaque de mob para os jogadores | `MasterCommands.java: onRegister` (handler `setHoverDistance: setWorldTime`) |
 | `/rpg session set <nome>` | só o Mestre | Define o nome da sessão; nomes vazios são recusados e o texto é cortado em 64 caracteres | `MasterCommands.java: onRegister` (handler `setSessionName: setSessionName`) |
 | `/rpg insert enemy <tipo> <cam_perm>` | só o Mestre | Invoca um mob 2 blocos à frente do Mestre, na direção do olhar dele. `tipo` aceita `zombie` ou `minecraft:zombie`; a sugestão só oferece criaturas da categoria `MONSTER` (vanilla e de outros mods). `cam_perm` é `true`/`false` | `MasterCommands.java: onRegister` (sugestões `suggestEntityTypes: suggestEntityTypes`, handler `insertEnemy: insertEnemy`) |
+| `/rpg insert camera` | só o Mestre | **Não define câmera nenhuma sozinho**: arma o pedido e responde `Click a creature to add or remove its camera.` O **próximo clique do Mestre numa criatura** põe (ou tira) aquela criatura do carrossel de câmera. Existe para criaturas que **já estão no mundo** — spawnadas normalmente, por `/summon` ou de outros mods —, onde `/rpg insert enemy <tipo> true` não se aplica. O item `Camera Tool` faz o mesmo, sem comando | `MasterCommands.java: onRegister` (handler `insertCamera: insertCamera`, que chama `CameraToolManager.arm`) |
 | `/rpg remove enemy` | só o Mestre | Remove **1 mob por execução**: o que estiver selecionado no momento. Exige ter clicado com o botão direito no mob antes | `MasterCommands.java: onRegister` (handler `removeEnemy: removeEnemy`) |
 | `/rpg block_lock` | só o Mestre | **Não tranca nada sozinho**: arma o pedido e responde `Click a block to LOCK it. Players will not be able to use it.` O **próximo clique do Mestre num bloco** tranca aquele bloco. O pedido vale para 1 clique | `MasterCommands.java: onRegister` (handler `blockLock: blockLock`, que chama `BlockLockManager.arm`) |
 | `/rpg block_lock remove` | só o Mestre | O mesmo para **destrancar**: arma o pedido, e o próximo clique do Mestre no bloco o destrava | `MasterCommands.java: onRegister` (idem) (handler `blockUnlock: blockUnlock`) |
@@ -107,6 +108,46 @@ Raiz única `/rpg`, **sem aliases**. Todos registrados em
   Fica marcado no NBT com `tabletoprpg_inserted`, e com `cam_perm=true` também com
   `tabletoprpg_camera`, que o faz entrar no carrossel de espectador dos jogadores travados
   (`MasterCommands.java: insertEnemy`).
+- **Câmera em criatura que já existe no mundo (`/rpg insert camera` e o item `Camera Tool`)**: o
+  `/rpg insert enemy` acima só serve para a criatura que **ele mesmo** invoca — ele cria a entidade,
+  então só aceita um tipo e o mob nasce congelado e invulnerável. Para um mob que **já está** no
+  mundo (spawnado normalmente, por `/summon`, ou de outro mod), o caminho é marcar a criatura
+  **apontando para ela**, e é isso que `/rpg insert camera` e o item fazem.
+  - **O comando arma, o clique aplica** — mesma troca do `/rpg block_lock` e do
+    `/rpg remove enemy`: `CameraToolManager.arm` guarda o Mestre em `armedMasters`, o comando responde
+    `Click a creature to add or remove its camera.`, e quem aplica é o **próximo clique do Mestre numa
+    criatura**. Diferente do `BlockLockManager`, um clique em alvo inválido **não** consome o pedido:
+    quem erra o alvo tenta de novo sem repetir o comando.
+  - **O item não precisa de comando.** Segurando o `Camera Tool`, o clique numa criatura já aplica. O
+    clique **no ar** (ou em nada) só devolve a dica `Right-click a creature to add or remove its
+    camera.` — e **não** arma nada, de propósito: se armasse, o pedido sobreviveria à troca de item e
+    a câmera cairia na próxima criatura que o Mestre tocasse com outra coisa na mão.
+  - **É alternância, no item e no comando**: o mesmo clique põe **ou** tira a criatura do carrossel.
+    Add-only exigiria um segundo gesto para desfazer o que o primeiro fez.
+  - **Só criaturas (`Mob`) entram no carrossel**, que é a mesma regra que já valia para o
+    `cam_perm=true` (`RpgNetworking.java: getSpectatorTargets` filtra `instanceof Mob`). Clicar numa
+    entidade que não é `Mob` responde `Only creatures can be a camera target.` e **não** consome o
+    pedido armado.
+  - **A câmera exige persistência**: a criatura recebe `setPersistenceRequired()`, porque criatura de
+    câmera que despawna some do carrossel em silêncio, sem nada no log. Ela **não** fica com IA
+    desligada — congelar o mob não foi pedido e mudaria o que ele é na mesa.
+  - **A marca é o mesmo rótulo do `cam_perm`**: `tabletoprpg_camera` no NBT, e o `selfHealCameraMobs`
+    do `CombatController` reinscreve os marcados depois de reiniciar o mundo. As duas vias — comando
+    `cam_perm=true` e clique — terminam no mesmo estado.
+  - **O Mestre nunca é bloqueado por segurar o item**, igual ao `Block Locker`; um jogador comum com
+    o item na mão recebe `Only the Master can use the Camera Tool.` em vez de um botão morto.
+  - **A captura do clique fica no ponto único que já existia**: o `UseEntityCallback` do
+    `CombatController`, que decide antes de tudo se o clique é câmera, e só então segue para a seleção
+    normal (`CombatController.java: register`, `CameraToolManager.handleEntityClick`). Dois callbacks
+    independentes dariam seleção **e** câmera no mesmo clique.
+- **Segurar o botão não aplica duas vezes** (`CameraToolManager: RECENT_MS`): o vanilla re-dispara o
+  uso com o botão pressionado a cada ~200 ms. Sem trava, um único gesto com o comando armado aplicaria
+  a câmera **e** cairia na seleção normal no re-disparo, porque o pedido armado já tinha sido
+  consumido no primeiro pacote. A janela é a mesma de 400 ms da seleção de monstros, de propósito: os
+  dois caminhos disputam o mesmo gesto e precisam concordar sobre o que é "o mesmo clique".
+  - **Não há botão no menu ASCII** (01/10/2026, decisão do usuário): o comando e o item cobrem a
+    ação, e o botão seria uma terceira via para o mesmo efeito — exatamente a mesma decisão tomada
+    para o `Block Locker` em 30/09/2026. O `buildAsciiMenu` **não** foi tocado por esta entrega.
 - **`/rpg remove enemy`** sem seleção devolve
   `§c[RPG] No enemy selected. Right-click an enemy first, then run /rpg remove enemy.`
   (`MasterCommands.java: removeEnemy`).
@@ -503,6 +544,20 @@ não "voltar" sozinho durante a transição (`SessionManager.java: playersCanPla
   do bloco (`: moveSelectedMonster`).
 - Ao selecionar o mesmo mob de novo, ele é **desselecionado** e volta a ser uma peça congelada
   (`CombatController.java: toggleSelection`).
+- **Entidades montadas em partes também são selecionáveis** (01/10/2026, `EntityTargets.java`): o
+  clique do cliente chega na **parte**, não no corpo, e a parte do dragão do Fim não é um `Mob` —
+  em 1.21.11, `EnderDragon extends Mob` mas `EnderDragonPart extends Entity` (confirmado por
+  `javap`). Com o teste `instanceof Mob` sobre a entidade crua, o clique no dragão simplesmente não
+  fazia nada, **em silêncio**: era esse o defeito, e não o hitbox. O `EntityTargets.resolve`
+  desembrulha `EnderDragonPart` para o corpo (`parentMob`) **antes** do teste, e é o corpo que entra
+  na seleção e no carrossel. Em 1.21.11 **não existe** API genérica de partes (`EntityPart` não
+  existe e `Entity` não tem `getParts()`), então o desembrulho é por tipo — um mob de outro mod com
+  partes vai precisar do caso dele aqui.
+- **Clique sem alvo válido agora aparece no log** (`CombatController.java: register`): se o Mestre
+  clicar numa entidade e ela não virar seleção nem câmera, o servidor registra
+  `Clique do Mestre sem alvo valido` com o tipo da entidade clicada e do pai resolvido
+  (`EntityTargets.describe`). Antes o clique morria em `PASS` sem deixar rastro, e foi assim que o
+  bug do dragão passou tanto tempo invisível.
 
 ### Ficha do personagem
 

@@ -117,12 +117,16 @@ public class MasterCommands {
                             .executes(MasterCommands::setSessionName))))
 
                 // /rpg insert enemy <type> <cam_perm true|false>
+                // /rpg insert camera -> arma o pedido; o proximo clique numa
+                //   criatura a poe (ou tira) do carrossel de cameras.
                 .then(Commands.literal("insert")
                     .then(Commands.literal("enemy")
                         .then(Commands.argument("type", StringArgumentType.string())
                             .suggests(MasterCommands::suggestEntityTypes)
                             .then(Commands.argument("cam_perm", BoolArgumentType.bool())
-                                .executes(MasterCommands::insertEnemy)))))
+                                .executes(MasterCommands::insertEnemy))))
+                    .then(Commands.literal("camera")
+                        .executes(MasterCommands::insertCamera)))
 
                 // /rpg remove enemy  (só o mestre) -> remove o mob selecionado
                 // (clique direito nele primeiro). 1 mob por execução.
@@ -388,6 +392,33 @@ public class MasterCommands {
         } catch (Exception e) {
             TabletopRpg.LOGGER.error("[TabletopRPG] Error summoning enemy: {}", e.getMessage());
             ctx.getSource().sendFailure(Component.literal("§c[RPG] Failed to summon enemy."));
+            return 0;
+        }
+    }
+
+    /**
+     * /rpg insert camera: arma o pedido de camera. O comando em si nao mexe em
+     * ninguem -- quem aplica e o <b>proximo clique do Mestre numa criatura</b>, para
+     * que ele veja qual vai ser afetada antes de confirmar. Se a criatura ja tiver
+     * camera, o mesmo clique a remove (decidido em 01/10/2026).
+     *
+     * <p><b>Para que existe, se ja ha o Camera Tool:</b> o item exige o item na mao.
+     * Este comando serve para quem nao quer largar o que esta segurando, e e o unico
+     * caminho quando o Mestre nao tem o item no inventario. Os dois caminhos aplicam
+     * exatamente a mesma regra -- os dois terminam em
+     * {@code CameraToolManager.handleEntityClick}.
+     */
+    private static int insertCamera(CommandContext<CommandSourceStack> ctx) {
+        if (!verifyMasterPermission(ctx)) return 0;
+        try {
+            ServerPlayer master = ctx.getSource().getPlayerOrException();
+            CameraToolManager.arm(master);
+            master.sendSystemMessage(
+                    Component.translatable("message.tabletop-rpg.camera_arm"));
+            return 1;
+        } catch (Exception e) {
+            TabletopRpg.LOGGER.error("[TabletopRPG] Error arming camera: {}", e.getMessage());
+            ctx.getSource().sendFailure(Component.literal("§c[RPG] Failed to arm the camera."));
             return 0;
         }
     }

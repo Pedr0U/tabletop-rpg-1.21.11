@@ -41,6 +41,11 @@ public class TabletopRpg implements ModInitializer {
 		// `isBlockLock` usado no clique.
 		BlockLockManager.register();
 
+		// Camera Tool: liga a limpeza do pedido armado na desconexao. O clique em
+		// entidade NAO e tratado aqui -- quem consulta este gerenciador e o
+		// CombatController, que ja e o ponto unico de decisao daquele callback.
+		CameraToolManager.register();
+
 		// Registra o controle de combate (seleção/movimento de monstros, auras, highlight)
 		CombatController.register();
 
