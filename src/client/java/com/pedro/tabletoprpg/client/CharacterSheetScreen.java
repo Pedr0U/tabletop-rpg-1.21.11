@@ -22,7 +22,8 @@ import java.util.Map;
 /**
  * Base das telas de ficha do personagem (FASE 3b).
  *
- * <p>Subclasses: {@link StatusScreen} (Status) e {@link SkillsScreen} (Skills).
+ * <p>Subclasses: {@link StatusScreen} (Status, que hoje e a unica -- a antiga
+ * tela de Skills foi absorvida pela aba 3 dele em 01/10/2026).
  * A base concentrationa o que as duas compartilham: fundo escuro, painel
  * responsivo, sincronia com o servidor, campos editaveis e o botao Back.
  *

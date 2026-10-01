@@ -381,7 +381,8 @@ void invertedLimitsCollapseToTheFloor() {
         // direto no construtor e o que testa o codec, e nao um caminho que a
         // tela usa.
         SheetData original = new SheetData(base.identity(), base.vitals(), base.progress(),
-                base.attributes(), base.skills(), base.pericias(), -5, 12, 7, base.inventory());
+                base.attributes(), base.skills(), base.pericias(), -5, 12, 7,
+                base.inventory(), base.spellbook());
 
         FriendlyByteBuf buf = new FriendlyByteBuf(Unpooled.buffer());
         SheetData.STREAM_CODEC.encode(buf, original);
@@ -601,7 +602,8 @@ void invertedLimitsCollapseToTheFloor() {
                         new SheetData.Pericia("", "Z", 3, "a"),
                         new SheetData.Pericia("", "W", 4, "a"),
                         new SheetData.Pericia("", "V", 5, "a")),
-                base.attributeValueMin(), base.attributeValueMax(), base.periciaValueMax(), base.inventory());
+                base.attributeValueMin(), base.attributeValueMax(), base.periciaValueMax(),
+                base.inventory(), base.spellbook());
 
         assertEquals(5, sheet.pericias().size(), "a ficha perdeu uma pericia sem id");
         assertEquals("pericia_3", sheet.pericias().get(2).id());
@@ -631,7 +633,8 @@ void invertedLimitsCollapseToTheFloor() {
                 base.attributes(), base.skills(),
                 List.of(new SheetData.Pericia("pericia_99", nameInModel, 5,
                         model.attributes().get(0).id())),
-                base.attributeValueMin(), base.attributeValueMax(), base.periciaValueMax(), base.inventory());
+                base.attributeValueMin(), base.attributeValueMax(), base.periciaValueMax(),
+                base.inventory(), base.spellbook());
 
         assertTrue(sheet.hasPericiaIds(), "a ficha tem id: e por isso que o nome nao pode casar");
         // A prova de que o nome casaria: por isso o fallback por nome seria um bug

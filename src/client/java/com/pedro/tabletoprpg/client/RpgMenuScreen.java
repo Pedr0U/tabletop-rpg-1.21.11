@@ -113,8 +113,11 @@ public class RpgMenuScreen extends Screen {
         if (isMaster) {
             y = addButton("Players", x, y, () -> openPlayers());
         } else {
+            // 01/10/2026: o botao "Skills" saiu do menu. As skills (e as magias)
+            // passaram a ser a TERCEIRA ABA da ficha, que o jogador abre pelo
+            // "Player Sheet" e o mestre pelas setinhas. Um botao separado levaria
+            // a uma tela que deixa de existir.
             y = addButton("Player Sheet", x, y, () -> openStatus());
-            y = addButton("Skills", x, y, () -> openSkills());
         }
 
         y = addButton("Rolls", x, y, () -> {
@@ -151,13 +154,8 @@ public class RpgMenuScreen extends Screen {
         }
     }
 
-    /** Abre a tela de Skills da propria ficha. */
-    private void openSkills() {
-        if (this.minecraft != null) {
-            this.minecraft.setScreen(new SkillsScreen("", this));
-            TabletopRpgClient.requestSheet("");
-        }
-    }
+    // 01/10/2026: a tela SkillsScreen foi removida e o `openSkills` com ela. O
+    // acesso as skills e as magias e pela terceira aba da ficha (StatusScreen).
 
     /** Abre a tela de lista de jogadores. */
     private void openPlayers() {
