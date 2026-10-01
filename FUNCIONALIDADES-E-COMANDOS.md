@@ -186,13 +186,36 @@ Raiz única `/rpg`, **sem aliases**. Todos registrados em
     essa é a via sem mixin. O pipeline é **copiado** do `LINES_TRANSLUCENT` do jogo mudando só o
     `DepthTestFunction`, para não adivinhar nome de shader (literal de string não passa pelo
     remapeamento, então um nome errado só quebra em runtime).
-  - **LIMITE CONHECIDO: com o Iris instalado a aura não aparece e o log recebe `Missing program ...
-    in override list` a cada frame** (verificado em 30/09/2026: a mensagem não existe em nenhum
-    `.class` do vanilla e existe dentro de `iris-fabric`). O Iris intercepta a ligação de pipeline e
-    rejeita programa fora da lista dele, e nenhum mod consegue se registrar nessa lista. Sem Iris a
-    aura funciona normalmente. Alternativa se for preciso funcionar com shaders: usar o
-    `RenderTypes.LINES_TRANSLUCENT` do jogo, que o Iris conhece — a aura passa a aparecer, mas
-    **sem** atravessar parede.
+  - **A aura atravessa parede mesmo com shaders do Iris ligados** (30/09/2026, confirmado em jogo).
+    O contorno usa um `RenderType` próprio, com `DepthTestFunction.NO_DEPTH_TEST`. Sem shader
+    ele funciona; com shader ligado, o Iris intercepta a ligação do shader e **não desenha** um
+    pipeline que ele não conhece, e a aura simplesmente não aparece — sem erro de GL, sem
+    exceção. A correção é dizer ao Iris qual shader usar para o nosso pipeline
+    (`IrisAuraSupport.ensurePipelineRegistered`, chamado **antes** do desenho, todo frame em que
+    a aura desenha). O atravessa-parede sobrevive porque shader e profundidade são coisas
+    separadas: o `NO_DEPTH_TEST` continua no nosso pipeline, o Iris só substitui o *programa*.
+  - **A integração com o Iris é opcional e por reflexão** (`IrisAuraSupport.java`): verifica
+    `FabricLoader.isModLoaded("iris")` e só então chama
+    `IrisPipelines.copyPipeline(LINES_TRANSLUCENT.pipeline(), pipelineThroughWalls())` — o
+    `copyPipeline(de, para)` é a API do próprio Iris para copiar a atribuição de shader de um
+    pipeline para outro. A origem é `LINES_TRANSLUCENT` **de propósito**: é a base exata do
+    nosso pipeline (mesmo vertex format, mesmo blend, mesma linha de shader), então o Iris
+    atribui o shader de linhas sem divergir do que o pipeline espera. Por reflexão, e não por
+    dependência: transformar o Iris em dependência de compilação quebraria o mod em quem não
+    o tem instalado.
+    **Por que registrar todo frame, e não uma vez na carga:** o mapa de shaders do Iris é
+    reconstruído a cada carga/troca de shaderpack, e o `copyPipeline` é idempotente e barato
+    (duas operações de mapa). Reaplicar no caminho do desenho cobre recarga sem custo quando
+    ninguém está olhando a aura. **Limitação:** o `copyPipeline` só copia se a origem já estiver
+    no mapa do Iris — um shaderpack que não mapeie `LINES_TRANSLUCENT` faria a cópia ser um
+    no-op silencioso e a aura não apareceria nele.
+  - **O aviso `Missing program ... in override list` NÃO é exceção.** Com namespace
+    `minecraft` o Iris loga `fatal` e a mensagem diz "This is likely an Iris bug!!!"; com
+    namespace de mod, como o nosso `tabletop-rpg`, loga `error` e a mensagem é "This is not a
+    critical problem...". Em ambos os casos **ele só registra e o vanilla segue** — não há
+    `athrow` em `MixinShaderManager_Overrides.redirectIrisProgram` (verificado com `javap`).
+    Sai **uma vez por pipeline**, não a cada frame. Erro comum: ler esse log como "o Iris
+    rejeitou o pipeline" — ele não rejeita, ele simplesmente não tinha shader atribuído.
  - **O parser de dados é o `DiceFormula.java` (29/09/2026), uma classe nova, sem Minecraft.** Antes disso a
    rolagem vivia inteira em `MasterCommands.rollDice` e aceitava só termo simples (`4d20`) somado ou subtraído
    (`d8-1`). O motor antigo continua em uso apenas para o texto legado; **a aritmética é a do `DiceFormula`**.
