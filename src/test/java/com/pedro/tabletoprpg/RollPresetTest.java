@@ -80,11 +80,14 @@ class RollPresetTest {
     void createAcceptsLooseColor() throws Exception {
         assertEquals(RollPresetColor.RED, RollPreset.create("A", "1d20", "RED").color());
         assertEquals(RollPresetColor.LIGHT_GRAY, RollPreset.create("B", "1d20", "light gray").color());
-        assertEquals(RollPresetColor.DEFAULT, RollPreset.create("C", "1d20", "").color());
+        // Sem cor: cai em WHITE. A cor "default" saiu em 01/10/2026.
+        assertEquals(RollPresetColor.WHITE, RollPreset.create("C", "1d20", "").color());
+        // Preset salvo antes da remocao, ainda com o id "default", tem de carregar.
+        assertEquals(RollPresetColor.WHITE, RollPresetColor.idOrDefault("default"));
     }
 
     @Test
-    @DisplayName("create recusa cor fora das 17 e lista as validas no erro")
+    @DisplayName("create recusa cor fora das 16 e lista as validas no erro")
     void createRejectsUnknownColor() {
         RollPreset.PresetException error = assertThrows(RollPreset.PresetException.class,
                 () -> RollPreset.create("A", "1d20", "chartreuse"));
@@ -93,15 +96,16 @@ class RollPresetTest {
     }
 
     @Test
-    @DisplayName("as 17 cores existem, na ordem pedida, e nenhuma se repete")
+    @DisplayName("as 16 cores existem, na ordem pedida, e nenhuma se repete")
     void colorPaletteIsComplete() {
         List<String> ids = RollPresetColor.ids();
-        assertEquals(17, ids.size());
+        assertEquals(16, ids.size());
         assertEquals(ids.size(), ids.stream().distinct().count());
-        assertEquals("default", ids.get(0));
+        // "default" saiu em 01/10/2026: marrom sem tingir parecia a cor "brown".
+        assertFalse(ids.contains("default"), ids.toString());
         assertEquals(List.of("white", "light_gray", "gray", "black", "brown", "red", "orange",
                 "yellow", "lime", "green", "cyan", "light_blue", "blue", "purple", "magenta", "pink"),
-                ids.subList(1, 17));
+                ids);
     }
 
     // --- chave de busca ---
@@ -152,7 +156,7 @@ class RollPresetTest {
         RollPreset sujo = new RollPreset("x".repeat(300), "1d20+5", "rosa-choque");
 
         assertEquals(RollPreset.MAX_NAME, sujo.name().length());
-        assertEquals(RollPresetColor.DEFAULT, sujo.color());
+        assertEquals(RollPresetColor.WHITE, sujo.color());
         assertEquals("1d20+5", sujo.formula());
     }
 
