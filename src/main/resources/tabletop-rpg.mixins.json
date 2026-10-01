@@ -5,7 +5,8 @@
   "compatibilityLevel": "JAVA_21",
   "mixins": [
     "PlayerPoseMixin",
-    "PlayerSheetPersistenceMixin"
+    "PlayerSheetPersistenceMixin",
+    "PlayerRollPresetPersistenceMixin"
   ],
   "server": [
     "ServerGamePacketListenerImplMixin",
