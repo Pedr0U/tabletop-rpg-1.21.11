@@ -5,6 +5,7 @@ import com.mojang.brigadier.arguments.BoolArgumentType;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.context.CommandContext;
+import com.pedro.tabletoprpg.item.ModItems;
 import com.mojang.brigadier.suggestion.Suggestions;
 import com.mojang.brigadier.suggestion.SuggestionsBuilder;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
@@ -14,6 +15,7 @@ import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
 import net.minecraft.commands.arguments.EntityArgument;
 import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.server.MinecraftServer;
 import net.minecraft.network.chat.ClickEvent;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.HoverEvent;
@@ -31,6 +33,7 @@ import net.minecraft.world.entity.MobCategory;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Random;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -140,7 +143,51 @@ public class MasterCommands {
                 .then(Commands.literal("block_lock")
                     .executes(MasterCommands::blockLock)
                     .then(Commands.literal("remove")
-                        .executes(MasterCommands::blockUnlock))));
+                        .executes(MasterCommands::blockUnlock)))
+
+                // /rpg preset create <nome> <formula> <cor>  -> cria e entrega o item
+                // /rpg preset use <nome>     -> rola o preset
+                // /rpg preset delete <nome>  -> apaga o preset (o item fica no inventário)
+                // /rpg preset list           -> lista os presets da jogadora
+                //
+                // Sem verifyMasterPermission, igual a /rpg roll: o preset é PESSOAL e
+                // vive no NBT de quem o criou (decisão do usuário em 01/10/2026), então
+                // qualquer jogador precisa poder criar e usar o seu.
+                //
+                // A formula é StringArgumentType.string() e NÃO greedyString: com
+                // greedyString o texto engoliria a cor. O preço é não poder digitar
+                // espaço na formula ("1d20 + 5" não entra), o que não atrapalha porque
+                // o RollPreset já remove os espaços antes de validar.
+                .then(Commands.literal("preset")
+                    .then(Commands.literal("create")
+                        .then(Commands.argument("name", StringArgumentType.string())
+                            .then(Commands.argument("formula", StringArgumentType.string())
+                                .then(Commands.argument("color", StringArgumentType.string())
+                                    .suggests(MasterCommands::suggestPresetColors)
+                                    .executes(MasterCommands::presetCreate)))))
+                    .then(Commands.literal("use")
+                        .then(Commands.argument("name", StringArgumentType.string())
+                            .suggests(MasterCommands::suggestOwnRollPresets)
+                            .executes(MasterCommands::presetUse)))
+                    .then(Commands.literal("delete")
+                        .then(Commands.argument("name", StringArgumentType.string())
+                            .suggests(MasterCommands::suggestOwnRollPresets)
+                            .executes(MasterCommands::presetDelete)))
+                    .then(Commands.literal("give")
+                        .then(Commands.argument("name", StringArgumentType.string())
+                            .suggests(MasterCommands::suggestOwnRollPresets)
+                            .executes(MasterCommands::presetGive)))
+                    .then(Commands.literal("giveall")
+                        .executes(MasterCommands::presetGiveAll))
+                    .then(Commands.literal("edit")
+                        .then(Commands.argument("name", StringArgumentType.string())
+                            .suggests(MasterCommands::suggestOwnRollPresets)
+                            .then(Commands.argument("formula", StringArgumentType.string())
+                                .then(Commands.argument("color", StringArgumentType.string())
+                                    .suggests(MasterCommands::suggestPresetColors)
+                                    .executes(MasterCommands::presetEdit)))))
+                    .then(Commands.literal("list")
+                        .executes(MasterCommands::presetList))));
     }
 
     // --- COMANDOS E LÓGICA ---
@@ -862,6 +909,301 @@ public class MasterCommands {
         return 1;
     }
 
+    // --- Preset de Rolagem (01/10/2026) ---
+
+    /**
+     * Rola uma fórmula com a MESMA regra de visibilidade de {@code /rpg roll}: Mestre
+     * vê só o resultado, jogador envia para todos.
+     *
+     * <p><b>Por que existe:</b> preset (por comando e por item) e rolagem manual
+     * precisam cair nas mesmas regras, ou o mesmo dado fica secreto para um e público
+     * para o outro. O texto também é o mesmo, para ninguém notar a diferença.
+     *
+     * @return {@code 1} se rolou, {@code 0} se a fórmula foi recusada
+     */
+    private static int rollAndPublish(CommandContext<CommandSourceStack> ctx, ServerPlayer player,
+                                      String rawFormula) {
+        String message = rollDice(ctx, rawFormula);
+        if (message == null) {
+            return 0;
+        }
+        if (SessionManager.isMaster(player)) {
+            player.sendSystemMessage(Component.literal(message));
+        } else {
+            broadcast(ctx, message);
+        }
+        return 1;
+    }
+
+    /**
+     * O jogador que está rodando o comando, ou {@code null} se quem chamou foi o console.
+     *
+     * <p>Preset é ação de jogador: o console não tem inventário para receber o item e
+     * não tem preset próprio. Devolve {@code null} em vez de lançar, para o chamador
+     * poder recusar com mensagem em vez de estourar a exceção para o jogador.
+     */
+    private static ServerPlayer presetPlayer(CommandContext<CommandSourceStack> ctx) {
+        try {
+            return ctx.getSource().getPlayerOrException();
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /** /rpg preset create <nome> <formula> <cor> */
+    private static int presetCreate(CommandContext<CommandSourceStack> ctx) {
+        ServerPlayer player = presetPlayer(ctx);
+        if (player == null) {
+            ctx.getSource().sendFailure(Component.translatable("message.tabletoprpg.preset_players_only"));
+            return 0;
+        }
+
+        RollPreset preset;
+        try {
+            preset = RollPreset.create(
+                    StringArgumentType.getString(ctx, "name"),
+                    StringArgumentType.getString(ctx, "formula"),
+                    StringArgumentType.getString(ctx, "color"));
+        } catch (RollPreset.PresetException e) {
+            // A mensagem do DiceFormula chega aqui crua e é a mesma que a jogadora
+            // veria num /rpg roll inválido. É ela que diz onde a fórmula está errada.
+            ctx.getSource().sendFailure(Component.translatable("message.tabletoprpg.preset_create_failed",
+                    e.getMessage()));
+            return 0;
+        }
+
+        UUID uuid = player.getUUID();
+        RollPreset existing = RollPresetStore.find(uuid, preset.key()).orElse(null);
+        if (existing != null) {
+            // Decisao do usuario em 01/10/2026: create nao sobrescreve. Recusar e
+            // dizer o que fazer e o que segura a surpresa de digitar "create ataque
+            // 2d10 blue" para MUDAR o preset e receber o item do preset antigo como
+            // se tivesse dado certo -- o erro so apareceria na hora de rolar.
+            ctx.getSource().sendFailure(Component.translatable("message.tabletoprpg.preset_already_exists",
+                    existing.name()));
+            return 0;
+        }
+        if (RollPresetStore.count(uuid) >= RollPresetStore.MAX_PRESETS) {
+            ctx.getSource().sendFailure(Component.translatable("message.tabletoprpg.preset_limit",
+                    RollPresetStore.MAX_PRESETS));
+            return 0;
+        }
+
+        RollPresetStore.put(uuid, preset);
+        ModItems.giveRollPreset(player, preset);
+
+        ctx.getSource().sendSuccess(() -> Component.translatable("message.tabletoprpg.preset_created",
+                preset.name(), preset.formula(), preset.color().displayName()), true);
+        return 1;
+    }
+
+    /**
+     * /rpg preset edit <nome> <formula> <cor>
+     *
+     * <p><b>Por que existe:</b> com {@code create} recusando nome repetido, a unica
+     * forma de mudar um preset seria apagar e recriar, o que entrega um item novo e
+     * deixa o antigo orfao na mochila. Aqui a mudanca acontece no preset e o item que
+     * a jogadora ja tem e atualizado no lugar (ver
+     * {@link ModItems#refreshRollPresetItems}).
+     */
+    private static int presetEdit(CommandContext<CommandSourceStack> ctx) {
+        ServerPlayer player = presetPlayer(ctx);
+        if (player == null) {
+            ctx.getSource().sendFailure(Component.translatable("message.tabletoprpg.preset_players_only"));
+            return 0;
+        }
+
+        String name = StringArgumentType.getString(ctx, "name");
+        RollPreset existing = RollPresetStore.find(player.getUUID(), name).orElse(null);
+        if (existing == null) {
+            ctx.getSource().sendFailure(Component.translatable("message.tabletoprpg.preset_not_found", name));
+            return 0;
+        }
+
+        RollPreset edited;
+        try {
+            // O nome vem do preset ja salvo, nao do argumento: o argumento e a chave de
+            // busca e pode estar escrito de outra forma ("ATAQUE" acha "Ataque").
+            // Trocar o nome no proprio create/edit faria o preset sumir de baixo do
+            // item que ja existe no inventario.
+            edited = RollPreset.create(existing.name(),
+                    StringArgumentType.getString(ctx, "formula"),
+                    StringArgumentType.getString(ctx, "color"));
+        } catch (RollPreset.PresetException e) {
+            ctx.getSource().sendFailure(Component.translatable("message.tabletoprpg.preset_create_failed",
+                    e.getMessage()));
+            return 0;
+        }
+
+        RollPresetStore.put(player.getUUID(), edited);
+        ModItems.refreshRollPresetItems(player, edited);
+
+        ctx.getSource().sendSuccess(() -> Component.translatable("message.tabletoprpg.preset_edited",
+                edited.name(), edited.formula(), edited.color().displayName()), true);
+        return 1;
+    }
+
+    /**
+     * /rpg preset give &lt;nome&gt; -> reentrega o item de um preset.
+     *
+     * <p><b>Por que isso basta para "perdi o item":</b> o preset vive no NBT da
+     * jogadora, entao item perdido nao e dado perdido. O item e so o atalho para rolar
+     * com o botao direito.
+     */
+    private static int presetGive(CommandContext<CommandSourceStack> ctx) {
+        ServerPlayer player = presetPlayer(ctx);
+        if (player == null) {
+            ctx.getSource().sendFailure(Component.translatable("message.tabletoprpg.preset_players_only"));
+            return 0;
+        }
+
+        String name = StringArgumentType.getString(ctx, "name");
+        RollPreset preset = RollPresetStore.find(player.getUUID(), name).orElse(null);
+        if (preset == null) {
+            ctx.getSource().sendFailure(Component.translatable("message.tabletoprpg.preset_not_found", name));
+            return 0;
+        }
+
+        if (ModItems.giveRollPreset(player, preset) == null) {
+            // Sem espaco no inventario: o preset continua salvo, so nao foi entregue.
+            ctx.getSource().sendFailure(Component.translatable("message.tabletoprpg.preset_no_room"));
+            return 0;
+        }
+        ctx.getSource().sendSuccess(() -> Component.translatable("message.tabletoprpg.preset_given",
+                preset.name()), true);
+        return 1;
+    }
+
+    /**
+     * /rpg preset giveall -> reentrega o item de todos os presets.
+     *
+     * <p><b>Quando isso é usado:</b> depois de uma morte com drop de inventario, ou
+     * quando a jogadora montou os itens numa hora e quer o conjunto de volta de uma vez.
+     */
+    private static int presetGiveAll(CommandContext<CommandSourceStack> ctx) {
+        ServerPlayer player = presetPlayer(ctx);
+        if (player == null) {
+            ctx.getSource().sendFailure(Component.translatable("message.tabletoprpg.preset_players_only"));
+            return 0;
+        }
+
+        List<RollPreset> presets = RollPresetStore.list(player.getUUID());
+        if (presets.isEmpty()) {
+            ctx.getSource().sendFailure(Component.translatable("message.tabletoprpg.preset_list_empty"));
+            return 0;
+        }
+
+        int given = 0;
+        int skipped = 0;
+        for (RollPreset preset : presets) {
+            if (ModItems.giveRollPreset(player, preset) == null) {
+                skipped++;
+            } else {
+                given++;
+            }
+        }
+        // Cpias finais: given/skipped sao mutados no laco e nao servem "effectively
+        // final", que e o que o Supplier do sendSuccess exige.
+        int givenCount = given;
+        int skippedCount = skipped;
+        ctx.getSource().sendSuccess(() -> Component.translatable("message.tabletoprpg.preset_given_all",
+                givenCount, skippedCount), true);
+        return given;
+    }
+
+    /** /rpg preset use <nome> */
+    private static int presetUse(CommandContext<CommandSourceStack> ctx) {
+        ServerPlayer player = presetPlayer(ctx);
+        if (player == null) {
+            ctx.getSource().sendFailure(Component.translatable("message.tabletoprpg.preset_players_only"));
+            return 0;
+        }
+
+        String name = StringArgumentType.getString(ctx, "name");
+        RollPreset preset = RollPresetStore.find(player.getUUID(), name).orElse(null);
+        if (preset == null) {
+            ctx.getSource().sendFailure(Component.translatable("message.tabletoprpg.preset_not_found", name));
+            return 0;
+        }
+        return rollAndPublish(ctx, player, preset.formula());
+    }
+
+    /**
+     * /rpg preset delete <nome>
+     *
+     * <p><b>O item NÃO é retirado do inventário</b> (decisão do usuário em 01/10/2026):
+     * apagar o preset é um ato administrativo, e o item sai com o inventário quando a
+     * jogadora quiser. Usar o item depois disso avisa que o preset não existe mais.
+     */
+    private static int presetDelete(CommandContext<CommandSourceStack> ctx) {
+        ServerPlayer player = presetPlayer(ctx);
+        if (player == null) {
+            ctx.getSource().sendFailure(Component.translatable("message.tabletoprpg.preset_players_only"));
+            return 0;
+        }
+
+        String name = StringArgumentType.getString(ctx, "name");
+        RollPreset removed = RollPresetStore.remove(player.getUUID(), name).orElse(null);
+        if (removed == null) {
+            ctx.getSource().sendFailure(Component.translatable("message.tabletoprpg.preset_not_found", name));
+            return 0;
+        }
+        ctx.getSource().sendSuccess(() -> Component.translatable("message.tabletoprpg.preset_deleted",
+                removed.name()), true);
+        return 1;
+    }
+
+    /** /rpg preset list */
+    private static int presetList(CommandContext<CommandSourceStack> ctx) {
+        ServerPlayer player = presetPlayer(ctx);
+        if (player == null) {
+            ctx.getSource().sendFailure(Component.translatable("message.tabletoprpg.preset_players_only"));
+            return 0;
+        }
+
+        List<RollPreset> presets = RollPresetStore.list(player.getUUID());
+        if (presets.isEmpty()) {
+            ctx.getSource().sendSuccess(() -> Component.translatable("message.tabletoprpg.preset_list_empty"), false);
+            return 0;
+        }
+        for (RollPreset preset : presets) {
+            // Copia final: a variavel do for nao e "effectively final" e o
+            // sendSuccess recebe um Supplier que a captura.
+            RollPreset entry = preset;
+            ctx.getSource().sendSuccess(() -> Component.translatable("message.tabletoprpg.preset_list_entry",
+                    entry.name(), entry.formula(), entry.color().displayName()), false);
+        }
+        return presets.size();
+    }
+
+    /** Completa os nomes de preset da própria jogadora (use/delete). */
+    private static CompletableFuture<Suggestions> suggestOwnRollPresets(
+            CommandContext<CommandSourceStack> ctx, SuggestionsBuilder builder) {
+        ServerPlayer player = presetPlayer(ctx);
+        if (player == null) {
+            return builder.buildFuture();
+        }
+        String remaining = builder.getRemainingLowerCase();
+        for (RollPreset preset : RollPresetStore.list(player.getUUID())) {
+            if (preset.name().toLowerCase(Locale.ROOT).startsWith(remaining)) {
+                builder.suggest(preset.name());
+            }
+        }
+        return builder.buildFuture();
+    }
+
+    /** Completa as 17 cores de Bundle. */
+    private static CompletableFuture<Suggestions> suggestPresetColors(
+            CommandContext<CommandSourceStack> ctx, SuggestionsBuilder builder) {
+        String remaining = builder.getRemainingLowerCase();
+        for (String id : RollPresetColor.ids()) {
+            if (id.startsWith(remaining)) {
+                builder.suggest(id);
+            }
+        }
+        return builder.buildFuture();
+    }
+
 /** Define o horário do mundo (0-24000 ticks). Só o mestre. */
     private static int setWorldTime(CommandContext<CommandSourceStack> ctx) {
         if (!verifyMasterPermission(ctx)) return 0;
@@ -916,20 +1258,64 @@ public class MasterCommands {
             return null;
         }
 
+        try {
+            return rollMessageFor(player, rawFormula);
+        } catch (DiceFormula.SyntaxException e) {
+            ctx.getSource().sendFailure(Component.literal("§c" + e.getMessage()));
+            return null;
+        }
+    }
+
+    /**
+     * Rola e entrega o resultado a {@code player}, sem depender de comando.
+     *
+     * <p><b>Por que existe (01/10/2026):</b> o clique com o botao direito no item de
+     * preset nao tem {@code CommandContext} (nao vem de comando nenhum), mas tem de
+     * seguir exatamente a mesma regra de visibilidade do {@code /rpg roll}. Fica aqui,
+     * ao lado do codigo de rolagem ja provado, em vez de duplicar a montagem da
+     * mensagem em outro arquivo.
+     *
+     * @return {@code 1} se publicou o resultado, {@code 0} se a formula foi recusada
+     *         (a recusa ja foi enviada para quem rollou)
+     */
+    public static int rollForPlayer(ServerPlayer player, String rawFormula) {
+        String message;
+        try {
+            message = rollMessageFor(player, rawFormula);
+        } catch (DiceFormula.SyntaxException e) {
+            player.displayClientMessage(Component.literal("§c" + e.getMessage()), false);
+            return 0;
+        }
+        if (SessionManager.isMaster(player)) {
+            player.sendSystemMessage(Component.literal(message));
+        } else {
+            MinecraftServer server = player.level().getServer();
+            if (server != null) {
+                server.getPlayerList().broadcastSystemMessage(Component.literal(message), false);
+            } else {
+                player.sendSystemMessage(Component.literal(message));
+            }
+        }
+        return 1;
+    }
+
+    /**
+     * Monta a mensagem de resultado de uma rolagem.
+     *
+     * @throws DiceFormula.SyntaxException se a fórmula não for reconhecida; a mensagem
+     *         da exceção já é uma frase pronta para o chat
+     */
+    private static String rollMessageFor(ServerPlayer player, String rawFormula)
+            throws DiceFormula.SyntaxException {
         String formula = rawFormula.replace(" ", "");
         if (formula.isEmpty()) {
             formula = "d20";
         }
 
         DiceFormula.Outcome outcome;
-        try {
-            // RANDOM e a unica fonte de aleatoriedade do comando: o cliente nao
-            // pode prever a rolagem.
-            outcome = DiceFormula.parse(formula).evaluate(sides -> RANDOM.nextInt(sides) + 1);
-        } catch (DiceFormula.SyntaxException e) {
-            ctx.getSource().sendFailure(Component.literal("§c" + e.getMessage()));
-            return null;
-        }
+        // RANDOM e a unica fonte de aleatoriedade do comando: o cliente nao
+        // pode prever a rolagem.
+        outcome = DiceFormula.parse(formula).evaluate(sides -> RANDOM.nextInt(sides) + 1);
 
         // Com '#' o total vai para a linha propria: colado no fim da ultima volta
         // ele se confunde com o subtotal dela (30/09/2026, pedido do jogador).

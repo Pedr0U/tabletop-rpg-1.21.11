@@ -1,13 +1,19 @@
 package com.pedro.tabletoprpg.item;
 
 import com.pedro.tabletoprpg.BlockLockManager;
+import com.pedro.tabletoprpg.MasterCommands;
 import com.pedro.tabletoprpg.RpgNetworking;
+import com.pedro.tabletoprpg.RollPreset;
+import com.pedro.tabletoprpg.RollPresetColor;
+import com.pedro.tabletoprpg.RollPresetStore;
 import com.pedro.tabletoprpg.SessionManager;
 import com.pedro.tabletoprpg.TabletopRpg;
 import net.fabricmc.fabric.api.event.player.UseItemCallback;
 import net.minecraft.core.Registry;
+import net.minecraft.core.component.DataComponents;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.core.registries.Registries;
+import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.level.ServerPlayer;
@@ -15,7 +21,13 @@ import net.minecraft.world.InteractionResult;
 import net.minecraft.world.item.CreativeModeTab;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.TooltipFlag;
+import net.minecraft.world.item.component.CustomData;
+import net.minecraft.world.item.component.DyedItemColor;
+import net.minecraft.world.item.component.TooltipDisplay;
 import net.minecraft.world.level.Level;
+
+import java.util.function.Consumer;
 
 /**
  * Itens e aba criativa do mod.
@@ -71,6 +83,34 @@ public final class ModItems {
             ResourceKey.create(Registries.ITEM, TabletopRpg.id("camera_tool"));
 
     /**
+     * Chave do registro do Preset de Rolagem (01/10/2026).
+     *
+     * <p><b>Sprite provisório:</b> o Bundle do proprio jogo
+     * ({@code minecraft:textures/item/bundle.png}, 16x16) foi copiado do jar do cliente
+     * para {@code assets/tabletop-rpg/textures/item/roll_preset.png}, igual ao Camera
+     * Tool copiou o da luneta.
+     *
+     * <p><b>Por que a cópia foi convertida para máscara em escala de cinza:</b> a cor do
+     * item entra pelo tint {@code minecraft:dye}, que MULTIPLICA a textura pela cor. Num
+     * sprite marrom como o do Bundle, o verde daria marrom-lodo e o preto daria buraco
+     * preto. A máscara (cinza 170..255) é o mesmo truque das armaduras de couro do
+     * vanilla, cuja textura também é uma máscara — aí o multiplicado dá a cor pedida.
+     *
+     * <p><b>FATO (01/10/2026, conferido no mappings e nos assets do jar):</b> o Bundle
+     * vanilla <b>não</b> usa componente de cor. São 17 itens registrados
+     * ({@code bundle}, {@code white_bundle}...), cada um com sua textura pintada à mão.
+     * O que este item faz é diferente de propósito: 1 item + 1 componente, o que mantém
+     * 17 cores com uma única textura.
+     */
+    public static final ResourceKey<Item> ROLL_PRESET_KEY =
+            ResourceKey.create(Registries.ITEM, TabletopRpg.id("roll_preset"));
+
+    /** Chaves dentro do {@code CUSTOM_DATA} do item. */
+    private static final String NBT_PRESET = "preset";
+    private static final String NBT_FORMULA = "formula";
+    private static final String NBT_COLOR = "color";
+
+    /**
      * Chave da aba criativa.
      *
      * <p>Fica no <b>comum</b>, e nao no client: {@code CreativeModeTabs.bootstrap}
@@ -85,6 +125,8 @@ public final class ModItems {
     private static Item blockLock;
 
     private static Item cameraTool;
+
+    private static Item rollPreset;
 
     private ModItems() {
     }
@@ -119,6 +161,37 @@ public final class ModItems {
                 .stacksTo(1));
 
         Registry.register(BuiltInRegistries.ITEM, CAMERA_TOOL_KEY, cameraTool);
+
+        // Preset de Rolagem (01/10/2026). Classe anonima porque o item carrega a
+        // dica (formula e cor) no tooltip -- e a dica que permite a jogadora
+        // distinguir os itens quando tem varios na mochila.
+        //
+        // NAO entra na aba criativa, ao contrario dos outros tres itens: um item
+        // solto na aba nao tem preset nenhum e usaria-lo so serviria para mostrar
+        // "preset nao existe". Quem cria preset e o comando ou o botao da tela.
+        rollPreset = new Item(new Item.Properties()
+                .setId(ROLL_PRESET_KEY)
+                .stacksTo(1)) {
+            @Override
+            public void appendHoverText(ItemStack stack, Item.TooltipContext context,
+                                        TooltipDisplay display, Consumer<Component> tooltip,
+                                        TooltipFlag flag) {
+                super.appendHoverText(stack, context, display, tooltip, flag);
+                CompoundTag tag = presetTag(stack);
+                if (tag == null) {
+                    // Item sem preset nenhum (item virgem). A dica honesta e dizer isso,
+                    // e nao fingir que existe uma formula.
+                    tooltip.accept(Component.translatable("item.tabletop-rpg.roll_preset.no_preset"));
+                    return;
+                }
+                tooltip.accept(Component.translatable("item.tabletop-rpg.roll_preset.formula",
+                        tag.getString(NBT_FORMULA).orElse("")));
+                tooltip.accept(Component.translatable("item.tabletop-rpg.roll_preset.color",
+                        RollPresetColor.idOrDefault(tag.getString(NBT_COLOR).orElse("")).displayName()));
+            }
+        };
+
+        Registry.register(BuiltInRegistries.ITEM, ROLL_PRESET_KEY, rollPreset);
 
         Registry.register(BuiltInRegistries.CREATIVE_MODE_TAB, TAB_KEY, CreativeModeTab.builder(
                         CreativeModeTab.Row.TOP, 0)
@@ -169,6 +242,100 @@ public final class ModItems {
      */
     public static boolean isCameraTool(ItemStack stack) {
         return cameraTool != null && stack != null && stack.is(cameraTool);
+    }
+
+    // --- Preset de Rolagem (01/10/2026) ---
+
+    /** O Preset de Rolagem pronto. */
+    public static Item rollPreset() {
+        return rollPreset;
+    }
+
+    /** O stack e um Preset de Rolagem? */
+    public static boolean isRollPreset(ItemStack stack) {
+        return rollPreset != null && stack != null && stack.is(rollPreset);
+    }
+
+    /**
+     * O {@code CUSTOM_DATA} do item, ou {@code null} se nao for um item de preset
+     * valido.
+     *
+     * <p><b>Por que devolver a tag e nao o preset:</b> o item guarda NOME, FORMULA e
+     * COR da <i>entrega</i>, que podem ser diferentes do preset salvo agora. O cliente
+     * so consegue ler a tag (ele nao tem o {@link RollPresetStore}), entao e a tag que
+     * alimenta a dica.
+     */
+    private static CompoundTag presetTag(ItemStack stack) {
+        if (!isRollPreset(stack)) {
+            return null;
+        }
+        CustomData data = stack.get(DataComponents.CUSTOM_DATA);
+        if (data == null) {
+            return null;
+        }
+        CompoundTag tag = data.copyTag();
+        return tag.getString(NBT_PRESET).orElse("").isEmpty() ? null : tag;
+    }
+
+    /** Monta o stack de um preset: nome, cor, formula e a chave que o liga ao preset salvo. */
+    public static ItemStack buildRollPresetStack(RollPreset preset) {
+        ItemStack stack = new ItemStack(rollPreset);
+        stack.set(DataComponents.CUSTOM_NAME,
+                Component.translatable("item.tabletop-rpg.roll_preset.named", preset.name()));
+
+        CompoundTag tag = new CompoundTag();
+        tag.putString(NBT_PRESET, preset.key());
+        tag.putString(NBT_FORMULA, preset.formula());
+        tag.putString(NBT_COLOR, preset.colorId());
+        stack.set(DataComponents.CUSTOM_DATA, CustomData.of(tag));
+
+        // DEFAULT nao pinta o componente: sem ele o tint `minecraft:dye` do
+        // items/roll_preset.json usa o "default" do proprio JSON, que e o marrom
+        // do Bundle sem tingir. Os 16 ids pintam.
+        RollPresetColor color = preset.color();
+        if (color != RollPresetColor.DEFAULT) {
+            stack.set(DataComponents.DYED_COLOR, new DyedItemColor(color.argb()));
+        }
+        return stack;
+    }
+
+    /**
+     * Entrega o item de um preset no inventario.
+     *
+     * @return o stack entregue, ou {@code null} se o inventario estava cheio
+     */
+    public static ItemStack giveRollPreset(ServerPlayer player, RollPreset preset) {
+        ItemStack stack = buildRollPresetStack(preset);
+        return player.getInventory().add(stack) ? stack : null;
+    }
+
+    /**
+     * Reaplica nome, cor e dica nos itens de um preset que a jogadora ja carrega.
+     *
+     * <p><b>Por que isso existe (01/10/2026):</b> o {@code /rpg preset edit} muda o
+     * preset sem entregar item novo. Sem esta passada, o item antigo continuaria
+     * mostrando a formula antiga na dica e com a cor antiga, e a jogadora veria duas
+     * informacoes diferentes para o mesmo preset.
+     */
+    public static void refreshRollPresetItems(ServerPlayer player, RollPreset preset) {
+        ItemStack updated = buildRollPresetStack(preset);
+        for (int slot = 0; slot < player.getInventory().getContainerSize(); slot++) {
+            ItemStack existing = player.getInventory().getItem(slot);
+            if (!isRollPreset(existing)) {
+                continue;
+            }
+            CompoundTag tag = presetTag(existing);
+            if (tag == null || !preset.key().equals(tag.getString(NBT_PRESET).orElse(""))) {
+                continue;
+            }
+            existing.set(DataComponents.CUSTOM_NAME, updated.get(DataComponents.CUSTOM_NAME));
+            existing.set(DataComponents.CUSTOM_DATA, updated.get(DataComponents.CUSTOM_DATA));
+            if (updated.has(DataComponents.DYED_COLOR)) {
+                existing.set(DataComponents.DYED_COLOR, updated.get(DataComponents.DYED_COLOR));
+            } else {
+                existing.remove(DataComponents.DYED_COLOR);
+            }
+        }
     }
 
     /**
@@ -252,6 +419,38 @@ public final class ModItems {
             serverPlayer.displayClientMessage(
                     Component.translatable("message.tabletop-rpg.camera_tool_pick_entity"), true);
             return InteractionResult.PASS;
+        }
+
+        // Preset de Rolagem: clique com o botao direito ROLA. Nao ha checagem de Mestre
+        // porque o preset e pessoal (decisao do usuario em 01/10/2026).
+        if (isRollPreset(stack)) {
+            // Cliente: consome o clique e nao decide nada.
+            if (!(player instanceof ServerPlayer serverPlayer)) {
+                return InteractionResult.SUCCESS;
+            }
+            CompoundTag tag = presetTag(stack);
+            if (tag == null) {
+                serverPlayer.displayClientMessage(
+                        Component.translatable("message.tabletoprpg.preset_no_preset_on_item"), true);
+                return InteractionResult.FAIL;
+            }
+
+            // O preset pode ter sido deletado com `/rpg preset delete` depois que o
+            // item foi entregue: o item fica na mochila de proposito. Aqui e o aviso
+            // de que o preset nao existe mais.
+            RollPreset preset = RollPresetStore.find(serverPlayer.getUUID(),
+                    tag.getString(NBT_PRESET).orElse("")).orElse(null);
+            if (preset == null) {
+                serverPlayer.displayClientMessage(
+                        Component.translatable("message.tabletoprpg.preset_not_found",
+                                tag.getString(NBT_PRESET).orElse("")), true);
+                return InteractionResult.FAIL;
+            }
+
+            // SUCCESS (e nao PASS): o item nao tem outro uso, e PASS deixaria o jogador
+            // colocar no mundo o item inteiro a cada rolagem.
+            MasterCommands.rollForPlayer(serverPlayer, preset.formula());
+            return InteractionResult.SUCCESS;
         }
 
         return InteractionResult.PASS;
