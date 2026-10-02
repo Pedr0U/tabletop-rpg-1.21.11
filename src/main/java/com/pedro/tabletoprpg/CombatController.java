@@ -109,6 +109,14 @@ public final class CombatController {
             if (!(player instanceof ServerPlayer serverPlayer)) {
                 return InteractionResult.PASS;
             }
+            // Ficha de Ameaca na mao tem a PRIMEIRA palavra: o clique que amarra a ficha
+            // no mob e o mesmo clique que alternaria a selecao, e quem chega antes
+            // consome. O Mestre segurando a ficha escolheu a ficha, nao a selecao
+            // (decisao de 02/10/2026).
+            if (ThreatSheetBinding.handleEntityClick(serverPlayer, (ServerLevel) level, hand, entity,
+                    hitResult != null)) {
+                return InteractionResult.FAIL;
+            }
             // Camera Tool responde ANTES da checagem de Mestre: um jogador comum com o
             // item na mao precisa receber a recusa, senao o item seria um botao morto e
             // silencioso. Se ela consumir o clique, a selecao normal nao roda -- no
@@ -192,27 +200,36 @@ public final class CombatController {
             clearSelection(level);
             master.sendSystemMessage(Component.literal("§7[RPG] Monster deselected."));
         } else {
-            selectedMonsterUuid = mobUuid;
-            // Âncora do monstro: posição atual do mob no momento da seleção.
-            // A aura fica ancorada aqui durante a movimentação (não segue o
-            // mob); ao re-selecionar, a âncora é atualizada para a posição
-            // atual do mob (equivale ao "início do turno" do mob).
-            monsterAnchors.put(mobUuid, mob.blockPosition());
-            controlledMonsters.add(mobUuid);
-            // Congela o mob: ele NUNCA age sozinho (FASE 0.6). Mesmo mobs
-            // naturais (não inseridos por comando) viram "peças" da mesa.
-            mob.setNoAi(true);
-
-            // Âncora do jogador ativo (se houver): onde ele começou.
-            ServerPlayer active = findActivePlayer(level);
-            if (active != null) {
-                setPlayerAnchor(active);
-            }
-
-            master.sendSystemMessage(Component.literal("§b[RPG] Monster selected: §e" + mob.getName().getString()
-                    + "§b. §7Aura of " + AURA_RADIUS + " blocks active. Right-click a block to move it."));
+            selectMob(level, master, mob);
         }
         RpgNetworking.sendAuraStateToAll(level.getServer());
+    }
+
+    /**
+     * Seleciona um monstro. Caminho compartilhado pelo clique e pelo {@code /rpg mob}
+     * (02/10/2026): os dois precisam produzir exatamente o mesmo estado.
+     */
+    public static void selectMob(ServerLevel level, ServerPlayer master, Mob mob) {
+        UUID mobUuid = mob.getUUID();
+        // Âncora do monstro: posição atual do mob no momento da seleção.
+        // A aura fica ancorada aqui durante a movimentação (não segue o
+        // mob); ao re-selecionar, a âncora é atualizada para a posição
+        // atual do mob (equivale ao "início do turno" do mob).
+        monsterAnchors.put(mobUuid, mob.blockPosition());
+        controlledMonsters.add(mobUuid);
+        // Congela o mob: ele NUNCA age sozinho (FASE 0.6). Mesmo mobs
+        // naturais (não inseridos por comando) viram "peças" da mesa.
+        mob.setNoAi(true);
+
+        // Âncora do jogador ativo (se houver): onde ele começou.
+        ServerPlayer active = findActivePlayer(level);
+        if (active != null) {
+            setPlayerAnchor(active);
+        }
+
+        master.sendSystemMessage(Component.literal("§b[RPG] Monster selected: §e" + mob.getName().getString()
+                + "§b. §7Aura of " + AURA_RADIUS + " blocks active. Right-click a block to move it."));
+        selectedMonsterUuid = mobUuid;
     }
 
     private static void moveSelectedMonster(ServerLevel level, ServerPlayer master, BlockPos dest) {

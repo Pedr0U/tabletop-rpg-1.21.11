@@ -3150,7 +3150,7 @@ Consequencia pratica: em qualquer `MultiLineEditBox` deste projeto, **nao chame
 `setCharacterLimit`** se o Mestre nao quer numero na tela. O limite passa a ser
 verificado no `save`, com mensagem de erro, em vez de corte silencioso.
 
-Como排查 rapido (o que confirma que nada nosso desenha aquilo): `run/mods` vazio, sem
+Como descobrir rapido (o que confirma que nada nosso desenha aquilo): `run/mods` vazio, sem
 mixin do widget em `tabletop-rpg.mixins.json`, `build.gradle` sem dependencia de texto, e
 todos os imports do widget sendo `net.minecraft.*`.
 
@@ -3158,4 +3158,95 @@ ERRO MEU, REGISTRADO: afirmei duas vezes seguidas que o contador tinha sido remo
 com o bytecode conferido, sem levar em conta que o numero na tela podia vir de fora do
 projeto. Contra "ainda aparece", a pergunta util nao e "meu codigo esta limpo", e sim
 "**outra coisa esta desenhando isto**". Antes de fechar um bug visual como resolvido,
-perguntar de onde pode vir cada pixel的那 tela.
+perguntar de onde pode vir cada pixel na tela.
+
+### Quatro ideogramas escapados na memoria (02/10/2026, corrigido no mesmo dia)
+FATO verificado pelo proprio `scanEncoding`: duas frases minhas entraram com palavras em
+ideograma no meio do portugues ("Como<ideograma> rapido", "cada pixel<ideograma> tela").
+O `scanEncoding` reprova ideograma, mojibake e U+FFFD em `src/` e `agent/`, e ele esta
+ligado ao `check`, ou seja, isso quebrava **build inteiro** -- nao so a tarefa.
+
+REGRA: nunca deixar passar caractere nao-latino em texto aqui. Antes de commitar
+`agent/`, o `build` ja teria falhado; se falhar nele, a causa quase sempre e digitacao
+estranha e nao o arquivo que o log acusa em primeiro lugar. O log da tarefa lista
+`arquivo:linha` e o codigo hexadecimal do caractere, que e a linha exata do culpado.
+
+**E nao cole o caractere culpado ao descrever o defeito**, nem numa citacao e nem num
+trecho de exemplo. Em 02/10/2026 o relatorio que explicava os 4 ideogramasescapados da
+memoria **os reproduziu**, e reprovar o build de novo por causa do texto que existe para
+registrar o problema. Descreva ("quatro ideogramas", "duas frases") e cite arquivo e
+linha, nunca o caractere.
+
+### `scanEncoding` reprova o BUILD INTEIRO, e filtra de saida esconde a causa (02/10/2026)
+FATO verificado. A tarefa esta ligada ao `check`, entao um ideograma em `agent/` derruba
+`gradlew build` -- nao so a `scanEncoding`. E o detalheimportante: eu filtrei a saida com
+`Select-String -Pattern 'error:|BUILD'`, que **nao casa** com as linhas
+`[scanEncoding] FAIL:  ...` porque o Gradle imprime `logger.error` sem o prefixo de
+erro. O log dizia so "9104 caracteres nao-ASCII... legitimos" e eu quase li isso como
+"e so cosmatico".
+
+REGRA: quando o build falha numa tarefa, rode a tarefa SO, filtrando pelo nome do
+prefixo dela (`'FAIL'`), e nao pelos marcadores genericos de erro.
+
+### Vínculo persistente de ficha: tag no mob, cache em memória, selfHeal (02/10/2026)
+FATO verificado. `ThreatSheetBinding` guarda o vinculo ficha -> mob na **tag do NBT do
+mob** (`tabletoprpg_sheet_<id>`), nunca no NBT do jogador: o vinculo pertence ao monstro e
+precisa valer com o Mestre fora e depois do restart. Dois `ConcurrentHashMap` sao cache, e
+`selfHeal(server)` refaz varrendo `level.getAllEntities()`, exatamente como o
+`selfHealCameraMobs` ja fazia com os mobs de camera.
+
+O `id` da ficha e UUID sorteado no servidor e reaproveitado em toda edicao
+(`ThreatSheetStore.save` faz `sheet.withId(current.get(index).id())`). O cliente NUNCA
+sorteia id e so devolve o que o servidor mandou. **Por que:** o `key()` da ficha sai do
+NOME, e renomear mudava a chave -- item da mochila e tag do mob ficavam orfaos.
+
+### `UseEntityCallback`: quem chega antes consome (02/10/2026)
+FATO verificado. O `CombatController` consome o clique direito em criatura e devolve
+`FAIL`; o `PlayerControlHandler` so devolve `FAIL` para quem nao pode interagir, e o
+Mestre sempre pode. Portanto qualquer item que queira responder ao clique em criatura tem
+que entrar **dentro** do callback do `CombatController`, antes do `toggleSelection` --
+registrar um `UseEntityCallback` novo nao garante ordem.
+
+Consequencia aceita pelo Mestre: com a ficha na mao, o clique em monstro **amarra** e nao
+seleciona. Para selecionar, o caminho e `/rpg mob <nome>`.
+
+### `@e[name="..."]` acha monstro com nome customizado, mesmo invisivel (02/10/2026)
+FATO verificado. E o mecanismo vanilla que o Mestre pediu para "mencionar o mob em
+comandos como /tp": `/tp @e[name="Goblin"] x y z` funciona sem mod nenhum. Por isso o
+nome de exibicao virou **obrigatorio** na ficha (recusa no cliente e no servidor), e por
+isso `applyDisplayName` grava `setCustomName` **sempre**, deixando a **visibilidade** para
+a caixa "Exibir nome em cima da ameaca?". Desmarcar a caixa esconde o nome; nao o apaga.
+
+## 02/10/2026 --amarra por clique no item: eventos e autoridade do id
+
+### CORRECAO: `FAIL` no `UseEntityCallback` NAO impede o `UseItemCallback`
+FATO verificado em jogo, e contraria o bloco acima. Com a ficha na mao, clicar no monstro
+**amarrava e abria a ficha ao mesmo tempo**. O clique de entidade e o uso do item chegam em
+pacotes separados e a ordem nao e garantida; devolver `FAIL` no `CombatController` nao segura
+o item. Os dois caminhos precisam consultar a **mesma** decisao -- se ha criatura sob a mira,
+amarrar; se nao ha, abrir. Assim a ordem dos eventos deixa de importar.
+
+### Ray trace de mira no servidor: `ProjectileUtil`, nao maths propria
+FATO verificado. O unico padrao que compila e acerta e o mesmo do highlight do cliente:
+`ProjectileUtil.getEntityHitResult(player, start, end, new AABB(start, end).inflate(1.0),
+predicado, maxDist * maxDist)`, com `start = player.getEyePosition()` e `end` na direcao do
+olhar. **Nao existem** `AABB.expandTowards(Vec3,double)` nem `Vec3.clamp(Vec3)` em 1.21.11;
+escrever a maths a mao quebra o build.
+
+### Depois do save, quem manda no id e o store -- nao o cliente
+FATO verificado. `RpgNetworking` usava a ficha que o cliente mandou depois de gravar. O store
+reaproveita o id guardado ou sorteia um quando a ficha e nova, entao o id do cliente pode estar
+vazio ou desatualizado. Efeito: o mob leave de ser encontrado e **nao e renomeado**, e o item
+entregue nasce com id que nao existe em lugar nenhum. Correcao: reler a ficha do store pelo
+`key()` e usar essa em todos os caminhos.(build verde; validacao em jogo pendente)
+
+### `name=` e identificador humano; a tag e o identificador estavel
+FATO verificado. `@e[name="..."]` casa com o custom name, entao quebra quando a ficha e
+renomeada e colide com homonimos. A **scoreboard tag** `tabletoprpg_sheet_<id>` ja e gravada na
+amarra e nao muda quando a ficha e editada: `@e[tag=tabletoprpg_sheet_<uuid>]` e a chave confiavel
+para comandos. O UUID e comprido; o Mestre decidiu por enquanto nao encurtar.
+
+### Falha silenciosa vira recusa explicita
+FATO verificado. Amarrar ficha com nome de exibicao vazio deixava o monstro sem nome, e o unico
+sintoma era `@e[name="..."]` falhando longe do gesto que causou o problema. Agora a amarra e
+recusada com mensagem dizendo para preencher o nome e clicar em Atualizar.

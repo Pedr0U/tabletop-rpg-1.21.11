@@ -297,14 +297,33 @@ public class ThreatSheetScreen extends Screen {
      * de edicao da que ele acabou de gravar.
      */
     private String pendingSaveName = "";
+    /**
+     * A ficha foi aberta pelo item, e nao pelo menu?
+     *
+     * <p>Só muda duas coisas: o rótulo do botão e se o save entrega item. O resto da tela
+     * edita igual nos dois caminhos -- o Mestre pediu que abrir pelo item ja pudesse
+     * editar (02/10/2026).
+     */
+    private final boolean updateMode;
     private String status = "";
     private int statusColor = COL_MUTED;
 
     public ThreatSheetScreen(Screen parentScreen, ThreatSheet sheet, String originalName) {
+        this(parentScreen, sheet, originalName, false);
+    }
+
+    /**
+     * @param updateMode a ficha foi aberta pelo item, nao pelo menu: o botao vira
+     *                   "Atualizar" e o save NAO entrega outro item (decisao do Mestre
+     *                   em 02/10/2026).
+     */
+    public ThreatSheetScreen(Screen parentScreen, ThreatSheet sheet, String originalName,
+                             boolean updateMode) {
         super(Component.literal(sheet == null ? "Ficha de Ameaça" : sheet.listLabel()));
         this.parentScreen = parentScreen;
         this.sheet = sheet;
         this.originalName = originalName == null ? "" : originalName;
+        this.updateMode = updateMode;
         if (sheet != null) {
             values.put("name", sheet.identity().name());
             values.put("level", Integer.toString(sheet.identity().level()));
@@ -578,16 +597,14 @@ public class ThreatSheetScreen extends Screen {
                     .pos(leftX + 2, y + LABEL_H + FIELD_H + 6)
                     .maxWidth(colW - 4)
                     .selected(showDisplayName)
-                    .onValueChange((cb, checked) -> {
-                        showDisplayName = checked;
-                        if (displayNameBox != null) {
-                            displayNameBox.setEditable(checked);
-                        }
-                    })
+                    .onValueChange((cb, checked) -> showDisplayName = checked)
                     .build();
             checkbox.setSize(colW - 4, CHECKBOX_H);
             addColWidget(checkbox);
-            displayNameBox.setEditable(showDisplayName);
+            // A caixa do nome NAO e mais trancada pela caixa de marcar: o nome e
+            // obrigatorio (decisao do Mestre em 02/10/2026) e a caixa so decide se ele
+            // aparece flutuando em cima do mob. Antes, destravar o campo dependia de uma
+            // coisa que nao tem nada a ver com poder digitar nele.
         }
         y += LABEL_H + FIELD_H + CHECKBOX_H + 6 + GAP;
 
@@ -1160,7 +1177,8 @@ public class ThreatSheetScreen extends Screen {
 
     private void rebuildFooter() {
         int btnW = Math.max(50, (panelW - 2 * PAD - GAP) / 2);
-        addRenderableWidget(Button.builder(Component.literal("Salvar"), b -> save())
+        addRenderableWidget(Button.builder(
+                        Component.literal(updateMode ? "Atualizar" : "Salvar"), b -> save())
                 .bounds(panelX + panelW - PAD - btnW, footerY, btnW, FOOTER_H).build());
         addRenderableWidget(Button.builder(Component.literal("< Voltar"), b -> onClose())
                 .bounds(panelX + PAD, footerY, btnW, FOOTER_H).build());
@@ -1195,13 +1213,41 @@ public class ThreatSheetScreen extends Screen {
             attributes.add(new ThreatSheet.AttributeValue(def.id(), value));
         }
 
-        String name = values.getOrDefault("name", "");
+String name = values.getOrDefault("name", "");
+        String displayName = values.getOrDefault("displayName", "");
+        int level = levelValue();
+
+        // Campos obrigatorios: Nome, Nome de exibicao e ND (decisao do Mestre em
+        // 02/10/2026). O aviso sai ANTES de montar a ficha, para o Mestre ver qual
+        // campo falta e nao perder o que ja digitou.
+        if (name.isBlank()) {
+            status = "Nome da ameaça obrigatório.";
+            statusColor = COL_ERROR;
+            return;
+        }
+        // O nome de exibicao nao e cosmetico: e por ele que a ameaca e apontada em
+        // comando (@e[name=...]).
+        if (displayName.isBlank()) {
+            status = "Nome de exibição obrigatório: é por ele que a ameaça é apontada em comando.";
+            statusColor = COL_ERROR;
+            return;
+        }
+        // ND vazio chega aqui como 0: e o unico jeito de distinguir "nao preenchido"
+        // de um numero, porque o campo e inteiro. Ameaca de ND 0 nao existe na regra.
+        if (level == 0) {
+            status = "ND obrigatório: preencha o nível da ameaça.";
+            statusColor = COL_ERROR;
+            return;
+        }
 
         ThreatSheet built = new ThreatSheet(
+                // O cliente nunca sorteia id: devolve o que veio do servidor. O store
+                // repõe o id guardado, que é o que mantem o vinculo do mob vivo.
+                sheet == null ? "" : sheet.id(),
                 new ThreatSheet.Identity(
                         name,
-                        levelValue(),
-                        values.getOrDefault("displayName", ""),
+                        level,
+                        displayName,
                         showDisplayName,
                         values.getOrDefault("type", ""),
                         values.getOrDefault("size", ""),
@@ -1224,7 +1270,8 @@ public class ThreatSheetScreen extends Screen {
         // o servidor vai gravar. Se o save for recusado, o campo fica como estava e
         // o proximo envio volta a ser uma criacao -- que e o que o Mestre quer.
         pendingSaveName = name;
-        ClientPlayNetworking.send(new RpgNetworking.ThreatSheetSavePayload(built, originalName));
+        ClientPlayNetworking.send(new RpgNetworking.ThreatSheetSavePayload(
+                built, originalName, !updateMode));
         status = "Enviando a ficha...";
         statusColor = COL_MUTED;
     }

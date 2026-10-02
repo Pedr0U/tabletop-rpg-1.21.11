@@ -1230,7 +1230,14 @@ public final class RpgNetworking {
         }
     }
 
-    public record ThreatSheetSavePayload(ThreatSheet sheet, String originalName)
+    /**
+     * Cliente -&gt; Servidor: salvar a ficha aberta na tela.
+     *
+     * <p>{@code deliverItem} separa os dois botoes. "Salvar" (menu) entrega outro item
+     * de ficha, como decide o Mestre em 02/10/2026; "Atualizar" (aberta pelo item) grava
+     * por cima e NAO entrega nada, senao cada edicao multiplicaria o item na mochila.
+     */
+    public record ThreatSheetSavePayload(ThreatSheet sheet, String originalName, boolean deliverItem)
             implements CustomPacketPayload {
         public static final Type<ThreatSheetSavePayload> TYPE =
                 new Type<>(TabletopRpg.id("threat_sheet_save"));
@@ -1240,6 +1247,7 @@ public final class RpgNetworking {
                         ThreatSheet.STREAM_CODEC, ThreatSheetSavePayload::sheet,
                         ByteBufCodecs.stringUtf8(ThreatSheet.MAX_NAME),
                         ThreatSheetSavePayload::originalName,
+                        ByteBufCodecs.BOOL, ThreatSheetSavePayload::deliverItem,
                         ThreatSheetSavePayload::new
                 );
 
@@ -1247,6 +1255,29 @@ public final class RpgNetworking {
             originalName = clamp(originalName == null ? "" : originalName.trim(),
                     ThreatSheet.MAX_NAME);
         }
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
+    /**
+     * Servidor -&gt; Cliente: "abra esta ficha em modo de atualizacao".
+     *
+     * <p>Existe porque o clique no ar no item nao tem cliente para abrir tela: o item
+     * carrega so o id, e a ficha editada precisa ser a do SERVIDOR. O servidor envia a
+     * ficha pronta, e o cliente abre a tela em modo atualizacao (botao "Atualizar").
+     */
+    public record ThreatSheetOpenPayload(ThreatSheet sheet) implements CustomPacketPayload {
+        public static final Type<ThreatSheetOpenPayload> TYPE =
+                new Type<>(TabletopRpg.id("threat_sheet_open"));
+
+        public static final StreamCodec<FriendlyByteBuf, ThreatSheetOpenPayload> STREAM_CODEC =
+                StreamCodec.composite(
+                        ThreatSheet.STREAM_CODEC, ThreatSheetOpenPayload::sheet,
+                        ThreatSheetOpenPayload::new
+                );
 
         @Override
         public Type<? extends CustomPacketPayload> type() {
@@ -1383,6 +1414,8 @@ public final class RpgNetworking {
                 ThreatSheetDeletePayload.STREAM_CODEC);
         PayloadTypeRegistry.playS2C().register(ThreatSheetResultPayload.TYPE,
                 ThreatSheetResultPayload.STREAM_CODEC);
+        PayloadTypeRegistry.playS2C().register(ThreatSheetOpenPayload.TYPE,
+                ThreatSheetOpenPayload.STREAM_CODEC);
         // 01/10/2026 (pagina 3 da ficha): a lista de magias.
         PayloadTypeRegistry.playC2S().register(SheetSpellPayload.TYPE, SheetSpellPayload.STREAM_CODEC);
         PayloadTypeRegistry.playS2C().register(DownedStatePayload.TYPE, DownedStatePayload.STREAM_CODEC);
@@ -2156,12 +2189,54 @@ public final class RpgNetworking {
         // O item e a apresentacao da ficha: o save acontece MESMO com a mochila cheia,
         // porque perder a ficha seria pior do que o mestre receber o aviso. A mesma
         // escolha que o save de preset ja faz.
-        ItemStack delivered = ModItems.giveThreatSheet(player, aligned);
+        //
+        // "Atualizar" (aberta pelo item) NAO entrega item: cada edicao da ficha
+        // multiplicaria o stack na mochila. Decisao do Mestre em 02/10/2026.
+// O store e quem manda no id: ele reaproveita o id guardado ou sorteia um quando a
+        // ficha e nova. A ficha que o cliente mandou (`aligned`) pode ter id vazio ou
+        // desatualizado, e usar ela depois do save faz o mob vinculado nao ser
+        // encontrado e o item nascer com id que nao existe. Relido do store.
+        ThreatSheet saved = ThreatSheetStore.find(player.getUUID(), aligned.key());
+        if (saved == null) {
+            saved = aligned;
+        }
+
+        // Recem-salva: o mob amarrado precisa receber o nome novo, senao o Mestre edita
+        // "Goblin Chefe" e o @e[name=...] continua achando o antigo. Vale para os dois
+        // botoes -- salvar pelo menu tambem renomeia o mob.
+        MinecraftServer server = player.level().getServer();
+        ThreatSheetBinding.selfHeal(server);
+        UUID bound = ThreatSheetBinding.mobOf(server, saved.id());
+        if (bound != null && player.level().getEntity(bound) instanceof Mob linked) {
+            ThreatSheetBinding.applyDisplayName(linked, saved);
+        }
+
+        if (!payload.deliverItem()) {
+            // "Atualizar", aberta pelo item: grava por cima e NAO entrega item, senao
+            // cada edicao multiplicaria o stack na mochila (decisao do Mestre em 02/10/2026).
+            return new ThreatSheetResultPayload(true, result.message(),
+                    ThreatSheetStore.snapshot(player.getUUID()));
+        }
+        ItemStack delivered = ModItems.giveThreatSheet(player, saved);
         String suffix = delivered == null
                 ? " (inventário cheio: a ficha foi salva, mas o item não coube)"
                 : "";
         return new ThreatSheetResultPayload(true, result.message() + suffix,
                 ThreatSheetStore.snapshot(player.getUUID()));
+    }
+
+    /**
+     * Abre no cliente a ficha que o item da mao aponta, em modo de atualizacao.
+     *
+     * <p>Quem resolve a ficha e o SERVIDOR, pelo id do item. O cliente nao tem o
+     * {@link ThreatSheetStore} e o item pode estar com id velho (ficha renomeada ou
+     * apagada), entao mandar a ficha pronta evita os dois desvios.
+     */
+    public static void sendThreatSheetOpen(ServerPlayer player, ThreatSheet sheet) {
+        if (player == null || player.connection == null || !SessionManager.isMaster(player)) {
+            return;
+        }
+        ServerPlayNetworking.send(player, new ThreatSheetOpenPayload(sheet));
     }
 
     /**

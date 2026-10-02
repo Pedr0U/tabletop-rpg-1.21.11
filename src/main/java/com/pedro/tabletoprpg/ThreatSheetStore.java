@@ -63,7 +63,9 @@ public final class ThreatSheetStore {
         List<ThreatSheet> copy = new ArrayList<>();
         for (ThreatSheet sheet : sheets) {
             if (sheet != null) {
-                copy.add(sheet);
+                // Ficha sem id (NBT gravado antes do id existir) ganha um aqui. Sem isso
+                // ela ficaria invisivel para o item e para o mob vinculado.
+                copy.add(sheet.hasId() ? sheet : sheet.withId(ThreatSheet.newId()));
             }
             if (copy.size() >= MAX_SHEETS) {
                 break;
@@ -87,6 +89,24 @@ public final class ThreatSheetStore {
     }
 
     /**
+     * A ficha com esse id, ou {@code null}.
+     *
+     * <p>E a busca que o item e a tag do mob usam, porque id nao muda com o nome.
+     */
+    public static ThreatSheet findById(UUID uuid, String id) {
+        if (id == null || id.isBlank()) {
+            return null;
+        }
+        String wanted = id.trim();
+        for (ThreatSheet sheet : snapshot(uuid)) {
+            if (wanted.equals(sheet.id())) {
+                return sheet;
+            }
+        }
+        return null;
+    }
+
+    /**
      * Salva uma ficha, criando ou substituindo.
      *
      * <p><b>Por que o nome e a identidade:</b> a lista da tela e a unica coisa que
@@ -102,6 +122,18 @@ public final class ThreatSheetStore {
         String key = sheet.key();
         if (key.isEmpty()) {
             return SaveResult.EMPTY_NAME;
+        }
+// Nome de exibicao obrigatorio (decisao do Mestre em 02/10/2026): e por ele que o
+        // mob e apontado em comando, como @e[name=...]. Ficha sem nome flutuante nao
+        // tem como ser localizada no mundo.
+        if (sheet.identity().displayName().isBlank()) {
+            return SaveResult.EMPTY_DISPLAY_NAME;
+        }
+        // ND obrigatorio tambem. Vazio chega como 0, porque o campo e inteiro: e o
+        // unico jeito de distinguir "nao preenchido" de um numero, e ameaca de ND 0 nao
+        // existe na regra.
+        if (sheet.identity().level() == 0) {
+            return SaveResult.EMPTY_LEVEL;
         }
 
         List<ThreatSheet> current = new ArrayList<>(snapshot(player.getUUID()));
@@ -138,9 +170,19 @@ public final class ThreatSheetStore {
             // ficha anterior deixa de existir na lista, e comparar a chave nova com ela
             // dava UPDATED em toda renomeacao, tornando SaveResult.RENAMED inalcancavel.
             String previousKey = current.get(index).key();
-            current.set(index, sheet);
+            // O servidor manda no id: um save pelo item chega com id vazio (o cliente nao
+            // sorteia) e um save pela tela chega com o id que o servidor mandou. Reaproveitar
+            // o id ja guardado e o que mantem o vinculo do mob vivo apos renomear.
+            ThreatSheet stored = sheet.withId(current.get(index).id());
+            if (!stored.hasId()) {
+                stored = stored.withId(ThreatSheet.newId());
+            }
+            current.set(index, stored);
             BY_PLAYER.put(player.getUUID(), Collections.unmodifiableList(current));
             return previousKey.equals(key) ? SaveResult.UPDATED : SaveResult.RENAMED;
+        }
+        if (!sheet.hasId()) {
+            sheet = sheet.withId(ThreatSheet.newId());
         }
         current.add(sheet);
         BY_PLAYER.put(player.getUUID(), Collections.unmodifiableList(current));
@@ -185,6 +227,8 @@ public final class ThreatSheetStore {
         UPDATED("Ficha de ameaça atualizada."),
         RENAMED("Ficha de ameaça renomeada."),
         EMPTY_NAME("O nome da ameaça está vazio."),
+        EMPTY_DISPLAY_NAME("O nome de exibição é obrigatório: é por ele que a ameaça é apontada em comando."),
+        EMPTY_LEVEL("O ND da ameaça é obrigatório."),
         NAME_TAKEN("Já existe uma ficha de ameaça com esse nome."),
         LIMIT_REACHED("Limite de fichas de ameaça atingido."),
         NOT_FOUND("Essa ficha de ameaça não existe mais.");

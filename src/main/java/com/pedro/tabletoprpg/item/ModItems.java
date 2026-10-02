@@ -13,6 +13,8 @@ import net.minecraft.core.Registry;
 import net.minecraft.core.component.DataComponents;
 import net.minecraft.core.registries.BuiltInRegistries;
 import com.pedro.tabletoprpg.ThreatSheet;
+import com.pedro.tabletoprpg.ThreatSheetBinding;
+import com.pedro.tabletoprpg.ThreatSheetStore;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.chat.Component;
@@ -230,6 +232,8 @@ public final class ModItems {
                     return;
                 }
                 tooltip.accept(Component.literal("ND " + tag.getInt(NBT_LEVEL).orElse(0)));
+                tooltip.accept(Component.literal("Clique direito no ar: abrir e atualizar"));
+                tooltip.accept(Component.literal("Clique direito numa criatura: ligar a ficha"));
             }
         };
 
@@ -338,10 +342,24 @@ public final class ModItems {
         stack.set(DataComponents.CUSTOM_NAME, Component.literal(sheet.identity().name()));
 
         CompoundTag tag = new CompoundTag();
-        tag.putString(NBT_THREAT_SHEET, sheet.key());
+        // O id, e nao a chave do nome: renomear a ficha nao pode orfaar o item que esta
+        // na mochila (decisao do Mestre em 02/10/2026).
+        tag.putString(NBT_THREAT_SHEET, sheet.id());
         tag.putInt(NBT_LEVEL, sheet.identity().level());
         stack.set(DataComponents.CUSTOM_DATA, CustomData.of(tag));
         return stack;
+    }
+
+    /**
+     * O id da ficha que este item aponta, ou {@code ""}.
+     *
+     * <p>Quem usa e o servidor: abrir a ficha e amarrar num mob resolvem pelo id, e nao
+     * pelo nome. O cliente recebe a ficha pronta pelo payload, entao nao precisa deste
+     * metodo para nada alem da dica.
+     */
+    public static String threatSheetId(ItemStack stack) {
+        CompoundTag tag = threatSheetTag(stack);
+        return tag == null ? "" : tag.getString(NBT_THREAT_SHEET).orElse("");
     }
 
     /**
@@ -556,6 +574,50 @@ public final class ModItems {
             // SUCCESS (e nao PASS): o item nao tem outro uso, e PASS deixaria o jogador
             // colocar no mundo o item inteiro a cada rolagem.
             MasterCommands.rollForPlayer(serverPlayer, preset.formula());
+            return InteractionResult.SUCCESS;
+        }
+
+        // Ficha de Ameaca: clique no AR abre a ficha ligada a este item, em modo de
+        // atualizacao. Numa entidade quem responde primeiro e o CombatController
+        // (vinculo), entao se o codigo chegou aqui o Mestre clicou em nada.
+        if (isThreatSheet(stack)) {
+            // Cliente: consome o clique e nao decide nada.
+            if (!(player instanceof ServerPlayer serverPlayer)) {
+                return InteractionResult.SUCCESS;
+            }
+            if (!SessionManager.isMaster(serverPlayer)) {
+                serverPlayer.displayClientMessage(
+                        Component.translatable("item.tabletop-rpg.threat_sheet.denied"), false);
+                return InteractionResult.FAIL;
+            }
+            CompoundTag tag = threatSheetTag(stack);
+            if (tag == null) {
+                serverPlayer.displayClientMessage(
+                        Component.translatable("message.tabletoprpg.threat_sheet_no_data_on_item"), true);
+                return InteractionResult.FAIL;
+            }
+            // Ficha de Ameaca com criatura sob a mira: AMARRA, e NAO abre. Este caminho e
+        // separado do clique de entidade de proposito: os dois chegam em pacotes
+        // diferentes e a ordem entre eles nao e garantida, entao se so um deles
+        // decidisse, a ficha abria no mesmo gesto em que o Mestre estava amarrando
+        // (relato em 02/10/2026). Regra do Mestre: usar o item num mob nao abre a ficha.
+        if (ThreatSheetBinding.bindUnderCrosshair(serverPlayer)) {
+            return InteractionResult.SUCCESS;
+        }
+
+        String sheetId = tag.getString(NBT_THREAT_SHEET).orElse("");
+            ThreatSheet sheet = ThreatSheetStore.findById(serverPlayer.getUUID(), sheetId);
+            if (sheet == null) {
+                // A ficha foi apagada depois que o item foi entregue. O item fica na
+                // mochila de proposito: e o mesmo tratamento do preset apagado.
+                serverPlayer.displayClientMessage(
+                        Component.translatable("message.tabletoprpg.threat_sheet_not_found",
+                                sheetId), true);
+                return InteractionResult.FAIL;
+            }
+            RpgNetworking.sendThreatSheetOpen(serverPlayer, sheet);
+            TabletopRpg.LOGGER.info("[TabletopRPG] Ficha '{}' aberta pelo item (uso no ar).",
+                    sheet.identity().name());
             return InteractionResult.SUCCESS;
         }
 

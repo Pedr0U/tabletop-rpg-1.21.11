@@ -11,6 +11,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.UUID;
 
 /**
  * Ficha de Ameaca: o monstro que o Mestre criou.
@@ -31,6 +32,7 @@ import java.util.Map;
  * a 999 em 4 caracteres, em vez dos +-30 dos jogadores.
  */
 public record ThreatSheet(
+        String id,
         Identity identity,
         Vitals vitals,
         String description,
@@ -45,6 +47,8 @@ public record ThreatSheet(
     // ------------------------------------------------------------------
 
     public static final int MAX_NAME = 32;
+    /** Id fixo da ficha: UUID em texto, 36 caracteres. Ver {@link #newId()}. */
+    public static final int MAX_ID = 36;
     /** ND: 4 caracteres, como pedido em 02/10/2026. */
     public static final int LEVEL_CHARS = 4;
     public static final int MIN_LEVEL = -999;
@@ -366,7 +370,7 @@ public record ThreatSheet(
             ByteBufCodecs.collection(ArrayList::new, Action.STREAM_CODEC, MAX_ACTIONS);
 
     /**
-     * Na rede. Escrito a mao (encode/decode) em vez de {@code composite} porque sao 8
+     * Na rede. Escrito a mao (encode/decode) em vez de {@code composite} porque sao 9
      * campos e o composite comfortable ate 6 pares; a decomposicao em dois
      * {@code composite} de 4 seria legivel, mas escrever a ordem dos campos aqui deixa
      * a ordem do NBT e a da rede na mesma lista, o que e mais facil de conferir.
@@ -375,6 +379,7 @@ public record ThreatSheet(
             new StreamCodec<>() {
                 @Override
                 public ThreatSheet decode(FriendlyByteBuf buf) {
+                    String sheetId = ByteBufCodecs.stringUtf8(MAX_ID).decode(buf);
                     Identity id = Identity.STREAM_CODEC.decode(buf);
                     Vitals vit = Vitals.STREAM_CODEC.decode(buf);
                     String desc = ByteBufCodecs.stringUtf8(MAX_DESCRIPTION).decode(buf);
@@ -383,11 +388,12 @@ public record ThreatSheet(
                     List<String> feats = FEATURES_STREAM.decode(buf);
                     List<Ability> pass = PASSIVES_STREAM.decode(buf);
                     List<Action> acts = ACTIONS_STREAM.decode(buf);
-                    return new ThreatSheet(id, vit, desc, attrs, per, feats, pass, acts);
+                    return new ThreatSheet(sheetId, id, vit, desc, attrs, per, feats, pass, acts);
                 }
 
                 @Override
                 public void encode(FriendlyByteBuf buf, ThreatSheet value) {
+                    ByteBufCodecs.stringUtf8(MAX_ID).encode(buf, value.id());
                     Identity.STREAM_CODEC.encode(buf, value.identity());
                     Vitals.STREAM_CODEC.encode(buf, value.vitals());
                     ByteBufCodecs.stringUtf8(MAX_DESCRIPTION).encode(buf, value.description());
@@ -399,8 +405,9 @@ public record ThreatSheet(
                 }
     };
 
-    /** NBT. Oito campos cabem no {@code RecordCodecBuilder} sem gambiarra. */
+    /** NBT. Nove campos cabem no {@code RecordCodecBuilder} sem gambiarra. */
     public static final Codec<ThreatSheet> CODEC = RecordCodecBuilder.create(i -> i.group(
+            Codec.STRING.fieldOf("id").forGetter(ThreatSheet::id),
             Identity.CODEC.fieldOf("identity").forGetter(ThreatSheet::identity),
             Vitals.CODEC.fieldOf("vitals").forGetter(ThreatSheet::vitals),
             Codec.STRING.fieldOf("description").forGetter(ThreatSheet::description),
@@ -420,6 +427,10 @@ public record ThreatSheet(
      * passou do limite e vira {@code null} em lista vazia.
      */
     public ThreatSheet {
+        // Vazio e o estado de "ainda nao salva". O {@link ThreatSheetStore} sorteia o
+        // id no primeiro save, entao um id vazio NUNCA vira arquivo: ele so volta do
+        // cliente, que nao sorteia nada.
+        id = id == null ? "" : id.trim();
         identity = identity == null
                 ? new Identity("", 0, "", false, "", "", "")
                 : identity;
@@ -450,6 +461,7 @@ public record ThreatSheet(
             attrs.add(new AttributeValue(def.id(), 0));
         }
         return new ThreatSheet(
+                "",
                 new Identity("", 0, "", false, "", "", ""),
                 new Vitals(0, 1, 10),
                 "",
@@ -504,6 +516,41 @@ public record ThreatSheet(
         return RollPreset.normalizeKey(identity.name());
     }
 
+    /**
+     * Sorteia o id de uma ficha nova.
+     *
+     * <p><b>Por que o id e separado da chave, e nao a chave:</b> a chave sai do NOME, e
+     * o nome muda. O item na mochila e a tag do mob vinculado apontam para a ficha, e
+     * ambos precisam continuar valendo depois de um "Goblin" virar "Goblin Chefe".
+     * Decisao do Mestre em 02/10/2026.
+     */
+    public static String newId() {
+        return UUID.randomUUID().toString();
+    }
+
+    /** A ficha ja tem id (ja foi salva pelo menos uma vez)? */
+    public boolean hasId() {
+        return !id.isEmpty();
+    }
+
+    /**
+     * Devolve esta ficha com o id certo.
+     *
+     * <p><b>Por que o servidor manda no id:</b> o cliente nunca sorteia. Se ele mandasse,
+     * salvar pelo caminho do item criaria um id novo e quebraria o vinculo do mob sem
+     * ninguem ter pedido.
+     */
+    public ThreatSheet withId(String newId) {
+        if (newId == null || newId.isBlank()) {
+            return this;
+        }
+        if (newId.equals(id)) {
+            return this;
+        }
+        return new ThreatSheet(newId, identity, vitals, description, attributes, pericias,
+                features, passives, actions);
+    }
+
     /** O nome que a lista de fichas mostra: nome + ND. */
     public String listLabel() {
         return identity.name() + " (ND " + identity.level() + ")";
@@ -543,7 +590,7 @@ public record ThreatSheet(
         if (aligned.equals(attributes) && kept.equals(pericias)) {
             return this;
         }
-        return new ThreatSheet(identity, vitals, description, aligned, kept,
+        return new ThreatSheet(id, identity, vitals, description, aligned, kept,
                 features, passives, actions);
     }
 
