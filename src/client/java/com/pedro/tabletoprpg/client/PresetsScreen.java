@@ -152,37 +152,13 @@ public class PresetsScreen extends Screen {
     }
 
     /**
-     * Monta os widgets da lista: nome, setas e Del.
+     * Recria Save, Use e o botao de voltar.
      *
-     * <p><b>Por que recria os widgets em vez de repositionar:</b> a lista muda de
-     * tamanho quando um preset e criado ou apagado, e o `children()` do Screen nao
-     * tem como remover widget. Recriar e o caminho curto e e o que a tela de Skills e
-     * Magias ja faz.
+     * <p><b>Por que um metodo so para o rodape:</b> a lista e o formulario sao
+     * recriados em separado, e o rodape depende das coordenadas do formulario, que so
+     * o {@code init} calcula. Fica em metodo para o layout do rodape estar escrito em
+     * um lugar so.
      */
-    private void rebuildListButtons() {
-        clearWidgets();
-        // O `clearWidgets` leva os campos junto, entao eles voltam a ser criados --
-        // com o texto que estava digitado, lido das caixas ANTES de recriar.
-        pendingName = nameBox == null ? "" : nameBox.getValue();
-        pendingFormula = formulaBox == null ? "" : formulaBox.getValue();
-
-        int boxX = panelX + (panelWidth - 200) / 2;
-        int labelW = 50;
-        int y = listBottom + 8;
-        nameBox = field("Name", boxX + labelW, y, 200);
-        nameBox.setMaxLength(RollPreset.MAX_NAME);
-        nameBox.setValue(pendingName);
-        y += 26;
-        formulaBox = field("Formula", boxX + labelW, y, 200);
-        formulaBox.setMaxLength(RollPreset.MAX_FORMULA);
-        formulaBox.setValue(pendingFormula);
-
-        // O rodape (Save, Use, voltar) tambem foi limpo, entao volta aqui em vez de
-        // ficar em init: e o que faz o formulario reaparecer depois de uma seta.
-        rebuildFooter();
-    }
-
-    /** Recria Save, Use e o botao de voltar, que o {@code clearWidgets} levou. */
     private void rebuildFooter() {
         int btnY = swatchY + rowsOfSwatches() * (swatchSize + swatchGap) + 6;
         int btnW = (panelWidth - 20) / 2;
@@ -194,10 +170,41 @@ public class PresetsScreen extends Screen {
                 .bounds(panelX, statusY + 14, 110, 20).build());
     }
 
+    /**
+     * Os widgets das linhas da lista, para poder remove-los.
+     *
+     * <p><b>Por que este campo existe:</b> o {@code Screen} nao tem como remover um
+     * widget especifico -- {@code clearWidgets} leva tudo junto, e o formulario sumiria
+     * com o texto que a jogadora estava digitando. Guardando os widgets da lista,
+     * eles sao removidos um a um e o resto da tela fica como esta.
+     *
+     * <p>Sem isso, cada seta e cada clique do Del somaria widgets novos por cima dos
+     * antigos, e o clique passaria a acionar o indice de uma lista que nao existe mais.
+     */
+    private final List<Button> listWidgets = new ArrayList<>();
+
+    /**
+     * Um widget da lista, ja registrado para a proxima remocao.
+     *
+     * <p>Passar por este metodo em vez de chamar {@code addRenderableWidget} direto e o
+     * que impede o vazamento: um widget adicionado sem ser registrado nunca seria
+     * removido.
+     */
+    private Button addListWidget(Button button) {
+        listWidgets.add(button);
+        addRenderableWidget(button);
+        return button;
+    }
+
     /** Recria so os widgets das linhas da lista, sem mexer no formulario. */
     private void rebuildListOnly() {
-        // Os widgets da lista vivem entre `listTop` e `listBottom`; sao recriados
-        // aqui e o formulario ja foi montado em init.
+        // Remove os widgets da lista ANTES de criar os novos: e o que impede o
+        // acúmulo a cada clique de seta ou de Del.
+        for (Button old : listWidgets) {
+            removeWidget(old);
+        }
+        listWidgets.clear();
+
         int visibleFrom = listScroll;
         int visibleTo = Math.min(presets.size(), listScroll + VISIBLE_ROWS);
         int btnH = 18;
@@ -213,13 +220,13 @@ public class PresetsScreen extends Screen {
             // Setas: uma casa por clique. A primeira e a ultima linha nao tem seta
             // naquela direcao, e nao e erro -- e so a borda da lista.
             if (i > 0) {
-                this.addRenderableWidget(Button.builder(Component.literal("\u2191"), b -> move(storedIndex, true))
+                addListWidget(Button.builder(Component.literal("\u2191"), b -> move(storedIndex, true))
                         .bounds(upX, rowY, btnW, btnH)
                         .tooltip(Tooltip.create(Component.literal("Move up")))
                         .build());
             }
             if (i < presets.size() - 1) {
-                this.addRenderableWidget(Button.builder(Component.literal("\u2193"), b -> move(storedIndex, false))
+                addListWidget(Button.builder(Component.literal("\u2193"), b -> move(storedIndex, false))
                         .bounds(upX + btnW + 2, rowY, btnW, btnH)
                         .tooltip(Tooltip.create(Component.literal("Move down")))
                         .build());
@@ -228,7 +235,7 @@ public class PresetsScreen extends Screen {
             // O nome: abre para edicao, e mostra a formula no hover (pedido do
             // usuario). O tooltip e a resposta ao "ao passar o mouse aparecera a
             // formula".
-            this.addRenderableWidget(Button.builder(
+            addListWidget(Button.builder(
                             Component.literal(truncate(preset.name(), 120)),
                             b -> loadForEdit(storedIndex))
                     .bounds(panelX + 4, rowY, Math.max(20, upX - panelX - 8), btnH)
@@ -238,7 +245,7 @@ public class PresetsScreen extends Screen {
 
             // Del com confirmacao em dois cliques, igual a lista de skills e magias.
             boolean pending = deletePending == storedIndex;
-            this.addRenderableWidget(Button.builder(
+            addListWidget(Button.builder(
                             Component.literal(pending ? "Del?" : "Del"),
                             b -> onDelete(storedIndex))
                     .bounds(delX, rowY, btnW, btnH)
@@ -524,17 +531,6 @@ public class PresetsScreen extends Screen {
     }
 
     // --- estado que chega do servidor ---
-
-    /**
-     * Os valores dos campos, guardados para sobreviver a um {@code rebuildListOnly}.
-     *
-     * <p><b>Por que campo e nao o proprio {@code EditBox}:</b> recriar os widgets da
-     * lista recria a lista inteira de widgets do Screen, e o texto que estava digitado
-     * nas caixas se perderia. Guardando o texto, o que a jogadora digitou continua
-     * depois de uma seta.
-     */
-    private String pendingName = "";
-    private String pendingFormula = "";
 
     /**
      * A resposta do servidor para a tela aberta.
