@@ -116,6 +116,22 @@ public record RollPreset(String name, String formula, String colorId) {
             throw new PresetException(e.getMessage());
         }
 
+        // Nomes de atributo e pericia sao conferidos AQUI, e nao na hora da rolagem.
+        // O motivo e a mesma razao da validacao acima: se o erro so aparecesse ao
+        // rolar, a jogadora descobriria o nome errado tarde demais, e o preset
+        // pareceria valido na tela. Recusar no Save com a mensagem do
+        // FormulaResolver e o que mantem as duas portas (comando e tela) dizendo a
+        // mesma coisa.
+        //
+        // O `sheet` e null de proposito: esta checagem e so de NOME. Se o id existir
+        // no modelo mas a ficha da jogadora nao tiver o valor, isso e problema da
+        // ficha e nao do preset -- e a resolucao recusa com o aviso certo na rolagem.
+        try {
+            FormulaResolver.tokens(formula, SheetModelHolder.current());
+        } catch (FormulaResolver.ResolveException e) {
+            throw new PresetException(e.getMessage());
+        }
+
         // Cor ausente cai em WHITE: a opcao "default" saiu em 01/10/2026 porque marrom
         // sem tingir parecia a cor "brown" da lista, e o preset ficava indistinguivel.
         String colorId = rawColorId == null || rawColorId.isBlank()
