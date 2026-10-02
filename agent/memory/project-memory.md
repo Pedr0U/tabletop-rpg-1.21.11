@@ -2495,7 +2495,7 @@ encolhe ate 1 px -- e ele que faz a transicao parecer continua. O botao some aos
 
 **Decisao do usuario (01/10/2026):** nome **obrigatorio** em Skill e Magia. Sem
 nome, save() marca showNameError, foca a caixa e **nao** envia pacote; o
-aviso "Name required" aparece em  xFF5555 sob a caixa de nome. Validado so no
+aviso "Name required" aparece em 0xFF5555 sob a caixa de nome. Validado so no
 cliente: e conforto, nao seguranca -- o servidor ja normaliza e limita o texto.
 
 **FATO verificado (cabecalho):** o rotulo "CD" e medido por ont.width("CD") + 2,
@@ -2681,3 +2681,51 @@ Escolha: **reentregar o item atualizado e avisar que o antigo continua la**. O p
 duplicado com o nome velho; o ganho e que o item novo nunca mostra nome errado. No servidor,
 renomear **remove o preset viejo e poe o novo no lugar dele** — sem isso o renomeado ficaria
 duplicado, com o nome novo em cima do velho. Aviso em `message.tabletoprpg.preset_renamed`.
+
+### Validacao de formula com nome: o parser tem de ver o placeholder (LICAO, BUG CORRIGIDO 02/10/2026)
+`RollPreset.create` rodava `DiceFormula.parse(formula)` **antes** da checagem de nome. O
+`DiceFormula` so entende numeros e dados, entao `1d6+Strength` era recusado como sintaxe invalida e
+o `FormulaResolver` **nunca era chamado** -- o recurso inteiro ficava inalcancavel pela tela e pelo
+comando, e o build continuava verde. Sintoma do usuario: "nao consegui criar um preset com
+1d6+Strength". **Nenhum teste cobria**: `RollPresetTest` so usava `1d20+5` e `banana`.
+Correcao: os nomes sao conferidos primeiro e o parser recebe `FormulaResolver.placeholderFormula`,
+que troca cada nome por `0`. O preset guarda a formula **com** o nome; o placeholder so existe para
+o parser. E a mensagem do parser tem de trocar o placeholder de volta (`replace(forParsing, formula)`),
+senao a jogadora le "unexpected '+' in '1d6+0+'" e procura um zero que nunca escreveu.
+**Licao geral: validador em ordem errada passa o build e some no produto.** Toda validação que
+depende de uma transformacao precisa de um teste que monte a entrada ja transformada.
+
+### Layout de GUI: meca a parte variavel, nao some constantes (LICAO, BUG CORRIGIDO 02/10/2026)
+O painel da `PresetsScreen` media **326px num painel de 240px**: 6 linhas de 22px mais o formulario
+somados a mao. Tudo abaixo das amostras de cor (Save, Use, status, voltar) ficava fora da tela, e
+**sem erro nem aviso** -- o Minecraft simplesmente nao desenhou. Duas causas somadas:
+1. altura fixa para a lista, que e a unica parte que deveria encolher;
+2. o orcamento descontava `2 * PAD` quando o `panelY` nunca e menor que `PAD` -- faltava um `PAD`.
+Correcao: `chrome` (tudo menos a lista) tem altura fixa; a lista recebe o que sobrar, entre 1 e
+`MAX_ROWS` linhas; o painel e centralizado nos dois eixos. Verificado por script nas dimensoes
+reais (427x240, 480x270, 640x360, 960x540, 854x480) -- todas OK. Em 240x180 ainda estoura 10px,
+abaixo do que o proprio Minecraft suporta.
+**Regra: o que a GUI desenhar fora da tela nao gera erro nenhum.** Layout precisa de verificacao
+**externa** (script que espelha as formulas), porque nao ha como testar `Screen` em JUnit.
+
+### Centralize o rotulo com o campo, nunca o campo sozinho (LICAO, 02/10/2026)
+Centralizar so a caixa de texto punha o rotulo "Formula" para fora do painel, porque o rotulo e
+`boxX - 4 - font.width(rotulo)` e sobra menos espaco de um lado do que o rotulo ocupa. O bloco
+`rotulo + campo` tem de ser centralizado como uma unidade, com a largura do rotulo reservada.
+
+### Tela: log e a unica evidencia de que a tela abriu (LICAO, 02/10/2026)
+Sem linha de log na abertura da tela, o `runClient.log` de uma sessao inteira **nao distingue**
+"a tela abriu e estava quebrada" de "ninguem clicou no botao". Isso gastou uma sessao de teste.
+Adicionado: log na abertura (com `guiScaledWidth/Height`), log do layout calculado dentro do
+`layout()`, e log dos tres pacotes de preset com `ok`, mensagem e se a tela estava aberta.
+
+### `scanEncoding` pega ideograma em qualquer `.md` do `agent/` (LICAO, 02/10/2026)
+Dois ideogramas chineses (U+6EDA e U+52A8) num **relatorio** derrubaram o `build`. O detector varre
+`agent/` tambem, e com razao: texto em portugues nao usa ideograma. **A falha e sempre do lado do
+agente**, e o detector estava certo. Vale para a mensagem de commit tambem -- um par de ideogramas
+(U+516C e U+5F0F, "formula") entrou num titulo e so foi visto depois de amendado.
+**Armadilha desta propria licao:** citar o caractere proibido para documentar o defeito o repõe no
+arquivo. Descrever por codepoint. Aconteceu duas vezes na mesma sessao.
+Um byte NUL (U+0000, digitado no lugar de `0` num literal de cor `0xFF5555`) tambem estava no
+`project-memory.md` desde uma sessao anterior e **fazia o arquivo ser lido como binario** por
+qualquer ferramenta. Repara byte a byte, nunca conversao global.
