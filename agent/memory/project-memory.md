@@ -8273,3 +8273,22 @@ vira mais um bug, porque parece descriptive e ninguem reexamina.
 **calibrar o detector** -- rodar o script com a geometria antiga e ver reprovar. Sem
 calibrar, um check que sempre passa nao prova nada. Ver a licao do script que envelhece,
 duas acima.
+
+### A MESMA subtracao em dois lugares = erro de 42px (BUG, 02/10/2026)
+rrowsRight() ja subtraia ROW_BTN_W * 2 + ROW_BTN_GAP para dar a borda direita do
+grupo das setas, e upX = arrowsRight() - (ROW_BTN_W * 2 + ROW_BTN_GAP) subtraia de novo
+para achar a esquerda. Duas subtrai em sequencia: sobraram 44px de vazio entre a seta de
+baixo e o Del. Passou por **duas** rodadas de feedback da jogadora porque eu mexia no
+**vao** perto do problema (6px -> 2px) em vez de medir as duas pontas do grupo.
+**Licao:** quando dois metodosDividem a mesma subtracao, um deles esta subtraindo duas
+vezes. E quando o defeito e "esta longe do vizinho", medir a distancia absoluta antes de
+mexer no vao -- mexer no vao nao muda distancia nenhuma quando o buraco e de 42px.
+**Como pegar:** o script de layout mede ao seta->Del e tem de ser exatamente
+ROW_BTN_GAP. Calibrado contra a conta antiga, que reprova com
+ao seta->Del fora do esperado: 44 (esperado 2).
+
+### Diminuir um texto para compensar espaco morto piora o problema (LICAO, 02/10/2026)
+Com os 42px vazios na linha, "corrigi" a formula estreitando o nome do preset (120px ->
+65px). O nome ficou menor **para sempre**, mesmo depois de o buraco ser arrumado, porque
+ninguem tinha ligado as duas coisas. **Nao aperte um elemento para caber num espaco que
+voce ainda nao auditou: ache de onde vem o espaco primeiro.**

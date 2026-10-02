@@ -125,29 +125,15 @@ A jogadora testou o jar e o conjunto passou, mas as setas continuam sobre a form
 
 **Causa raiz.** `formulaRight()` era `arrowsRight() - GAP`. `arrowsRight()` e a borda
 **DIREITA** do grupo das duas setas, e o botao da seta de baixo tem 20px de largura. A
-formula terminava 6px antes dessa borda, ou seja **14px DENTRO do botao da seta de
+formula terminava 6px antes dessa borda, ou seja **6px DENTRO do botao da seta de
 baixo**. Como a formula e desenhada em `drawListOverlay`, depois de `super.render`, o que
 aparecia na tela era a seta com o texto da formula atravessado por cima -- lido pelo
 lado da jogadora como "a seta esta em cima da formula".
 
-O erro da volta anterior foi de 4px (mover as setas para perto do `Del`), e **nao** a
-causa. Por isso mexer no vao entre setas e `Del` nao resolveu nada.
+**Correcao.** Novo `arrowsLeft()`, e `formulaRight()` passa em `arrowsLeft() - GAP`.
 
-**Correcao.**
-
-- Novo `arrowsLeft()` = borda esquerda do grupo das setas.
-- `formulaRight()` = `arrowsLeft() - GAP`: a formula nunca mais passa da seta.
-- `rowNameWidth()` deixou de ser `3/5` de `arrowsRight() - rowLeft()` e passou a ser
-  metade do que sobra ate `formulaRight()`. Com o numero antigo o nome recebia 43px que
-  ninguem desenhava e a formula ficava com 37px -- poco mais que um `...`.
-
-| Texto da linha (painel 300px) | Antes | Agora |
-| --- | --- | --- |
-| nome | 120px | **65px** |
-| formula | 78px (14px sobre a seta) | **91px** (nunca toca a seta) |
-
-O nome ficou mais apertado: e o preco de dar a faixa que sobra a quem a jogadora
-reclamou duas vezes. `Dano Espada` ainda cabe em 65px.
+O nome ficou mais apertado nessa rodada (120px -> 65px), e isso estava **errado**: foi
+uma compensacao pela causa real, descoberta depois. Ver a terceira volta.
 
 **Como foi provado, e nao afirmado.** O script de layout passou a medir a geometria da
 linha da lista. E, para o check valer alguma coisa, ele foi **calibrado**: rodar o
@@ -162,6 +148,72 @@ FALHA  427x240  ...
 Com a geometria nova, as mesmas telas passam. Um check que nunca falhou nao prova nada;
 este falhou quando deveria.
 
+## Terceira volta: as setas estavam a 44px do `Del`, e o nome pagou por isso
+
+A jogadora testou de novo. A formula deixou de invade as setas (correto), mas: as setas
+continuavam **longe** do `Del`, e o nome do preset ficou **pequeno demais**. Ela pediu
+para desfazer a diminuicao do nome.
+
+**Causa raiz, e eu tinha passado por ela duas vezes.** `arrowsRight()` era
+
+```java
+delX() - ROW_BTN_GAP - (ROW_BTN_W * 2 + ROW_BTN_GAP)
+```
+
+e `rebuildListOnly` calcula a borda ESQUERDA do grupo com
+
+```java
+int upX = arrowsRight() - (ROW_BTN_W * 2 + ROW_BTN_GAP);
+```
+
+A largura do grupo entrava **duas vezes em sequencia**. `arrowsRight()` ja entregava a
+borda direita recuada 42px, e `upX` recuava mais 42px para achar a esquerda. Resultado:
+44px de vazio entre a seta de baixo e o `Del`.
+
+Por que isso nao apareceu antes: o codigo **parecia** correto. `arrowsRight()` e mesmo a
+borda direita, e a expressao e a mesma que produz a esquerda. O erro so e visivel na
+medida -- e o sintoma que a jogadora descreveu ("distantes demais do Del na direita do
+quadro") era exatamente esse buraco.
+
+**Por que eu nao vi em duas voltas:** nas duas eu mexi no *vao* entre setas e `Del`
+(`GAP` -> `ROW_BTN_GAP`) em vez de conferir a posicao absoluta das duas pontas do grupo.
+So um numero medido revela um erro de 42px; mexer em 6px perto dele nao pode.
+
+**Correcao.** `arrowsRight()` = `delX() - ROW_BTN_GAP`. A largura do grupo entra uma vez
+so, em `arrowsLeft()`.
+
+O nome voltou sozinho: os 42px recuperados vao para a faixa de texto.
+
+| Linha da lista, painel 300px | Antes | Agora |
+| --- | --- | --- |
+| vao seta -> `Del` | 44px | **2px** |
+| nome | 65px | **103px** |
+| formula | 62px | **79px** |
+
+O nome nao volta aos 128px originais porque a formula agora ocupa a faixa dela sem
+invadir a seta -- antes essa faixa era conquistada invadindo.
+
+**A divisao.** O que sobra entre o botao do nome e o fim da formula e dividido em 3/5 e
+2/5, como a primeira versao fazia. Nome = 3/5 porque e o alvo de clique da linha. Com a
+fonte vanilla (6px por caractere, ja registrado na memoria do projeto):
+
+| Texto | Largura | Cabe? |
+| --- | --- | --- |
+| `Dano Espada` (10 letras + espaco) | 64px | sim, em 103px |
+| `2d6+Strength` (12 caracteres) | 72px | sim, em 79px |
+
+**Como foi provado.** O script de layout ganhou duas checagens novas -- o vao
+seta->`Del` tem de ser exatamente `ROW_BTN_GAP`, e o nome/formula tem de caber os textos
+reais da jogadora. E foi **calibrado** de novo: com a conta antiga ele reprova com
+
+```
+-> LINHA: vao seta->Del fora do esperado: 44 (esperado 2)
+-> LINHA: formula nao cabe '2d6+Strength' (72px): 62
+```
+
+Com a conta nova, as 9 telas passam, e `Dano Espada`/`2d6+Strength` cabem com folga em
+todas elas.
+
 ## Validacao
 
 | Verificacao | Resultado |
@@ -170,9 +222,9 @@ este falhou quando deveria.
 | `scanEncoding` | OK: 147 arquivos, 0 mojibake, 0 ideograma, 0 U+FFFD |
 | Testes | **165 testes, 0 falhas, 0 erros** |
 | Script de layout | 9 telas OK; so 240x180 reprova (preexistente) |
-| Calibracao do check da linha | geometria antiga reprova, nova passa |
-| Jar | `build/libs/tabletop-rpg-1.0.0.jar` 659KB, 02:10:51 |
-| Jar contem a correcao | `javap` em `PresetsScreen`: `arrowsLeft`, `formulaRight`, `rowNameWidth` |
+| Calibracao do check da linha | conta antiga reprova (vao 44px, formula 62px), nova passa |
+| Jar | `build/libs/tabletop-rpg-1.0.0.jar` 659KB, 02:22:00 |
+| Jar contem a correcao | `javap` em `PresetsScreen`: `arrowsRight`, `arrowsLeft`, `nameButtonX`, `rowNameWidth`, `formulaRight`, `formulaMax` |
 
 O script de layout precisou ser atualizado duas vezes: quando o `chrome` ganhou a segunda
 linha de status, e quando a geometria da linha da lista entrou na medicao. Sem isso ele
@@ -182,7 +234,7 @@ precisa ser **calibrado**: se nunca falhou, ainda nao prova nada.
 ## Nao validado
 
 Nenhuma correcao visual desta rodada foi vista em jogo. `Screen` nao roda em JUnit e o
-`runClient` do ambiente nao injeta clique nem hover de mouse. Os seis pontos acima
+`runClient` do ambiente nao injeta clique nem hover de mouse. Os sete pontos acima
 dependem de pixel e de gesto, e so a jogadora fecha isso.
 
 Em especial, **o sentido do hover nao tem teste**: a logica esta em

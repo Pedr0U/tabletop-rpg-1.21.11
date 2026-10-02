@@ -19,20 +19,23 @@ Arquivo unico: `src/client/java/com/pedro/tabletoprpg/client/PresetsScreen.java`
 | 1 | setas mais proximas do `Del`, mesma ordem | `arrowsRight()` com `ROW_BTN_GAP` em vez de `GAP` | script de layout: formula ganha 4px |
 | 2 | setas so no hover | `showArrowsOnHoveredRow()`, antes de `super.render` | `visible` **e** `active` juntos |
 | 3 | seta travada mais escura | `addArrow()` cria as duas sempre; `DARK_GRAY` + `active = false` | tooltip `Already first/last` |
-| 4 | formula invadindo o nome | `rowTexts` usa a borda real do botao, nao fracao | formula 88px -> 91px, nome 119px -> 65px |
+| 4 | formula invadindo o nome | `rowTexts` usa a borda real do botao, nao fracao | nome 65px -> 103px, formula 79px |
 | 5 | scroll invertido | `+ (int) -Math.signum(scrollY)` | bytecode + 3 telas irmas ja certas |
 | 6 | aviso branco, 2 linhas, dentro do quadro | `layoutStatus()` + `STATUS_LINES = 2`, `0xFFFFFFFF` | com tela aberta o aviso nao vai ao chat |
-| 7 | setas **em cima** da formula (2a volta) | `arrowsLeft()` novo; `formulaRight()` para nele | check reprova com a geometria antiga |
+| 7 | formula sobre a seta (2a volta) | novo `arrowsLeft()`; `formulaRight()` para nele | check reprova com a conta antiga |
+| 8 | setas a 44px do `Del`, nome pequeno (3a volta) | `arrowsRight()` = `delX() - ROW_BTN_GAP` | vao medido: 44px -> 2px; nome 65 -> 103px |
 
 ## Armadilhas ja vencidas (nao repetir)
 
-- **`arrowsRight()` nao e a borda esquerda do grupo.** Era esse o bug das "setas em cima
-  da formula": a formula parava 14px DENTRO do botao da seta de baixo. Novo
-  `arrowsLeft()`. Um metodo que devolve uma borda lateral precisa ser nomeado pelo lado
-  que ele representa, e nao pelo lado que o codigo antigo usava.
-- **Check novo tem que ser calibrado.** O script de layout mede a geometria da linha e
-  reprova com a formula antiga (`formula invade a seta: 288 > 246`). Um check que nunca
-  falhou nao prova nada.
+- **A MESMA subtracao em dois lugares.** `arrowsRight()` subtraia a largura do grupo das
+  setas, e `upX` subtraia de novo: 44px de vazio entre a seta e o `Del`. Passei por isso
+  duas rodadas mexendo no vao (6px -> 2px) em vez de medir a distancia absoluta.
+- **Nao apertar um texto para compensar espaco nao auditado.** O nome foi de 120px para
+  65px para "caber" num buraco de 42px, e ficou pequeno mesmo depois do buraco sumir.
+- **`arrowsRight()` nao e a borda esquerda do grupo.** Era o bug das "setas em cima da
+  formula": a formula parava 6px DENTRO do botao da seta de baixo. Novo `arrowsLeft()`.
+- **Check novo tem que ser calibrado.** O script mede `vao seta->Del` e reprova com a
+  conta antiga. Um check que nunca falhou nao prova nada.
 - **Script de layout envelhece junto.** Mudou o `chrome`, o script continuou imprimindo
   os numeros antigos com "OK". Falso negativo silencioso. Atualizado duas vezes.
 - **`plainSubstrByWidth` devolve String, nao indice.** A assinatura que devolve indice e
@@ -61,8 +64,16 @@ Candidatos se ela relatar de novo, com o log novo para diagnosticar:
 
 1. as setas nao aparecem com o mouse em cima da linha (faixa de deteccao apertada);
 2. a seta travada continua clara demais;
-3. a formula ainda toca o botao do nome com nome longo;
-4. o aviso ainda estoura com mensagem muito longa.
+3. o nome ainda aperta em nome mais longo que `Dano Espada` (hoje 103px, e o texto
+   ocupa 64px, entao ha folga para mais uns 6 caracteres);
+4. a formula ainda aperta em formula mais longa que `2d6+Strength` (hoje 79px, e o texto
+   ocupa 72px, entao a folga e pequena -- e aqui que mexer se ela pedir);
+5. o aviso ainda estoura com mensagem muito longa.
+
+**Se ela pedir mais espaco para o nome**, o nome e 3/5 e a formula 2/5 do que sobra
+entre o botao e o fim da formula (`rowNameWidth`). Trocar para 5/8 e 3/8 da um nome ~12px
+maior e tira 12px da formula. Nao mexer em mais nada ao mesmo tempo: as tres voltas
+anteriores misturaram correcoes e nenhuma batia.
 
 O caminho de rolagem do aviso e sempre o mesmo: `TabletopRpgClient` escolhe tela OU
 chat, nunca os dois.
