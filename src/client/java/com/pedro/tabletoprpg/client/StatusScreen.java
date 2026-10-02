@@ -551,7 +551,17 @@ public class StatusScreen extends CharacterSheetScreen {
             return Math.max(0, Math.min(value, maxScroll()));
         }
 
-        /** O cursor esta sobre a faixa da lista (sem o cabecalho)? */
+        /**
+         * O cursor esta sobre a faixa da lista?
+         *
+         * <p><b>01/10/2026 -- o paragrafo antigo ("sem o cabecalho") foi
+         * removido porque virou falso:</b> o cabecalho da coluna de magias
+         * (filtro, atributo, CD e "+ Magia") passou a ser parte da faixa
+         * rolavel, entao o cursor sobre ele TEM que rolar. E o que o jogador
+         * pediu -- ele estava sobre o "+ Magia" e a roda nao fazia nada. O
+         * titulo da secao, que continua fixo, esta ACIMA de {@code listTop} e
+         * por isso segue de fora.
+         */
         private boolean isOverList(double mouseX, double mouseY) {
             return mouseX >= panelX && mouseX < panelX + panelW
                     && mouseY >= listTop && mouseY < listBottom;
@@ -742,6 +752,108 @@ public class StatusScreen extends CharacterSheetScreen {
     private static final int LIST_BTN_W = INV_BTN_W;
 
     /**
+     * Largura do botao Del, igual a do Edit e a do item.
+     *
+     * <p><b>Por que um nome proprio se o numero e o mesmo de
+     * {@link #LIST_BTN_W}:</b> em 01/10/2026 a ALTURA do Del deixou de ser a do
+     * botao de nome ({@link #LIST_DEL_BTN_H}) e a largura continuou a mesma.
+     * Nomear as duas dimensoes separadamente e o que avisa o proximo: se um dia
+     * o Del ficar largo demais para a linha do custo, mexe aqui e nao no
+     * {@code LIST_BTN_W} do item da aba 1.
+     */
+    private static final int LIST_DEL_BTN_W = LIST_BTN_W;
+
+    /**
+     * Altura do botao Del: a mesma do botao de nome, para skill e magia.
+     *
+     * <p><b>Por que 01/10/2026 (pedido do usuario: "o botao do nome da skill
+     * pode ser mais grossinho igual ao da magia, assim como o delete"):</b> o Del
+     * e o botao de um texto curto ("Del"/"Del?") numa linha de descricao, e ele
+     * herdava a altura antiga da linha (12 px). Com o nome da skill agora do
+     * mesmo tamanho do nome da magia (16 px), deixar o Del com 12 px faria o
+     * card parecer ter duas espessuras diferentes.
+     */
+    private static final int LIST_DEL_BTN_H = LIST_NAME_BTN_H;
+
+    /**
+     * Avanco da 1a linha de texto do card: a mesma nos dois.
+     *
+     * <p><b>Por que o mesmo {@link #LIST_CIRCLE_ADV} da magia:</b> e a linha que
+     * abre o corpo do card logo abaixo do nome. Nos dois colunados ela e a 1a
+     * linha depois do botao de nome, entao ela avanca pelo mesmo numero -- se
+     * divergisse, a linha do Del (que e a 3a) cairia em um Y diferente em skill
+     * e em magia.
+     */
+    private static final int LIST_LINE1_ADV = LIST_CIRCLE_ADV;
+
+    /**
+     * Avanco da 2a linha de texto do card: a mesma nos dois.
+     *
+     * <p>E {@link #LIST_DESC_ADV} porque e uma linha de texto comum (a 2a linha
+     * da descricao da skill, a execucao da magia): o corpo do card tem 11 px de
+     * passo, e quem concorda com isso e o {@code lineFits} que recorta o texto
+     * na borda da rolagem.
+     */
+    private static final int LIST_LINE2_ADV = LIST_DESC_ADV;
+
+    /**
+     * Avanco da 3a linha, que e a linha do Del.
+     *
+     * <p><b>Por que e {@link #LIST_DEL_BTN_H} e nao {@link #LIST_LINE2_ADV}:</b>
+     * o Del tem 16 px e a linha 11 px. Num card com 11 px de avanco, um Del de
+     * 16 px invadiria a folga do card ({@code LIST_ROW_GAP}, 4 px) e comecaria a
+     * encostar na linha seguinte -- e o card seguinte do card. Como o card e de
+     * altura FIXA (ver {@link #LIST_ENTRY_H}), a soma das tres linhas e a altura:
+     * trocar este numero mudaria a conta toda.
+     */
+    private static final int LIST_LINE3_ADV = LIST_DEL_BTN_H;
+
+    /**
+     * Altura FIXA do card, igual em skill e em magia:
+     * {@code 10 + 16 + 14 + 11 + 16 + 4 = 71} px.
+     *
+     * <p><b>Por que FIXA e nao "o que o texto ocupa" (pedido do usuario em
+     * 01/10/2026: "o modelo do botao de magia vai ter espaco pras 3 linhas, e a
+     * skill vai ficar do mesmo tamanho agora"):</b> antes a altura era medida
+     * pelo conteudo, e por isso cada card era um retalho diferente -- skill sem
+     * descricao com 21 px, magia sem execucao nem custo com 45 px -- e o olho
+     * nao achava um embaixo do outro na mesma coluna. Fixando, (a) a coluna fica
+     * regular, (b) o Del ganha a 3a linha reservada em vez de dividi-la com
+     * texto, como o jogador pediu, e (c) a rolagem e uma conta de linhas
+     * iguais, o que faz {@code skillEntryHeight} e {@code spellEntryHeight}
+     * concordarem por construcao.
+     *
+     * <p>A conta: {@code INV_PAD * 2} (respiro em cima e embaixo) +
+     * {@link #LIST_NAME_BTN_H} (botao de nome) + {@link #LIST_LINE1_ADV} +
+     * {@link #LIST_LINE2_ADV} + {@link #LIST_LINE3_ADV} (a linha do Del) +
+     * {@link #LIST_ROW_GAP} (folga entre um card e o seguinte).
+     */
+    private static final int LIST_ENTRY_H = INV_PAD * 2 + LIST_NAME_BTN_H
+            + LIST_LINE1_ADV + LIST_LINE2_ADV + LIST_LINE3_ADV + LIST_ROW_GAP;
+
+    /**
+     * Largura de um botao de mover. Estreito de proposito.
+     *
+     * <p><b>Por que 12 px e nao a largura do nome:</b> sao dois botoes que
+     * existem para mudar UM passo na lista, e a seta e um glifo de 5 px. Uma
+     * largura cheia de 32 px tiraria do nome da skill mais da metade da linha, e
+     * o nome e o acesso ao detalhe (e o texto mais comprido da coluna). 12 px
+     * segura o glifo com folga e deixa o nome com o que sobra.
+     */
+    private static final int LIST_MOVE_W = 12;
+
+    /**
+     * Folga entre ▲ e ▼, e entre o par e o nome.
+     *
+     * <p><b>Por que uma folga so, e nao duas:</b> o par de setas e um unico
+     * controle (subir/descer) e precisa parecer junto, enquanto a folga ate o
+     * nome e o que impede o jogador de ler o nome como se fosse o rotulo do
+     * botao. A faixa total reservada a esquerda e
+     * {@code LIST_MOVE_W * 2 + LIST_MOVE_GAP * 2} = 28 px.
+     */
+    private static final int LIST_MOVE_GAP = 2;
+
+    /**
      * Retangulo do botao Del marcado, para a moldura vermelha.
      *
      * <p>Guardado em vez de recalcular no render porque o botao so existe
@@ -908,11 +1020,13 @@ public class StatusScreen extends CharacterSheetScreen {
      * coluna direita nasca na mesma posicao em todas as abas e o jogador veja a
      * coluna se mexer quando troca de aba.
      *
-     * <p><b>A coluna de magias tem tres cabecalhos antes da lista:</b> o botao de
+     * <p><b>A coluna de magias tem tres cabecalhos:</b> o botao de
      * filtro de circulo, a linha do atributo de conjuracao (botao + Modificador)
      * e a CD. O filtro e o atributo pediram "no topo da parte da direita", e a CD
      * fica na mesma linha do Modificador porque sao os dois numeros que a
-     * conjuracao usa.
+     * conjuracao usa. <b>01/10/2026:</b> os tres (mais o "+ Magia") desceram
+     * para dentro da faixa rolavel, e so o titulo da secao ficou fixo -- ver o
+     * Javadoc do {@code addSpellColumn} para o por.
      *
      * <p><b>Por que o filtro e um botao que cicla e nao um dropdown:</b> o pedido
      * foi exatamente "Todas -&gt; 1o -&gt; ... -&gt; 5o -&gt; Todas", e um dropdown
@@ -957,13 +1071,14 @@ public class StatusScreen extends CharacterSheetScreen {
      * barra de abas em volta.
      */
     private void addSkillColumn(int x, int w, int top, int bottom) {
+        // 01/10/2026 (mesma solucao que a coluna de magias): o titulo "Skills" fica
+        // FIXO e o "+ Skill" passa a rolar junto com a lista. Antes ele era montado
+        // antes do `prepare`, com `listTop` depois dele -- e em janela pequena a
+        // linha do "+ Skill" sozinha ja comia a faixa da lista, deixando
+        // `listBottom == listTop`: altura zero, barra aparecendo e nenhuma lista
+        // atras. O cabecalho de magias sofre do mesmo mal com 5 linhas em vez de
+        // 1, entao as duas colunas agora se comportam igual.
         int y = addSection("Skills", x, top, w);
-
-        addRenderableWidget(Button.builder(Component.literal("+ Skill"), b -> openSkillForm(-1, null))
-                .bounds(x, y, w, rowH - 2)
-                .tooltip(Tooltip.create(Component.literal("Nova skill")))
-                .build());
-        y += rowH;
 
         // 01/10/2026 (bug do usuario): a marcacao do Del NAO e zerada aqui. O
         // `rebuildWidgets` e justamente o que o primeiro clique no Del dispara
@@ -972,21 +1087,50 @@ public class StatusScreen extends CharacterSheetScreen {
         // A marcacao so morre na troca de aba, na rolagem e no eco do servidor.
         skillColumn.delPendingBox = null;
         skillColumn.boxW = Math.max(20, w - BAR_W - BAR_GAP);
+        // 01/10/2026 (pedido do usuario: "o botao do nome da skill pode ser mais
+        // grossinho igual ao da magia"): e esta linha que faz o botao de nome da
+        // skill nascer com os mesmos 16 px do da magia. Sem ela o
+        // `Column.nameBtnH` continuaria no padrao (12 px, `LIST_BTN_H`) e o
+        // card da skill nao bateria com o da magia -- e o pedido e justamente
+        // que os dois sejam iguais. Mesma atribuicao que a coluna de magias faz
+        // mais abaixo, pelo mesmo motivo.
+        skillColumn.nameBtnH = LIST_NAME_BTN_H;
+        // `addSection` devolve `top + rowH`: a faixa rolavel comeca logo abaixo do
+        // titulo fixo, e o "+ Skill" entra nela. `headerH` e a UNICA faixa de
+        // cabecalho desta coluna.
         int listTop = Math.max(y, top);
-        // A geometria entra ANTES do laco: e ela que o recorte de cada linha le.
+        int headerH = rowH;
+        // A geometria entra ANTES de qualquer montagem, inclusive a do "+ Skill":
+        // e dela que o `clippedHeight` do botao le a faixa. Medir depois daria
+        // recorte com a geometria da montagem ANTERIOR (o mesmo motivo do
+        // `prepare` separado do `layout`, 01/10/2026).
         skillColumn.prepare(x, w, listTop, bottom);
 
         List<SheetData.Skill> skills = skillList();
         // Mede o conteudo INTEIRO antes de montar: e o que o clamp da rolagem
         // precisa, e medir montando criaria widget para skill nenhuma visivel.
-        int contentH = 0;
+        int skillsH = 0;
         for (SheetData.Skill skill : skills) {
-            contentH += skillEntryHeight(x, skill);
+            skillsH += skillEntryHeight(x, skill);
         }
-        skillColumn.contentH = contentH;
+        // 01/10/2026: o `headerH` ENTRA na conta, pelo mesmo motivo da coluna de
+        // magias -- o "+ Skill" rola junto com a lista, e sem ele no `contentH` a
+        // rolagem pararia uma faixa antes do fim das skills.
+        skillColumn.contentH = headerH + skillsH;
         skillColumn.scroll = skillColumn.clampScroll(skillColumn.scroll);
 
         int rowY = listTop - skillColumn.scroll;
+        // O "+ Skill" na posicao ja deslocada pelo scroll, e recortado pela MESMA
+        // regra dos demais widgets: nasce o pedaco visivel, nunca o botao inteiro
+        // de uma faixa cortada, senao ele invade o titulo fixo ao rolar.
+        int plusH = skillColumn.clippedHeight(rowY, rowH - 2);
+        if (plusH > 0) {
+            addRenderableWidget(Button.builder(Component.literal("+ Skill"), b -> openSkillForm(-1, null))
+                    .bounds(x, Math.max(rowY, skillColumn.listTop), w, plusH)
+                    .tooltip(Tooltip.create(Component.literal("Nova skill")))
+                    .build());
+        }
+        rowY += headerH;
         for (int index = 0; index < skills.size(); index++) {
             SheetData.Skill skill = skills.get(index);
             int h = skillEntryHeight(x, skill);
@@ -999,19 +1143,46 @@ public class StatusScreen extends CharacterSheetScreen {
     }
 
     /**
-     * Altura de uma skill: o botao de nome (+ Del) mais ate 2 linhas de
-     * descricao.
+     * Altura de uma skill: o botao de nome, ate 2 linhas de descricao e a linha
+     * do Del. <b>FIXA</b>, a mesma do card da magia (01/10/2026).
      *
-     * <p><b>Por que a altura varia e o inventario ja media igual:</b> e a mesma
-     * conta do {@link #rightItemHeight}, e a rolagem precisa do total exato antes
-     * de montar qualquer widget.
+     * <p><b>Por que FIXA e nao medida:</b> ver {@link #LIST_ENTRY_H} -- e o pedido
+     * do usuario de padronizar o tamanho do card de skill e de magia, e o que
+     * faz a coluna ficar regular. Antes a altura era
+     * {@code INV_PAD * 2 + LIST_BTN_H + skillDescLines(...) * LIST_DESC_ADV +
+     * LIST_ROW_GAP}, ou seja, dependia de quantas linhas a descricao ocupava
+     * (0, 1 ou 2). Agora e sempre {@link #LIST_ENTRY_H}: a 3a linha fica
+     * reservada para o Del mesmo quando a descricao e curta ou vazia.
+     *
+     * <p><b>Por que a rolagem continua medindo antes de montar:</b> mesma regra
+     * do {@link #rightItemHeight} -- {@code contentH} precisa do total exato
+     * para o {@code clampScroll}, e medir montando criaria widget de skill
+     * nenhuma visivel.
+     *
+     * @param x e {@code skill} nao entram mais na conta (a altura nao depende do
+     *     texto nem da coluna); ficam por compatibilidade de assinatura com os
+     *     dois chamadores, {@code addSkillColumn} e {@link #addSkillEntry}, que
+     *     medem e montam com o mesmo par. Ver tambem {@link #skillDescLines},
+     *     que agora conta as linhas da descricao e nao a altura.
      */
     private int skillEntryHeight(int x, SheetData.Skill skill) {
-        return INV_PAD * 2 + LIST_BTN_H + skillDescLines(x, skill) * LIST_DESC_ADV
-                + LIST_ROW_GAP;
+        return LIST_ENTRY_H;
     }
 
-    /** Quantas linhas a descricao da skill ocupa (0, 1 ou o teto de 2). */
+    /**
+     * Quantas linhas a <b>descricao</b> da skill ocupa (0, 1 ou o teto de
+     * {@link #LIST_DESC_LINES}).
+     *
+     * <p><b>Mudou de papel em 01/10/2026:</b> antes esta metodo media a ALTURA
+     * do card, porque o card crescia com a descricao. Como a altura passou a ser
+     * fixa ({@link #LIST_ENTRY_H}), ela nao decide mais nada -- ela descreve o
+     * que a DESCRICAO ocupa, e o {@link #addSkillEntry} e que corta o texto em
+     * {@link #LIST_DESC_LINES} linhas com reticencias na ultima. Ela continua
+     * aqui (com o mesmo teto e a mesma largura de medida, o
+     * {@code rightTextW(skillColumn.boxW)}) porque e a unicadefinicao do teto de
+     * linhas de descricao: se a contagem e o corte divergirem,
+     * {@code parts.get(i)} estoura.
+     */
     private int skillDescLines(int x, SheetData.Skill skill) {
         if (skill.description().isEmpty()) {
             return 0;
@@ -1027,6 +1198,16 @@ public class StatusScreen extends CharacterSheetScreen {
      * <p><b>Por que o nome e o botao e nao ha um Edit:</b> o pedido foi o nome
      * como acesso ao detalhe, e editar e o mesmo caminho. Um segundo botao "Edit"
      * ao lado seria o mesmo destino duas vezes na mesma linha.
+     *
+     * <p><b>Por que o card e do mesmo tamanho do da magia (pedido do usuario em
+     * 01/10/2026):</b> o modelo final e o mesmo dos dois lados -- nome em cima,
+     * duas linhas de texto e o Del na 3a linha. A skill preenche as duas linhas
+     * com a descricao (ate {@link #LIST_DESC_LINES}) e a magia com circulo e
+     * execucao, entao quando a skill tem menos de 2 linhas de descricao a 3a
+     * linha fica vazia: e o Del sozinho nela, e nao um Del grudado no texto.
+     * Isso e proposital e e o que o jogador pediu ao padronizar com a magia --
+     * nenhum dos dois divide a linha do Del com texto, para o Del nunca ser
+     * lido como parte da descricao nem da execucao.
      */
     private void addSkillEntry(int x, int y, int w, SheetData.Skill skill, int index) {
         int h = skillEntryHeight(x, skill);
@@ -1038,15 +1219,32 @@ public class StatusScreen extends CharacterSheetScreen {
         itemBoxes.add(new ItemBox(x, boxTop, w, boxBottom - boxTop));
         y += INV_PAD;
 
-        int tx = x + INV_PAD_X;
-        int tw = rightTextW(w);
+        // 01/10/2026 (pedido do usuario: "inserir do lado esquerdo das skills, o
+        // botao pra trocar de ordem, subir ou descer ela"): a faixa dos dois
+        // botoes de mover e reservada a ESQUERDA do texto, e o nome continua
+        // recebendo o que sobra da linha. 28 px fixos e o preco da
+        // reordenacao -- e o nome da skill e o acesso ao detalhe, entao ele nao
+        // pode ser o que encolhe; a alternativa (seta por cima do nome) faria o
+        // jogador clicar na seta esperando abrir o detalhe.
+        int moveW = LIST_MOVE_W * 2 + LIST_MOVE_GAP * 2;
+        int tx = x + INV_PAD_X + moveW;
+        int tw = rightTextW(w - moveW);
+        addSkillMoveButtons(x + INV_PAD_X, y, skill.name(), index, skillList().size());
         // Nenhum guarda aqui: quem decide e `addEntryNameButton`, que cria o
         // PEDACO visivel em vez de pular a linha. Pular aqui e o que fazia a
         // skill sumir de repente (01/10/2026).
-        // `""` e nao `null`: vazio = sem texto de circulo, mas COM Del. `null`
-        // desligaria os dois e a skill perderia o botao de excluir.
-        addEntryNameButton(skillColumn, EntryKind.SKILL, tx, y, tw, "", skill.name(), index);
-        y += LIST_BTN_H;
+        // `null` e nao `""`: `null` e o que desliga o Del DENTRO do botao de nome,
+        // e o pedido e que o Del da skill desca para a 3a linha, como o da magia
+        // (ver `addDeleteButton` no fim deste metodo). O efeito colateral
+        // desejado e o que o jogador pediu tambem: o nome passa a ter a largura
+        // TODA da linha, igual ao da magia, em vez de deixar 32 px vazios para um
+        // Del que nao esta mais ai.
+        addEntryNameButton(skillColumn, EntryKind.SKILL, tx, y, tw, null, skill.name(), index);
+        y += LIST_NAME_BTN_H;
+        // Y da 1a linha de texto. Guardado porque a 3a linha (a do Del) tem Y
+        // FIXO e nao pode ser a posicao em que o laco de descricao terminou: com
+        // 0, 1 ou 2 linhas de descricao o Del tem de cair no mesmo lugar.
+        int line1Y = y;
 
         List<FormattedCharSequence> parts =
                 this.font.split(Component.literal(skill.description()), tw);
@@ -1060,12 +1258,107 @@ public class StatusScreen extends CharacterSheetScreen {
                 part = FormattedCharSequence.forward(plainText(part) + TRUNCATION_MARK,
                         Style.EMPTY);
             }
+            // 01/10/2026: as duas linhas de texto NAO avancam pelo mesmo numero
+            // (`LIST_LINE1_ADV` e `LIST_LINE2_ADV`). E assim que a soma das duas
+            // linhas, com o nome, da a altura do card de magia -- ver
+            // `LIST_ENTRY_H`. Com o mesmo avanco nas duas, a linha do Del cairia
+            // 3 px abaixo do lugar dela.
+            int adv = i == 0 ? LIST_LINE1_ADV : LIST_LINE2_ADV;
             // Uma linha so entra se couber INTEIRA: um texto cortado pela borda
             // subiria por cima do "+ Skill" da coluna.
-            if (y >= skillColumn.listTop && y + LIST_DESC_ADV <= skillColumn.listBottom) {
+            if (y >= skillColumn.listTop && y + adv <= skillColumn.listBottom) {
                 textLines.add(new TextLine(part, tx, y, COL_MUTED));
             }
-            y += LIST_DESC_ADV;
+            y += adv;
+        }
+
+        // 01/10/2026: a 3a linha e a do Del, e ela e FIXA (nome + linha 1 +
+        // linha 2), independente de quantas linhas de descricao a skill tem --
+        // e o que faz o card bater com o da magia. O `delY` e o Y passado ao
+        // `addDeleteButton`, que nasce recortado na borda (`clippedHeight`) como
+        // todos os outros widgets da lista, entao ele nunca invade o rodape.
+        addDeleteButton(skillColumn, EntryKind.SKILL, tx + tw - LIST_DEL_BTN_W,
+                line1Y + LIST_LINE1_ADV + LIST_LINE2_ADV, index);
+    }
+
+    /**
+     * Os dois botoes de mover (▲ e ▼) a esquerda do card da skill (pedido do
+     * usuario em 01/10/2026: "inserir do lado esquerdo das skills, o botao pra
+     * trocar de ordem, subir ou descer ela no caso").
+     *
+     * <p><b>Por que o servidor ja tem a operacao:</b> o {@code MOVE} da skill ja
+     * existia (a tela de Skills antiga ja tinha as setas) e o que faltava era o
+     * botao nesta tela. O MOVE e <b>por nome</b> e o passo
+     * ({@code delta} -1 sobe, +1 desce) e vai no {@code description} do
+     * {@code SheetSkillPayload}; nao foi criado payload novo nem mexido no
+     * servidor.
+     *
+     * <p><b>Por que nao existem para as magias:</b> a ordem que a coluna de
+     * magias mostra NAO e a ordem guardada -- {@code
+     * SheetData.Spellbook#visible} devolve os indices guardados ordenados por
+     * circulo e depois por nome, porque e assim que o filtro funciona. Nao ha
+     * posicao guardada para mover, e o jogador veria "Chama de7012o Infernal"
+     * descer e ela voltar, ja que a coluna reordena a cada redesenho. O MOVE da
+     * skill e por posicao na lista, que e exatamente o que o jogador espera ver
+     * mudar. Nao e um esquecimento: e a lista de magias nao ter ordem de leitura
+     * propria.
+     *
+     * <p><b>Por que somem nas pontas:</b> o primeiro card nao sobe e o ultimo nao
+     * desce. Criar o botao morto ali seria o jogador mirando, clicando e nada
+     * acontecendo -- e, com o Del, ele ja aprendeu que botao que age tem
+     * confirmacao; um botao que nunca age so ensina a desconfiar da linha.
+     *
+     * <p><b>PENDENCIA registrada de proposito (01/10/2026):</b> os glifos ▲
+     * (U+25B2) e ▼ (U+25BC) nao tem garantia na fonte padrao do Minecraft. Se
+     * aparecerem como caixa vazia no jogo, a correcao e trocar estes dois
+     * literais por texto ASCII (por exemplo "+"/"-", ou "Acima"/"Abaixo") -- e
+     * nao aumentar nem escolher outra fonte, porque a fonte do botao e a do
+     * vanilla. A troca e de um literal por linha, entao e barata; fica
+     * registrada aqui em vez de oculta, porque so quem joga ve o defeito.
+     *
+     * <p><b>Por que nao chama {@code rebuildWidgets} na acao:</b> quem redesenha
+     * e o ECO do servidor ({@code broadcastSheet}), como em todas as outras
+     * edicoes desta aba. Desenhar aqui mostraria a skill no lugar novo com os
+     * widgets do lugar velho por um frame.
+     */
+    private void addSkillMoveButtons(int x, int y, String skillName, int index, int total) {
+        // Mesma regra de recorte das demais linhas: nasce o PEDACO visivel, e nao
+        // o botao inteiro de uma linha cortada pela borda da rolagem.
+        int btnH = skillColumn.clippedHeight(y, LIST_NAME_BTN_H);
+        if (btnH <= 0) {
+            return;
+        }
+        // O Y tambem e empurrado para baixo quando a linha entra pela borda de
+        // cima, pelo mesmo motivo do botao de nome.
+        int btnY = Math.max(y, skillColumn.listTop);
+        if (index > 0) {
+            addRenderableWidget(Button.builder(Component.literal("▲"), b -> {
+                // A marcacao do Del morre junto: o Del marcado aponta para um
+                // indice guardado, e mover a skill troca o que esta neste indice.
+                skillColumn.delPending = -1;
+                if (!canEdit) {
+                    return;
+                }
+                ClientPlayNetworking.send(RpgNetworking.SheetSkillPayload.move(
+                        targetName, skillName, -1));
+            })
+                    .bounds(x, btnY, LIST_MOVE_W, btnH)
+                    .tooltip(Tooltip.create(Component.literal("Subir na lista")))
+                    .build());
+        }
+        if (index < total - 1) {
+            // Mesma acao, passo oposto: ver o Javadoc do botao de cima.
+            addRenderableWidget(Button.builder(Component.literal("▼"), b -> {
+                skillColumn.delPending = -1;
+                if (!canEdit) {
+                    return;
+                }
+                ClientPlayNetworking.send(RpgNetworking.SheetSkillPayload.move(
+                        targetName, skillName, 1));
+            })
+                    .bounds(x + LIST_MOVE_W + LIST_MOVE_GAP, btnY, LIST_MOVE_W, btnH)
+                    .tooltip(Tooltip.create(Component.literal("Descer na lista")))
+                    .build());
         }
     }
 
@@ -1077,62 +1370,94 @@ public class StatusScreen extends CharacterSheetScreen {
      * lista guardada ({@link SheetData.Spellbook#visible(int)} devolve os indices
      * guardados), entao trocar o filtro nao pode trocar o indice que o proximo
      * UPDATE manda.
+     *
+     * <p><b>Mudou em 01/10/2026 (bug do usuario: "quando esta em uma tela
+     * pequena, nao da pra descer porque a parte de cima do menu nao desce"):</b>
+     * o cabecalho inteiro (filtro, atributo, CD e "+ Magia") passou a fazer parte
+     * da <b>faixa rolavel</b>. Antes ele comia 5 linhas fora da lista, e em
+     * janela pequena o {@code y} de depois do "+ Magia" passava do
+     * {@code bottom}: o {@code prepare} fechava a faixa em zero
+     * ({@code listBottom == listTop}), o {@code contentH} continuava cheio, a
+     * barra aparecia e respondia -- e nao havia lista nenhuma atras dela. Era
+     * exatamente o "nao da pra descer".
+     *
+     * <p><b>Por que o titulo da secao ficou FIXO:</b> ele e a identidade da
+     * coluna, e e o mesmo raciocinio do {@code TAB_NAMES} no {@code renderContent}
+     * -- um rotulo que sobe e desce com o conteudo deixa de dizer em que coluna o
+     * jogador esta. Encolher o cabecalho ate ele caber sozinho nao foi o que o
+     * usuario escolheu (01/10/2026): ele pediu que a parte de cima DESCESSE.
      */
     private void addSpellColumn(int x, int w, int top, int bottom) {
         int y = addSection("Spells", x, top, w);
 
-        // Rotulo ACIMA do botao (pedido do usuario em 01/10/2026): sem ele o
-        // botao dizia so "Todas" ou "3o Circulo", e o jogador nao sabia o que
-        // aquela linha controlava. O rotulo e um `TextLine` e nao um widget, entao
-        // nao rouba o foco nem responde a tecla.
-        textLines.add(new TextLine("Filtros", x, y + labelOffset(), COL_LABEL));
-        y += rowH;
-
-        addRenderableWidget(Button.builder(
-                        Component.literal(SheetData.Spellbook.filterText(spellFilter)),
-                        b -> {
-                            spellFilter = SheetData.Spellbook.nextFilter(spellFilter);
-                            rebuildWidgets();
-                        })
-                .bounds(x, y, w, rowH - 2)
-                .tooltip(Tooltip.create(Component.literal(
-                        "Mostrar todas as magias ou so um circulo")))
-                .build());
-        y += rowH;
-
-        // Mesma regra para o atributo: o rotulo diz o que o botao faz.
-        textLines.add(new TextLine("Atributo de Conjuração",
-                x, y + labelOffset(), COL_LABEL));
-        y += rowH;
-
-        y = addSpellHeaderRow(x, w, y);
-
-        addRenderableWidget(Button.builder(Component.literal("+ Magia"), b -> openSpellForm(-1, null))
-                .bounds(x, y, w, rowH - 2)
-                .tooltip(Tooltip.create(Component.literal("Nova magia")))
-                .build());
-        y += rowH;
-
         // Mesma razao da coluna de skills: a marcacao do Del sobrevive ao
-        // `rebuildWidgets` do primeiro clique (01/10/2026).
+        // `rebuildWidgets` do primeiro clique (01/10/2026). Estas tres linhas
+        // subiram para ANTES da geometria porque o `prepare` e o que o recorte do
+        // cabecalho rolavel le -- e o cabecalho e montado depois dele.
         spellColumn.delPendingBox = null;
         spellColumn.boxW = Math.max(20, w - BAR_W - BAR_GAP);
         spellColumn.nameBtnH = LIST_NAME_BTN_H;
+
+        // 01/10/2026: a faixa comeca IMEDIATAMENTE depois do titulo fixo, e nao
+        // depois do "+ Magia". `addSection` devolve `top + rowH`, entao este
+        // `listTop` e `top` + a altura do titulo -- o `Math.max` continua aqui
+        // pelo mesmo motivo de sempre: a coluna nao pode nascer acima do painel.
         int listTop = Math.max(y, top);
+        // A geometria entra ANTES de qualquer montagem, inclusive a do cabecalho:
+        // e dela que o `clippedHeight` de cada widget do cabecalho e do `lineFits`
+        // dos rotulos leem a faixa. Medir depois daria recorte com a geometria
+        // da montagem ANTERIOR -- o mesmo bug que o `prepare` separado do
+        // `layout` ja resolve para as linhas (01/10/2026).
         spellColumn.prepare(x, w, listTop, bottom);
+
+        // Altura do cabecalho rolavel, contada nas MESMAS faixas de `rowH` que
+        // `addSpellHeader` monta, na mesma ordem:
+        //   faixa 1  rotulo "Filtros de Magia"
+        //   faixa 2  botao do filtro
+        //   faixa 3  rotulo "Atributo de Conjuração"
+        //   faixas 4 e 5  `addSpellHeaderRow`: botao do atributo + Modifier, e
+        //            rotulo "CD" + caixa (e o que o `return y + rowH * 2` dela
+        //            devolve)
+        //   faixa 6  "+ Magia"
+        //
+        // <p><b>01/10/2026, bug do usuario: eram 5 faixas e o cabecalho ocupa
+        // 6.</b> O rotulo "Filtros" e o botao estavam no mesmo `y` (o `labelOffset`
+        // desce o texto alguns pixels, mas NAO abre uma faixa), entao o rotulo
+        // caia dentro do botao. Pior: o `headerH` aqui era `rowH * 5`, uma faixa a
+        // menos do que o cabecalho realmente usa, entao o `contentH` ficava curto e
+        // a barra de rolagem sumia quando havia spells suficientes para gerar uma.
+        // A correcao foi dar a faixa propria ao rotulo (em `addSpellHeader`) e
+        // somar a 6a faixa aqui. **A conta e uma duplicata do `y += rowH` de la: se
+        // mudar la, mude aqui.**
+        //
+        // <p><b>Por que e uma soma e nao o {@code y} medido depois:</b> o
+        // `contentH` abaixo ja precisa deste numero para o `clampScroll`, e medir
+        // o cabecalho exigiria monta-lo -- com o `scroll` ainda sem resolver. A
+        // soma e o unico jeito de ter a conta antes do `scroll`; por isso ela esta
+        // escrita faixa a faixa, para quem mexer no cabecalho ver onde somar e
+        // onde tirar.
+        int headerH = rowH * 6;
 
         // A lista a mostrar e a do FILTRO, mas os indices sao os GUARDADOS: e o
         // `stored` que vai no UPDATE, e nao a posicao na tela.
         List<Integer> visible = visibleSpells();
         List<SheetData.Spell> all = spellList();
-        int contentH = 0;
+        int spellsH = 0;
         for (Integer stored : visible) {
-            contentH += spellEntryHeight(x, all.get(stored));
+            spellsH += spellEntryHeight(x, all.get(stored));
         }
-        spellColumn.contentH = contentH;
+        // 01/10/2026: o `headerH` ENTRA na conta. O cabecalho agora rola junto com
+        // a lista, e sem ele o `maxScroll` pararia antes do fim das magias -- o
+        // "+ Magia", que e a ultima coisa do cabecalho, nunca apareceria ao
+        // descer, e o mesmo bug voltaria pelo outro lado.
+        spellColumn.contentH = headerH + spellsH;
         spellColumn.scroll = spellColumn.clampScroll(spellColumn.scroll);
 
         int rowY = listTop - spellColumn.scroll;
+        addSpellHeader(x, w, rowY);
+        // As magias comecam DEPOIS do cabecalho, e nao em `rowY`: o cabecalho e
+        // rolavel e ocupa `headerH` da faixa.
+        rowY += headerH;
         for (Integer stored : visible) {
             SheetData.Spell spell = all.get(stored);
             int h = spellEntryHeight(x, spell);
@@ -1145,8 +1470,85 @@ public class StatusScreen extends CharacterSheetScreen {
     }
 
     /**
-     * Altura de uma magia, na disposicao pedida em 01/10/2026: botao de nome em
-     * cima, circulo, execucao e custo, com o Del na direita da ultima linha.
+     * O cabecalho rolavel das magias: rotulo e botao do filtro, rotulo e linha do
+     * atributo (com a CD) e o "+ Magia".
+     *
+     * <p><b>Por que virou metodo (01/10/2026):</b> ele passou a ser montado
+     * DEPOIS do {@code clampScroll}, com o {@code y} ja deslocado por
+     * {@code -scroll} -- e sao cinco faixas dentro do {@code addSpellColumn},
+     * onde era facil deixar uma delas no Y antigo. Aqui o Y deslocado e o
+     * parametro, e cada faixa avanca pelo unico {@code y += rowH} (ou pelo
+     * {@code return} do {@link #addSpellHeaderRow}), sem nenhum Y intermediario
+     * que possa ficar sem o deslocamento.
+     *
+     * <p><b>Por que os widgets nascem recortados e os rotulos nao:</b> e o mesmo
+     * tratamento do {@link #addEntryNameButton} e do {@link #addDeleteButton}
+     * (01/10/2026) -- widget do vanilla e desenhado no Y que recebeu, entao
+     * criado inteiro ele invadiria o titulo fixo da secao ao subir e a barra de
+     * abas ao descer. {@code TextLine} e desenhado por esta tela e some e aparece
+     * sem invadir nada, entao ele usa {@code lineFits} e nao {@code clippedHeight}.
+     */
+    private void addSpellHeader(int x, int w, int y) {
+        // Rotulo ACIMA do botao, na FAIXA DE CIMA (pedido do usuario em
+        // 01/10/2026): sem ele o botao dizia so "Todas" ou "3o Circulo", e o
+        // jogador nao sabia o que aquela linha controlava.
+        //
+        // <p><b>01/10/2026, bug do usuario: o rotulo entrava DENTRO do botao.</b>
+        // O rotulo e o botao estavam sendo montados no mesmo `y`: o `labelOffset`
+        // desce o texto alguns pixels, mas issoNAO abre uma faixa nova, entao o
+        // texto caia DENTRO do botao. O rotulo ganhou a propria faixa (um
+        // `y += rowH` entre ele e o botao), que e como a coluna era antes de o
+        // cabecalho virar rolavel — e e o que mantem a conta do `headerH` igual
+        // ao que o cabecalho realmente ocupa.
+        if (spellColumn.lineFits(y, rowH)) {
+            textLines.add(new TextLine("Filtros de Magia", x, y + labelOffset(), COL_LABEL));
+        }
+        y += rowH;
+
+        int filterH = spellColumn.clippedHeight(y, rowH - 2);
+        if (filterH > 0) {
+            addRenderableWidget(Button.builder(
+                            Component.literal(SheetData.Spellbook.filterText(spellFilter)),
+                            b -> {
+                                spellFilter = SheetData.Spellbook.nextFilter(spellFilter);
+                                rebuildWidgets();
+                            })
+                    .bounds(x, Math.max(y, spellColumn.listTop), w, filterH)
+                    .tooltip(Tooltip.create(Component.literal(
+                            "Mostrar todas as magias ou so um circulo")))
+                    .build());
+        }
+        y += rowH;
+
+        // Mesma regra para o atributo: o rotulo diz o que o botao faz, e tambem
+        // ganha a faixa dele propria, pelos mesmos motivos.
+        if (spellColumn.lineFits(y, rowH)) {
+            textLines.add(new TextLine("Atributo de Conjuração",
+                    x, y + labelOffset(), COL_LABEL));
+        }
+        y += rowH;
+
+        y = addSpellHeaderRow(x, w, y);
+
+        // O "+ Magia" e o ultimo item do cabecalho rolavel, entao ele e a prova de
+        // que o `headerH` entrou no `contentH`: se faltasse, ele nunca apareceria
+        // ao descer.
+        int plusH = spellColumn.clippedHeight(y, rowH - 2);
+        if (plusH > 0) {
+            addRenderableWidget(Button.builder(Component.literal("+ Magia"),
+                            b -> openSpellForm(-1, null))
+                    .bounds(x, Math.max(y, spellColumn.listTop), w, plusH)
+                    .tooltip(Tooltip.create(Component.literal("Nova magia")))
+                    .build());
+        }
+        // Nao ha `y += rowH` depois do "+ Magia" de proposito: o fim do cabecalho e
+        // medido pelo `headerH` do `addSpellColumn`, e um segundo lugar com a conta
+        // seria um segundo lugar para ela divergir.
+    }
+
+    /**
+     * Altura de uma magia: botao de nome em cima, circulo, execucao e custo, com
+     * o Del na 3a linha. <b>FIXA</b>, a mesma do card da skill (01/10/2026).
      *
      * <p><b>Por que as linhas de texto contam duas vezes:</b> a altura e medida
      * aqui, antes de montar, e a mesma funcao e usada no {@link #addSpellEntry}.
@@ -1158,12 +1560,23 @@ public class StatusScreen extends CharacterSheetScreen {
      * informacoes que diferenciam duas magias parecidas. Uma linha vazia
      * empurraria o Del para baixo sem dizer nada; o Del precisa de uma linha
      * propria na direita para nao achar que e parte do texto.
+     *
+     * <p><b>Por que a altura virou FIXA (01/10/2026):</b> antes ela era
+     * {@code INV_PAD * 2 + LIST_NAME_BTN_H + LIST_CIRCLE_ADV} mais
+     * {@link #LIST_DESC_ADV} para cada um dos DOIS campos que estivessem
+     * preenchidos ({@code spell.execution().isEmpty()} e
+     * {@code spell.cost().isEmpty()}), e era por ai que o card da magia variava de
+     * tamanho. O pedido do usuario foi padronizar: card de tamanho fixo e igual
+     * nos dois, e a linha do Del igual em ambos. Essa conta com
+     * {@code isEmpty()} nao existe mais, e as LINHAS VAZIAS continuam
+     * reservadas -- e o que faz os dois cards terem a mesma altura mesmo quando
+     * a magia nao tem execucao nem custo: o espaco sobrando e o que garante que
+     * um card nao "cresca" quando o jogador preenche o formulario. As tres
+     * linhas ({@link #LIST_LINE1_ADV}, {@link #LIST_LINE2_ADV},
+     * {@link #LIST_LINE3_ADV}) sao contadas sempre; ver {@link #LIST_ENTRY_H}.
      */
     private int spellEntryHeight(int x, SheetData.Spell spell) {
-        return INV_PAD * 2 + LIST_NAME_BTN_H + LIST_CIRCLE_ADV
-                + (spell.execution().isEmpty() ? 0 : LIST_DESC_ADV)
-                + (spell.cost().isEmpty() ? 0 : LIST_DESC_ADV)
-                + LIST_ROW_GAP;
+        return LIST_ENTRY_H;
     }
 
     /**
@@ -1218,53 +1631,65 @@ public class StatusScreen extends CharacterSheetScreen {
 
         // Linha 2: o circulo, com o nome por extenso ("1º circulo") -- pedido do
         // usuario em 01/10/2026: o ordinal sozinho nao dizia o que era.
-        if (spellColumn.lineFits(y, LIST_CIRCLE_ADV)) {
+        // 01/10/2026: e a 1a linha de texto do card, entao o avanco e o mesmo da
+        // skill (`LIST_LINE1_ADV`) -- ver `LIST_ENTRY_H`.
+        if (spellColumn.lineFits(y, LIST_LINE1_ADV)) {
             textLines.add(new TextLine(spell.circleText(), tx, y + 2, COL_LABEL));
         }
         // Ultima linha com texto: e onde o Del entra. Nasce na linha do circulo
         // e desce conforme execucao e custo aparecem, entao o botao fica sempre
         // na ultima linha que a magia realmente ocupa.
         int delY = y;
-        y += LIST_CIRCLE_ADV;
+        y += LIST_LINE1_ADV;
 
         // Linha 3: a execucao.
         if (!spell.execution().isEmpty()) {
-            if (spellColumn.lineFits(y, LIST_DESC_ADV)) {
+            if (spellColumn.lineFits(y, LIST_LINE2_ADV)) {
                 textLines.add(new TextLine(
                         truncateWithEllipsis(spell.execution(), tw), tx, y + 2, COL_MUTED));
             }
             delY = y;
-            y += LIST_DESC_ADV;
+            y += LIST_LINE2_ADV;
         }
 
         // Linha 4: o custo a esquerda, com o Del a direita fechando a caixa.
         if (!spell.cost().isEmpty()) {
             // A largura do texto perde a faixa do Del: sem isso o custo e o
             // botao escreveriam um sobre o outro.
-            int costW = Math.max(12, tw - LIST_BTN_W - PER_GAP);
-            if (spellColumn.lineFits(y, LIST_DESC_ADV)) {
+            int costW = Math.max(12, tw - LIST_DEL_BTN_W - PER_GAP);
+            if (spellColumn.lineFits(y, LIST_LINE3_ADV)) {
                 textLines.add(new TextLine(
                         truncateWithEllipsis(spell.cost(), costW), tx, y + 2, COL_MUTED));
             }
             delY = y;
-            y += LIST_DESC_ADV;
+            y += LIST_LINE3_ADV;
         }
-        addDeleteButton(spellColumn, EntryKind.SPELL, tx + tw - LIST_BTN_W, delY, storedIndex);
+        // 01/10/2026: `delY` continua sendo a ultima linha COM TEXTO (comportamento
+        // pedido pelo jogador), mas a ALTURA do botao e a do card -- 16 px, igual
+        // a do botao de nome. E por isso que a 3a linha do card e
+        // `LIST_LINE3_ADV`: um Del de 16 px em 11 px invadiria a folga do card.
+        addDeleteButton(spellColumn, EntryKind.SPELL, tx + tw - LIST_DEL_BTN_W, delY, storedIndex);
     }
 
     /**
      * O botao Del de uma linha, sozinho.
      *
-     * <p><b>Por que foi separado do {@link #addEntryNameButton}:</b> na coluna de
-     * magias o Del nao fica na linha do nome -- ele fica na linha do circulo, para
-     * o nome ter a largura toda. O comportamento de confirmar (primeiro clique
-     * marca, segundo no mesmo indice apaga) e o mesmo, entao so a posicao muda.
+     * <p><b>Por que foi separado do {@link #addEntryNameButton}:</b> o nome
+     * ocupa a linha toda e o Del mora numa das linhas de baixo -- na magia, na
+     * ultima linha com texto; na skill, na 3a linha, que e fixa (01/10/2026).
+     * O comportamento de confirmar (primeiro clique marca, segundo no mesmo
+     * indice apaga) e o mesmo, entao so a posicao muda.
      */
     private void addDeleteButton(Column column, EntryKind kind, int x, int y,
                                  int storedIndex) {
         // Mesmo tratamento do nome: nasce o PEDACO visivel, nunca o botao inteiro
         // de uma linha cortada (01/10/2026).
-        int delH = column.clippedHeight(y, LIST_BTN_H);
+        // 01/10/2026: a altura e `LIST_DEL_BTN_H` e nao mais a altura da linha
+        // antiga (`LIST_BTN_H`), porque o pedido foi o Del com a mesma grossura do
+        // botao de nome ("assim como o delete"). Sao os mesmos 16 px nos dois
+        // cards, e o recorte continua valendo: o que sobra da faixa e o que o
+        // widget recebe.
+        int delH = column.clippedHeight(y, LIST_DEL_BTN_H);
         if (delH <= 0) {
             return;
         }
@@ -1330,8 +1755,14 @@ public class StatusScreen extends CharacterSheetScreen {
                                 : "Abrir esta magia")))
                 .build());
         if (rightW > 0) {
+            // 01/10/2026: o centramento usa `LIST_NAME_BTN_H` porque foi essa a
+            // altura que o botao ganhou nos dois cards. Com o numero antigo
+            // (`LIST_BTN_H`) o texto do `right` subiria 2 px em um botao 16 px.
+            // Hoje nao ha mudanca visivel -- `right` so e nao nulo na magia, e a
+            // magia ja usava a altura maior -- mas deixar o numero antigo aqui
+            // seria um erro esperando a proxima coluna que usar `right`.
             textLines.add(new TextLine(right,
-                    x + nameW + 4, y + Math.max(0, (LIST_BTN_H - 8) / 2), COL_MUTED));
+                    x + nameW + 4, y + Math.max(0, (LIST_NAME_BTN_H - 8) / 2), COL_MUTED));
         }
         if (delW > 0) {
             addDeleteButton(column, kind, x + w - delW, y, storedIndex);
@@ -1351,6 +1782,17 @@ public class StatusScreen extends CharacterSheetScreen {
      * <p><b>Por que o texto nasce VAZIO:</b> ele e reescrito por
      * {@link #applySpellHeader} quando a ficha chega. Escrever aqui mostraria
      * "Modifier: 0" no primeiro frame, antes de existir atributo escolhido.
+     *
+     * <p><b>Mudou em 01/10/2026: esta linha virou parte da faixa ROLAVEL</b> (ver
+     * {@link #addSpellColumn}), entao os DOIS widgets daqui -- o botao do
+     * atributo e a caixa de CD -- passaram a nascer recortados na faixa, pelo
+     * mesmo motivo do {@link #addEntryNameButton} e do {@link #addDeleteButton}:
+     * criados inteiros, eles invadiriam o titulo fixo da secao ao subir e a barra
+     * de abas ao descer. O {@code y} que chega ja vem deslocado por
+     * {@code -scroll}, e o retorno continua sendo o mesmo {@code y + rowH * 2} --
+     * as 2 faixas que o {@code headerH} do {@code addSpellColumn} conta para
+     * esta linha. A assinatura nao mudou: so o Y que entra nela que mudou de
+     * papel.
      */
     private int addSpellHeaderRow(int x, int w, int y) {
         int cdW = Math.max(36, Math.min(56, w / 4));
@@ -1358,24 +1800,36 @@ public class StatusScreen extends CharacterSheetScreen {
         // (01/10/2026): antes ele tomava a linha toda e o texto nascia encostado
         // nele, sem espaco, entao "Modifier: +3" era cortado nas reticencias.
         // O pior caso do texto e o que dita a reserva.
-        int modW = this.font.width("Modifier: -") + PER_GAP;
+        int modW = this.font.width("Modifier: -999") + PER_GAP;
         int attrW = Math.max(30, w - modW - PER_GAP);
         // O texto nasce depois do botao + folga, e nao na borda do painel: assim
         // ele tem `modW` de verdade e nunca depende do resto da linha.
         int modX = x + attrW + PER_GAP;
 
-        addRenderableWidget(Button.builder(
-                        Component.literal(castingAttributeLabel()),
-                        b -> openCastingAttributePicker())
-                .bounds(x, y, attrW, rowH - 2)
-                .tooltip(Tooltip.create(Component.literal(
-                        "Atributo de conjuração das magias")))
-                .build());
+        // 01/10/2026: nasce o PEDACO visivel, nunca o botao inteiro de uma linha
+        // cortada pela borda da rolagem -- e nasce no PEDACO, empurrado para baixo
+        // quando a linha entra pela borda de cima.
+        int attrH = spellColumn.clippedHeight(y, rowH - 2);
+        if (attrH > 0) {
+            addRenderableWidget(Button.builder(
+                            Component.literal(castingAttributeLabel()),
+                            b -> openCastingAttributePicker())
+                    .bounds(x, Math.max(y, spellColumn.listTop), attrW, attrH)
+                    .tooltip(Tooltip.create(Component.literal(
+                            "Atributo de conjuração das magias")))
+                    .build());
+        }
 
         // O indice e guardado, nao o texto: `applySpellHeader` reescreve este
         // `TextLine` no eco do servidor, trocando x, y e cor junto.
-        spellHeaderIndex = textLines.size();
-        textLines.add(new TextLine("", modX, y + labelOffset(), COL_BOX_TEXT));
+        //
+        // 01/10/2026: o Modifier e `TextLine` (desenhado por esta tela), entao ele
+        // some e aparece na rolagem sem invadir nada -- e por isso que segue o
+        // `lineFits` e nao o `clippedHeight` do botao ao lado.
+        if (spellColumn.lineFits(y, rowH)) {
+            spellHeaderIndex = textLines.size();
+            textLines.add(new TextLine("", modX, y + labelOffset(), COL_BOX_TEXT));
+        }
 
         // A CD vai para a ESQUERDA, na linha de baixo (01/10/2026): encostada a
         // direita ela entrava por cima da caixa de texto do Modifier.
@@ -1384,16 +1838,26 @@ public class StatusScreen extends CharacterSheetScreen {
         // O rotulo e medido pelo que a fonte desenha, e nao pela largura da CD
         // (que e o dobro), entao sobrava um vao enorme entre "CD" e a caixa. A
         // folga agora e a de um rotulo, nao a largura da caixa.
-        addWrappedLabel("CD", x, y + rowH, cdW, COL_LABEL);
+        int cdY = y + rowH;
+        if (spellColumn.lineFits(cdY, rowH)) {
+            addWrappedLabel("CD", x, cdY, cdW, COL_LABEL);
+        }
         int cdLabelW = Math.max(8, this.font.width("CD") + 2);
-        cdBox = new EditBox(this.font, x + cdLabelW, y + rowH, cdW, rowH - 2,
-                Component.literal("CD"));
-        // 4 digitos: o mesmo teto de Spellbook.CD_MAX, que por sua vez espelha o
-        // `stringUtf8(2048)` do SheetFieldPayload. Os tres tetos concordam.
-        cdBox.setMaxLength(4);
-        cdBox.setFilter(text -> text.matches("\\d{0,4}"));
-        cdBox.setResponder(this::onCdTyped);
-        addRenderableWidget(cdBox);
+        // 01/10/2026: a caixa e widget, entao e a ultima a ser recortada. O
+        // `clippedHeight` tambem evita criar a caixa inteira de uma CD que o
+        // jogador comecou a digitar e que so esta saindo pela borda de baixo --
+        // sem isso ela transbordaria por cima da barra de abas.
+        int cdH = spellColumn.clippedHeight(cdY, rowH - 2);
+        if (cdH > 0) {
+            cdBox = new EditBox(this.font, x + cdLabelW, Math.max(cdY, spellColumn.listTop),
+                    cdW, cdH, Component.literal("CD"));
+            // 4 digitos: o mesmo teto de Spellbook.CD_MAX, que por sua vez espelha o
+            // `stringUtf8(2048)` do SheetFieldPayload. Os tres tetos concordam.
+            cdBox.setMaxLength(4);
+            cdBox.setFilter(text -> text.matches("\\d{0,4}"));
+            cdBox.setResponder(this::onCdTyped);
+            addRenderableWidget(cdBox);
+        }
         return y + rowH * 2;
     }
 
@@ -2482,13 +2946,33 @@ public class StatusScreen extends CharacterSheetScreen {
             flushMultiLineOnFocusLoss(event.x(), event.y());
             grabbed.draggingBar = true;
             grabbed.scrollFromMouse(event.y());
+            // 01/10/2026: o PRIMEIRO clique tambem remonta. Sem isto, apertar a
+            // barra sem ainda mover o mouse deixava o `scroll` ja mudado com os
+            // widgets ainda no lugar antigo: a barra saltava e a lista ficava um
+            // frame atras dela. So o `mouseDragged` remontava, entao o erro
+            // durava ate o primeiro pixel de arrasto -- e "arrastar nao funciona"
+            // comeca exatamente assim, num clique que parece nao ter arrastado.
+            flushCd();
+            grabbed.delPending = -1;
+            rebuildWidgets();
             return true;
         }
         flushMultiLineOnFocusLoss(event.x(), event.y());
         return super.mouseClicked(event, doubleClick);
     }
 
-    /** A lista da aba 3 cuja barra esta sob o cursor, ou {@code null}. */
+    /**
+     * A lista da aba 3 cuja barra esta sob o cursor, ou {@code null}.
+     *
+     * <p><b>A INTERACAO ja era filtrada por aba, e o desenho nao (bug corrigido
+     * em 01/10/2026):</b> este {@code activeTab != 2} ja existia, entao o clique e
+     * o arrasto do polegar nunca valiam uma aba que nao estava na tela -- era so
+     * o {@code render} que desenhava trilho e polegar por cima do conteudo de
+     * outra aba, com a geometria herdada da ultima montagem da aba 3. Quem ler
+     * depois nao deve concluir que "o clique funciona e o desenho nao": os dois
+     * lados tem guarda de aba hoje, e ele existe justamente porque
+     * {@code layout} so roda na montagem da aba 3.
+     */
     private Column columnUnderBar(double mouseX, double mouseY) {
         if (activeTab != 2) {
             return null;
@@ -2499,7 +2983,38 @@ public class StatusScreen extends CharacterSheetScreen {
         return spellColumn.onScrollbar(mouseX, mouseY) ? spellColumn : null;
     }
 
-    /** Arrasto do polegar: o mesmo caminho de {@link #setRightScrollFromMouse}. */
+    /**
+     * Arrasto do polegar: o mesmo caminho de {@link #setRightScrollFromMouse}.
+     *
+     * <p><b>Por que as duas colunas da aba 3 remontam a tela (bug do usuario em
+     * 01/10/2026: "as barras de scroll nao funcionam o segurar e arrastar ao
+     * invés do scroll do mouse"):</b> a lista delas <b>nao e um viewport com
+     * clip</b>, e um conjunto de widgets recriados a cada montagem. O
+     * {@code scrollFromMouse} so ATRIBUI o campo {@code scroll}, e sem remontar
+     * nada a tela continua com os widgets velhos nas mesmas posicoes -- o
+     * polegar andava e a lista nao. A roda ja fazia certo por um motivo
+     * explicito: o {@link #scrollColumn} chama o {@code rebuildWidgets}.
+     *
+     * <p><b>Por que o {@code flushCd} vem ANTES do {@code rebuildWidgets}:</b> e
+     * o mesmo motivo do {@link #flushMultiLineBoxes} -- o {@code rebuildWidgets}
+     * destroi a caixa da CD junto com o texto meio digitado que o jogador ainda
+     * nao enviou. Aqui e por seguranca, e nao por correcao de um caso observavel:
+     * a roda ja chamava o {@code flushCd}, e o arrasto recria widgets igual.
+     *
+     * <p><b>Por que o {@code draggingBar} sobrevive ao {@code rebuildWidgets}:</b>
+     * ele e um campo da {@link Column}, e nao um widget. conferido no arquivo: o
+     * unico lugar que escreve nele e o proprio arrasto -- o {@code true} no
+     * {@code mouseClicked} e o {@code false} no {@code mouseReleased}. Nem a
+     * {@code buildPanel}, nem a {@code addSkillColumn}, nem a
+     * {@code addSpellColumn} o tocam, e o {@code scroll} so e reatribuido pelo
+     * {@code clampScroll} delas. E o que mantem o arrasto vivo do primeiro pixel
+     * ao ultimo.
+     *
+     * <p><b>Custo conhecido:</b> um {@code rebuildWidgets} por pixel de arrasto.
+     * E o preco de a lista ser feita de widgets em vez de um viewport com clip, e
+     * e o mesmo que a roda ja paga -- trocar isso por um viewport seria uma
+     * mudanca de arquitetura bem maior do que o bug pede.
+     */
     @Override
     public boolean mouseDragged(MouseButtonEvent event, double dragX, double dragY) {
         if (draggingRightBar) {
@@ -2508,10 +3023,18 @@ public class StatusScreen extends CharacterSheetScreen {
         }
         if (skillColumn.draggingBar) {
             skillColumn.scrollFromMouse(event.y());
+            flushCd();
+            // A marcacao do Del aponta para um item que pode ter saido da tela.
+            skillColumn.delPending = -1;
+            rebuildWidgets();
             return true;
         }
         if (spellColumn.draggingBar) {
             spellColumn.scrollFromMouse(event.y());
+            flushCd();
+            // Mesma regra do bloco da skill acima.
+            spellColumn.delPending = -1;
+            rebuildWidgets();
             return true;
         }
         return super.mouseDragged(event, dragX, dragY);
@@ -2833,8 +3356,29 @@ public class StatusScreen extends CharacterSheetScreen {
         renderRightScrollbar(graphics);
         // 01/10/2026: as duas listas da aba 3 tambem desenham a barra depois dos
         // widgets, pelo mesmo motivo.
-        skillColumn.renderBar(graphics);
-        spellColumn.renderBar(graphics);
+        //
+        // <p><b>Por que a guarda de aba e OBRIGATORIA (bug do usuario, mesma
+        // data):</b> ate aqui so importava a ORDEM do desenho. A CAUSA RAIZ e
+        // outra: a geometria da barra ({@code contentH}, {@code barH},
+        // {@code thumbY}, {@code thumbH}) so e recalculada por
+        // {@code skillColumn.layout} / {@code spellColumn.layout}, e esses dois
+        // rodam DENTRO de {@code addSkillColumn} / {@code addSpellColumn} --
+        // ou seja, somente quando a aba 3 e montada. {@code buildInfoTab} (abas
+        // 1 e 2) nao toca nessas colunas: sobram {@code contentH} e
+        // {@code barH} da ultima montagem, {@code maxScroll()} continua maior
+        // que zero e {@code renderBar} desenhava trilho e polegar por cima do
+        // conteudo da aba 1/2. Foi o relato do jogador: "a barra da 3a pagina
+        // continuava desenhada sobre a 2a".
+        //
+        // <p><b>Por que guarda de ABA e nao de "a coluna foi montada":</b> e o
+        // mesmo criterio que a INTERACAO ja usava ({@link #columnUnderBar} e o
+        // bloco {@code activeTab == 2} do {@code mouseScrolled}), para desenho e
+        // clique contarem a mesma historia. Sem a guarda aqui, o clique era
+        // filtrado e o desenho nao: a barra parecia viva sem fazer nada.
+        if (activeTab == 2) {
+            skillColumn.renderBar(graphics);
+            spellColumn.renderBar(graphics);
+        }
     }
 
     // ------------------------------------------------------------------
