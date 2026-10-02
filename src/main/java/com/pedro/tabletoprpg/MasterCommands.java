@@ -1312,6 +1312,23 @@ public class MasterCommands {
             formula = "d20";
         }
 
+        // Nome de atributo/pericia vira numero AQUI, e nao quando o preset foi
+        // criado (01/10/2026). E o unico lugar por onde passa toda rolagem: comando,
+        // item de preset e botao da tela. Se a resolucao ficasse no `presetUse`, o
+        // `/rpg roll 1d6+Strength` e o clique no item dariam numeros diferentes.
+        //
+        // A ficha e a da jogadora que esta rolando, e nao o preset: dois jogadores
+        // usando o mesmo preset tem resultados diferentes, que e o ponto de um
+        // bonus que acompanha a ficha.
+        try {
+            formula = FormulaResolver.resolve(formula,
+                    SessionManager.getSheet(player.getUUID()), SheetModelHolder.current());
+        } catch (FormulaResolver.ResolveException e) {
+            // A SyntaxException e checked e este metodo ja promete uma; reaproveitar o
+            // tipo mantem a assinatura sem inventar uma excecao nova para o chamador.
+            throw new DiceFormula.SyntaxException(e.getMessage());
+        }
+
         DiceFormula.Outcome outcome;
         // RANDOM e a unica fonte de aleatoriedade do comando: o cliente nao
         // pode prever a rolagem.
