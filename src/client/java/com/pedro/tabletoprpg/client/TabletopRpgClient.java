@@ -392,6 +392,30 @@ public class TabletopRpgClient implements ClientModInitializer {
                     }
                 }));
 
+        // 02/10/2026: fichas de ameaça do Mestre. A lista vira SEMPRE em
+        // ThreatSheetClientState (inclusive quando a tela da ficha é que está aberta, e
+        // não a lista), e depois é entregue a quem estiver em tela.
+        ClientPlayNetworking.registerGlobalReceiver(RpgNetworking.ThreatSheetListPayload.TYPE,
+                (payload, context) -> context.client().execute(() -> {
+                    ThreatSheetClientState.setSheets(payload.sheets());
+                    if (context.client().screen instanceof ThreatSheetsScreen list) {
+                        list.applyList();
+                    } else if (context.client().screen instanceof ThreatSheetScreen sheet) {
+                        sheet.applyList(payload.sheets());
+                    }
+                }));
+
+        ClientPlayNetworking.registerGlobalReceiver(RpgNetworking.ThreatSheetResultPayload.TYPE,
+                (payload, context) -> context.client().execute(() -> {
+                    ThreatSheetClientState.setSheets(payload.sheets());
+                    ThreatSheetClientState.setStatus(payload.message());
+                    if (context.client().screen instanceof ThreatSheetsScreen list) {
+                        list.applyResult(payload.ok(), payload.message(), payload.sheets());
+                    } else if (context.client().screen instanceof ThreatSheetScreen sheet) {
+                        sheet.applyResult(payload.ok(), payload.message(), payload.sheets());
+                    }
+                }));
+
         ClientPlayNetworking.registerGlobalReceiver(RpgNetworking.PresetResultPayload.TYPE,
                 (payload, context) -> context.client().execute(() -> {
                     boolean screenOpen = context.client().screen instanceof PresetsScreen;

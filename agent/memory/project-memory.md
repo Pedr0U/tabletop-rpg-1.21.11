@@ -2998,3 +2998,164 @@ sem nenhum U+000C: 'fill opaco' -like '*ill opaco*' e verdadeiro. O texto estava
 correto e o teste estava errado. **Licao:** guarda de verificacao tem que ancorar no
 caractere que ela procura (.Contains([char]12)), nunca numa fatia de palavra que pode
 ser parte de outra palavra.
+
+### StreamCodec.composite: escrever o codec a mao acima de 2 campos (02/10/2026)
+FATO verificado. `ThreatSheet.Action` (4 campos) nao compilou com `composite`: erro
+"no suitable method found" numa chamada de **3 pares** aninhada dentro de um composite de
+2 pares. Os composites de 2 e 3 pares continuam valendo (o de 3 do `RollPreset` compila
+ate hoje). A solucao aplicada e mais barata que a causa raiz: **record com mais de 2
+campos escreve `StreamCodec` a mao**, com `ByteBufCodecs.*` dentro de `decode`/`encode`.
+Foi assim em `ThreatSheet.Identity`, `ThreatSheet.Action` e `ThreatSheet.Vitals`.
+HIPOTESE (nao investigada, e nao precisa ser): o overload de 3 nao faz inferencia
+quando o record e aninhado. Nao gastar tempo nisso.
+
+### Pacote do MouseButtonEvent nesta versao (02/10/2026)
+FATO verificado. `net.minecraft.client.gui.input.MouseButtonEvent` **nao existe** em
+1.21.11; o pacote e `net.minecraft.client.input.MouseButtonEvent`
+(confirmado em `PresetsScreen.java:11` e `StatusScreen.java:12`). Build verde com o
+pacote errado da a mesma cara de "classe nao encontrada" que API inventada.
+
+### Checkbox e Tooltip so tem construtor por builder nesta versao (02/10/2026)
+FATO verificado com `javap`. `Checkbox` nao tem construtor publico direto: usar
+`Checkbox.builder(...).pos(...).maxWidth(...).selected(...).onValueChange(...).build()`
+e depois `setSize(w, h)`. `Tooltip.create` aceita **1 ou 2** `Component` — passar 4
+(argumentos de texto soltos) da "no suitable method".
+
+### GUI scale automatico torna 240 e 270 px logicos o caso comum (02/10/2026)
+FATO medido por aritmetic de layout nesta rodada. Em 1080p com GUI scale automatico a
+tela logica fica em **270**; em 720p, em **240**. Uma coluna de tela com altura **fixa**
+de 246 px de conteudo (ficha de ameaca: 3 linhas de texto + bloco de HP de 3 linhas +
+descricao + atributos) estourava o painel e deixava a lista de atributos **inteiramente
+fora da tela**, sem erro nenhum e com build verde. **Licao que vale para qualquer tela
+nova deste projeto:** nunca dimensionar coluna por altura fixa; derivar do espaco real
+(`panelY + panelH` menos rodapé) e **rolar** o excedente, com bloco que precisa caber
+inteiro nao sendo criado. Isso e a mesma classe de risco do `StatusScreen`, que tambem
+tem colunas longas.
+
+### Gradle "UP-TO-DATE" no build nao prova que o codigo novo compila (02/10/2026)
+FATO verificado. Um `gradlew build` que reporta `> Task :compileJava UP-TO-DATE` e
+`:compileClientJava UP-TO-DATE` so prova que **nada mudou** desde a ultima compilacao.
+A prova honesta e a execucao em que o Gradle recompilou depois da edicao. Ler o
+`BUILD SUCCESSFUL` do build como confirmacao de codigo novo e um erro de validacao.
+
+### SheetModelHolder.current() no servidor e seguro (02/10/2026)
+FATO verificado por leitura. `SheetModelStore` publica o modelo em `SERVER_STARTED` e
+em `JOIN` (`SheetModelStore.java:121`, `:137-159`), entao o handler de servidor pode usar
+`SheetModelHolder.current()` para alinhar a ficha antes de gravar, sem races de startup.
+
+### FormattedCharSequence.toString() devolve o NOME DA CLASSE, nao o texto (02/10/2026)
+FATO verificado em jogo. `font.split(...)` devolve `List<FormattedCharSequence>`, e
+`seq.toString()` NAO e o texto: devolve algo como
+`net.minecraft.util.FormattedCharSequence$$Lambda$1234/0x00007f...`. Foi o que apareceu
+na tela no lugar da descricao das habilidades da ficha de ameaca
+(`ThreatSheetScreen.drawWrapped`, linha 1335 na epoca). O texto se extrai percorrendo os
+code points:
+
+```java
+seq.accept((index, style, codePoint) -> { out.appendCodePoint(codePoint); return true; });
+```
+
+E `FormattedCharSequence` **nao tem `length()`** nesta versao (compilador acusa), entao
+`new StringBuilder(seq.length())` tambem nao compila.
+
+### Tela que le de um MODELO, nao do widget, so enxerga o velho (02/10/2026)
+FATO verificado em jogo. A ficha de ameaca desenhava HP, CA e atributos lendo um mapa
+`values`, e esse mapa so era atualizado em `save()`, nos formularios e ao reconstruir a
+coluna. O Mestre digitava o HP maximo e a barra mostrava o valor velho ate ele trocar de
+aba. **Licao geral:** quando a tela tem uma copia intermediaria do estado dos widgets, ou
+ela e sincronizada no `render()`, ou o usuario ve dado velho sem nenhum erro. O custo e
+trivial: `syncFromWidgets()` no topo do `render` chama so `EditBox.getValue()`.
+
+### Tamanho de referencia da ficha do jogador (02/10/2026)
+FATO verificado por leitura. `StatusScreen.java:104` tem
+`MAX_PANEL_W_STATUS = 600`, e a altura **nao** tem teto: vem de `buildPanel(x0, panelW,
+topY, bottomY)`, ou seja, a tela inteira. A ficha de ameaca tinha `MAX_PANEL_W = 430` e
+`MAX_PANEL_H = 360` fixo, que e o que espremia os atributos. Regua: quando o Mestre pedir
+"do tamanho da ficha do jogador", a resposta e 600 de largura e altura sem teto.
+
+### Padding de lista e largura de coluna na ficha de ameaca (02/10/2026)
+FATO verificado no codigo. O fundo de toda lista de `ThreatSheetScreen` e desenhado em
+`render` com `fill(region.x - 2, region.y, region.x + region.w - BAR_W - 2, ...)`,
+enquanto o conteudo vai em `region.x + 2`: a distancia real da borda do fundo ate o
+texto e de **4 px**. Mexer no `region.x` do `set()` NAO aumenta o padding, porque leva
+fundo e texto juntos -- foi exatamente por isso que dois patches de padding anteriores
+nao mudaram nada na tela. O que o Mestre pede como "colado na caixa" se corrige no `+ 2`
+do texto, no `render`, e nao no layout.
+
+FATO verificado. `colBarX()` era `leftX - BAR_W`, entao a barra da coluna esquerda ficava
+dentro da margem do painel e nao dentro da coluna, e a caixa da esquerda parecia mais
+larga. Agora `colW = (panelW - 2*PAD - COL_GAP - BAR_W - 2) / 2` reserva a barra entre as
+colunas e `colBarX() = leftX + colW + 1`.
+
+FATO verificado. `descH` era `max(DESC_MIN_H, colViewH() - COL_FIXED_H - DESC_HEAD_H -
+ATTR_HEAD_H - ROW_H)`: a descricao ficava com todo o espaco sobrante e os atributos ficavam
+com uma unica linha visivel, o que obrigava a rolar a coluna. Agora o sobrante e dividido
+e a descricao fica com no maximo metade.
+
+FATO verificado. O filtro do valor de pericia era `-?\\d{0,4}`: colar o "-" depois dos
+digitos ("5-") era rejeitado, entao negativo so funcionava digitando o sinal primeiro.
+`VALUE_MIN` ja era `-999`, ou seja o modelo nunca recusou negativo -- o defeito era so de
+digitacao. O filtro agora aceita o sinal nas duas pontas e o `save` normaliza (o "-" vale
+em qualquer ponta, o "+" e ignorado).
+
+FATO verificado. `COL_HP_OVER = 0xFFFF8A8A` existe em `CharacterSheetScreen` como cor de
+excedente do jogador, e e acessivel sem import porque as duas telas estao no mesmo
+pacote `com.pedro.tabletoprpg.client`. O `drawHpBar` da ameaca ja usava
+`max(hp, max)` como denominador, mas pintava a barra toda de `COL_HP`; agora a parte que
+passa do teto usa `COL_HP_OVER` e o texto mostra `12 / 10 (+2)`.
+
+REGRA DE PROCESSO (erro meu, repetido duas vezes): item de layout "colado", "estourando"
+ou "maior" nao se corrige por leitura de layout. A unica medida valida e a distancia
+entre a borda do fundo e o conteudo dentro do `render`.
+
+### "Colado" na ficha de ameaca e, quase sempre, sobreposicao (02/10/2026)
+FATO verificado. Tres rodadas seguidas do mesmo sintoma, com uma causa que nao era falta
+de espaco e sim **espelhamento de posicao**:
+
+- `SECTION_H = 10` era a faixa do titulo, e o botao ao lado tem `SMALL_BTN_H = 16`
+  desenhado em `y - 3`. O botao terminava em `y + 13` e a lista comecava em `y + 10`:
+  **invadia 3 px da caixa**. A faixa do cabecalho virou `SECTION_H + SMALL_BTN_H + 4`.
+- A caixa de valor do atributo era criada em `region.x + region.w - boxW`, encostando
+  na barra de rolagem da coluna, que ocupa os ultimos `BAR_W = 4` px da regiao.
+- O `Del` das tres listas e posicionado por `edit.getRight() + GAP`, entao mexer so em
+  `editW` reposiciona os dois botoes juntos. A folga certa e 16 px, nao 8.
+- Linhas de pericia tem 11 px; o texto em `rowY + 1` nascia colado no topo.
+
+REGRA (terceira ocorrencia, agora com metodo): quando o Mestre escrever "colado", "sem
+espaco" ou "feio", **medir** a distancia entre a borda da caixa e o elemento no codigo de
+`render` antes de escolher um numero. Nenhuma das tres rodadas falhou por falta de espaco;
+falharam por posicao. E o numero nunca sai "a olho": cada valor aqui veio de subtrair a
+posicao real da borda.
+
+### Dois caminhos de desenho para o mesmo dado, com guardas diferentes (02/10/2026)
+FATO verificado. Os rotulos dos atributos eram desenhados no `render`, sem nenhuma
+checagem de espaco vertical, e as caixas de valor nasciam em `rebuildRegion`, sob a
+guarda `inColumn(y, ATTR_HEAD_H + attrH)` que exige a lista **inteira** cabendo. Com a
+lista maior que o espaco, os nomes apareciam e as caixas nao. Agora a guarda e "cabe pelo
+menos uma linha visivel" e o `attrRegion` recebe a altura que sobra de verdade.
+
+REGRA: quando um mesmo dado aparece na tela, perguntar **quem desenha cada parte e sob qual
+condicao**. Divergencia entre duas guardas e a causa mais comum de "aparece o texto, mas a
+caixa nao".
+
+### `MultiLineEditBox` do vanilla desenha o proprio contador (02/10/2026)
+FATO verificado por inspecao do `.class` dentro de
+`minecraft-clientonly-1.21.11-loom.mappings.1_21_11.layered+hash.2198-v2.jar`: a classe
+`net.minecraft.client.gui.components.MultiLineEditBox` tem os campos `count` e `limit` e
+**desenha "usado/maximo" no canto inferior direito da caixa sozinha**, assim que
+`setCharacterLimit` e chamado. Por isso remover um contador desenhado a mao nao tira
+numero nenhum da tela.
+
+Consequencia pratica: em qualquer `MultiLineEditBox` deste projeto, **nao chame
+`setCharacterLimit`** se o Mestre nao quer numero na tela. O limite passa a ser
+verificado no `save`, com mensagem de erro, em vez de corte silencioso.
+
+Como排查 rapido (o que confirma que nada nosso desenha aquilo): `run/mods` vazio, sem
+mixin do widget em `tabletop-rpg.mixins.json`, `build.gradle` sem dependencia de texto, e
+todos os imports do widget sendo `net.minecraft.*`.
+
+ERRO MEU, REGISTRADO: afirmei duas vezes seguidas que o contador tinha sido removido,
+com o bytecode conferido, sem levar em conta que o numero na tela podia vir de fora do
+projeto. Contra "ainda aparece", a pergunta util nao e "meu codigo esta limpo", e sim
+"**outra coisa esta desenhando isto**". Antes de fechar um bug visual como resolvido,
+perguntar de onde pode vir cada pixel的那 tela.

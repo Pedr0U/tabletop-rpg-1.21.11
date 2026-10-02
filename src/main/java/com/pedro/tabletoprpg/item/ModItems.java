@@ -12,6 +12,7 @@ import net.fabricmc.fabric.api.event.player.UseItemCallback;
 import net.minecraft.core.Registry;
 import net.minecraft.core.component.DataComponents;
 import net.minecraft.core.registries.BuiltInRegistries;
+import com.pedro.tabletoprpg.ThreatSheet;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.chat.Component;
@@ -105,10 +106,25 @@ public final class ModItems {
     public static final ResourceKey<Item> ROLL_PRESET_KEY =
             ResourceKey.create(Registries.ITEM, TabletopRpg.id("roll_preset"));
 
+    /**
+     * Chave do registro da Ficha de Ameaca (02/10/2026).
+     *
+     * <p><b>Sprite provisório:</b> mapa branco desenhado por este projeto (16x16) em
+     * {@code assets/tabletop-rpg/textures/item/threat_sheet.png}. O proprio jogo so tem
+     * {@code minecraft:map} e {@code minecraft:filled_map}, e nenhum dos dois e um mapa
+     * branco; como o sprite e provisorio, ele fica como arquivo do mod e nao como
+     * referencia a textura do vanilla -- trocar depois e sobrescrever o PNG, sem mexer em
+     * codigo nem depender do vanilla.
+     */
+    public static final ResourceKey<Item> THREAT_SHEET_KEY =
+            ResourceKey.create(Registries.ITEM, TabletopRpg.id("threat_sheet"));
+
     /** Chaves dentro do {@code CUSTOM_DATA} do item. */
     private static final String NBT_PRESET = "preset";
     private static final String NBT_FORMULA = "formula";
     private static final String NBT_COLOR = "color";
+    private static final String NBT_THREAT_SHEET = "threat_sheet";
+    private static final String NBT_LEVEL = "level";
 
     /**
      * Chave da aba criativa.
@@ -127,6 +143,8 @@ public final class ModItems {
     private static Item cameraTool;
 
     private static Item rollPreset;
+
+    private static Item threatSheet;
 
     private ModItems() {
     }
@@ -193,6 +211,30 @@ public final class ModItems {
 
         Registry.register(BuiltInRegistries.ITEM, ROLL_PRESET_KEY, rollPreset);
 
+        // Ficha de Ameaca (02/10/2026). Como o preset: item de apresentacao que carrega
+        // o nome e o ND do monstro, entregue ao Mestre a cada save da ficha.
+        //
+        // NAO entra na aba criativa: um item solto na aba nao tem ficha nenhuma e so
+        // serviria para mostrar "ficha nao existe". Quem cria ficha e o botao do Mestre.
+        threatSheet = new Item(new Item.Properties()
+                .setId(THREAT_SHEET_KEY)
+                .stacksTo(1)) {
+            @Override
+            public void appendHoverText(ItemStack stack, Item.TooltipContext context,
+                                        TooltipDisplay display, Consumer<Component> tooltip,
+                                        TooltipFlag flag) {
+                super.appendHoverText(stack, context, display, tooltip, flag);
+                CompoundTag tag = threatSheetTag(stack);
+                if (tag == null) {
+                    tooltip.accept(Component.literal("Item sem ficha"));
+                    return;
+                }
+                tooltip.accept(Component.literal("ND " + tag.getInt(NBT_LEVEL).orElse(0)));
+            }
+        };
+
+        Registry.register(BuiltInRegistries.ITEM, THREAT_SHEET_KEY, threatSheet);
+
         Registry.register(BuiltInRegistries.CREATIVE_MODE_TAB, TAB_KEY, CreativeModeTab.builder(
                         CreativeModeTab.Row.TOP, 0)
                 .title(Component.translatable("itemGroup.tabletoprpg.main"))
@@ -249,6 +291,67 @@ public final class ModItems {
     /** O Preset de Rolagem pronto. */
     public static Item rollPreset() {
         return rollPreset;
+    }
+
+    // --- Ficha de Ameaca (02/10/2026) ---
+
+    /** A Ficha de Ameaca pronta. */
+    public static Item threatSheet() {
+        return threatSheet;
+    }
+
+    /** O stack e uma Ficha de Ameaca? */
+    public static boolean isThreatSheet(ItemStack stack) {
+        return threatSheet != null && stack != null && stack.is(threatSheet);
+    }
+
+    /**
+     * O {@code CUSTOM_DATA} do item, ou {@code null} se nao for uma ficha valida.
+     *
+     * <p><b>Por que devolver a tag e nao a ficha:</b> o item carrega o nome e o ND da
+     * <i>entrega</i>, que podem ser diferentes da ficha salva agora. O cliente so le a
+     * tag (ele nao tem o {@link com.pedro.tabletoprpg.ThreatSheetStore}), entao e a tag
+     * que alimenta a dica.
+     */
+    private static CompoundTag threatSheetTag(ItemStack stack) {
+        if (!isThreatSheet(stack)) {
+            return null;
+        }
+        CustomData data = stack.get(DataComponents.CUSTOM_DATA);
+        if (data == null) {
+            return null;
+        }
+        CompoundTag tag = data.copyTag();
+        return tag.getString(NBT_THREAT_SHEET).orElse("").isEmpty() ? null : tag;
+    }
+
+    /**
+     * Monta o stack da ficha: nome da ameaca como nome do item, ND na dica e a chave que
+     * liga o item a ficha salva.
+     *
+     * <p><b>Por que o nome do item e so o nome da ameaca:</b> mesma escolha do preset em
+     * 01/10/2026 -- prefixo ("Ficha: Goblin") repetiria a informacao em toda linha do
+     * inventario, e o que distingue uma ficha da outra e o nome e o sprite.
+     */
+    public static ItemStack buildThreatSheetStack(ThreatSheet sheet) {
+        ItemStack stack = new ItemStack(threatSheet);
+        stack.set(DataComponents.CUSTOM_NAME, Component.literal(sheet.identity().name()));
+
+        CompoundTag tag = new CompoundTag();
+        tag.putString(NBT_THREAT_SHEET, sheet.key());
+        tag.putInt(NBT_LEVEL, sheet.identity().level());
+        stack.set(DataComponents.CUSTOM_DATA, CustomData.of(tag));
+        return stack;
+    }
+
+    /**
+     * Entrega o item de uma ficha no inventario.
+     *
+     * @return o stack entregue, ou {@code null} se o inventario estava cheio
+     */
+    public static ItemStack giveThreatSheet(ServerPlayer player, ThreatSheet sheet) {
+        ItemStack stack = buildThreatSheetStack(sheet);
+        return player.getInventory().add(stack) ? stack : null;
     }
 
     /** O stack e um Preset de Rolagem? */

@@ -27,6 +27,7 @@
     "item.tabletop-rpg.roll_preset.formula": "Rolls: %s",
   "item.tabletop-rpg.roll_preset.color": "Color: %s",
   "item.tabletop-rpg.roll_preset.no_preset": "No preset on this item",
+  "item.tabletop-rpg.threat_sheet": "Ficha de Ameaça",
   "message.tabletoprpg.preset_created": "Preset '%s' created (%s, %s). Right-click the item to roll it.",
   "message.tabletoprpg.preset_already_exists": "You already have a preset named '%s'. Use /rpg preset give or /rpg preset edit with that name.",
   "message.tabletoprpg.preset_edited": "Preset '%s' changed to %s (%s). Your existing item was updated.",

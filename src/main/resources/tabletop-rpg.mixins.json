@@ -6,7 +6,8 @@
   "mixins": [
     "PlayerPoseMixin",
     "PlayerSheetPersistenceMixin",
-    "PlayerRollPresetPersistenceMixin"
+    "PlayerRollPresetPersistenceMixin",
+    "PlayerThreatSheetPersistenceMixin"
   ],
   "server": [
     "ServerGamePacketListenerImplMixin",

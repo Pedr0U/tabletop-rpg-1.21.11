@@ -17,6 +17,7 @@ import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.Mob;
+import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.gamerules.GameRules;
 
 import java.util.ArrayList;
@@ -1173,6 +1174,155 @@ public final class RpgNetworking {
         }
     }
 
+    /** Cliente -&gt; Servidor: "me manda as fichas de ameaça". So o Mestre pede. */
+    public record ThreatSheetListRequestPayload() implements CustomPacketPayload {
+        public static final Type<ThreatSheetListRequestPayload> TYPE =
+                new Type<>(TabletopRpg.id("threat_sheet_list_request"));
+        /** Nao transporta nada; o proprio tipo do pacote e a mensagem. */
+        public static final StreamCodec<FriendlyByteBuf, ThreatSheetListRequestPayload> STREAM_CODEC =
+                StreamCodec.unit(new ThreatSheetListRequestPayload());
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
+    /**
+     * Servidor -&gt; Cliente: a lista de fichas do Mestre, na ordem em que ele salvou.
+     *
+     * <p><b>Por que a ficha inteira viaja e nao so o nome:</b> a lista e pequena e a
+     * ficha salva e um clique a mais de abrir. Se no dia vier a coluna de ND e de tipo
+     * na lista, o dado ja esta no cliente e nao ha segunda ida ao servidor.
+     */
+    public record ThreatSheetListPayload(List<ThreatSheet> sheets) implements CustomPacketPayload {
+        public static final Type<ThreatSheetListPayload> TYPE =
+                new Type<>(TabletopRpg.id("threat_sheet_list"));
+        public static final StreamCodec<FriendlyByteBuf, ThreatSheetListPayload> STREAM_CODEC =
+                new StreamCodec<>() {
+                    @Override
+                    public ThreatSheetListPayload decode(FriendlyByteBuf buf) {
+                        int size = buf.readVarInt();
+                        List<ThreatSheet> sheets = new ArrayList<>();
+                        for (int i = 0; i < size; i++) {
+                            sheets.add(ThreatSheet.STREAM_CODEC.decode(buf));
+                        }
+                        return new ThreatSheetListPayload(sheets);
+                    }
+
+                    @Override
+                    public void encode(FriendlyByteBuf buf, ThreatSheetListPayload payload) {
+                        List<ThreatSheet> sheets = payload.sheets();
+                        buf.writeVarInt(sheets.size());
+                        for (ThreatSheet sheet : sheets) {
+                            ThreatSheet.STREAM_CODEC.encode(buf, sheet);
+                        }
+                    }
+                };
+
+        public ThreatSheetListPayload {
+            sheets = sheets == null ? List.of() : List.copyOf(sheets);
+        }
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
+    public record ThreatSheetSavePayload(ThreatSheet sheet, String originalName)
+            implements CustomPacketPayload {
+        public static final Type<ThreatSheetSavePayload> TYPE =
+                new Type<>(TabletopRpg.id("threat_sheet_save"));
+
+        public static final StreamCodec<FriendlyByteBuf, ThreatSheetSavePayload> STREAM_CODEC =
+                StreamCodec.composite(
+                        ThreatSheet.STREAM_CODEC, ThreatSheetSavePayload::sheet,
+                        ByteBufCodecs.stringUtf8(ThreatSheet.MAX_NAME),
+                        ThreatSheetSavePayload::originalName,
+                        ThreatSheetSavePayload::new
+                );
+
+        public ThreatSheetSavePayload {
+            originalName = clamp(originalName == null ? "" : originalName.trim(),
+                    ThreatSheet.MAX_NAME);
+        }
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
+    /** Cliente -&gt; Servidor: apagar uma ficha pela chave do nome. */
+    public record ThreatSheetDeletePayload(String name) implements CustomPacketPayload {
+        public static final Type<ThreatSheetDeletePayload> TYPE =
+                new Type<>(TabletopRpg.id("threat_sheet_delete"));
+        public static final StreamCodec<FriendlyByteBuf, ThreatSheetDeletePayload> STREAM_CODEC =
+                StreamCodec.composite(
+                        ByteBufCodecs.stringUtf8(ThreatSheet.MAX_NAME),
+                        ThreatSheetDeletePayload::name,
+                        ThreatSheetDeletePayload::new
+                );
+
+        public ThreatSheetDeletePayload {
+            name = clamp(name == null ? "" : name.trim(), ThreatSheet.MAX_NAME);
+        }
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
+    /**
+     * Servidor -&gt; Cliente: resposta de save/apag, sempre com a lista nova.
+     *
+     * <p><b>Por que a lista vem junto da resposta:</b> e o que faz a tela do Mestre
+     * mostrar o estado real sem um segundo pedido -- e o mesmo motivo do
+     * {@link PresetResultPayload}.
+     */
+    public record ThreatSheetResultPayload(boolean ok, String message, List<ThreatSheet> sheets)
+            implements CustomPacketPayload {
+        public static final Type<ThreatSheetResultPayload> TYPE =
+                new Type<>(TabletopRpg.id("threat_sheet_result"));
+        public static final StreamCodec<FriendlyByteBuf, ThreatSheetResultPayload> STREAM_CODEC =
+                new StreamCodec<>() {
+                    @Override
+                    public ThreatSheetResultPayload decode(FriendlyByteBuf buf) {
+                        boolean ok = buf.readBoolean();
+                        String message = ByteBufCodecs.stringUtf8(512).decode(buf);
+                        int size = buf.readVarInt();
+                        List<ThreatSheet> sheets = new ArrayList<>();
+                        for (int i = 0; i < size; i++) {
+                            sheets.add(ThreatSheet.STREAM_CODEC.decode(buf));
+                        }
+                        return new ThreatSheetResultPayload(ok, message, sheets);
+                    }
+
+                    @Override
+                    public void encode(FriendlyByteBuf buf, ThreatSheetResultPayload payload) {
+                        buf.writeBoolean(payload.ok());
+                        ByteBufCodecs.stringUtf8(512).encode(buf, payload.message());
+                        List<ThreatSheet> sheets = payload.sheets();
+                        buf.writeVarInt(sheets.size());
+                        for (ThreatSheet sheet : sheets) {
+                            ThreatSheet.STREAM_CODEC.encode(buf, sheet);
+                        }
+                    }
+                };
+
+        public ThreatSheetResultPayload {
+            message = clamp(message, 512);
+            sheets = sheets == null ? List.of() : List.copyOf(sheets);
+        }
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
     // ------------------------------------------------------------------
     // REGISTRO (comum a servidor e cliente)
     // ------------------------------------------------------------------
@@ -1221,6 +1371,18 @@ public final class RpgNetworking {
         PayloadTypeRegistry.playS2C().register(PresetResultPayload.TYPE, PresetResultPayload.STREAM_CODEC);
         PayloadTypeRegistry.playC2S().register(PresetListRequestPayload.TYPE,
                 PresetListRequestPayload.STREAM_CODEC);
+        // 02/10/2026: fichas de ameaça do Mestre. Todos os payloads tem checagem de
+        // Mestre no handler do servidor, porque a lista e de leitura e o resto e escrita.
+        PayloadTypeRegistry.playC2S().register(ThreatSheetListRequestPayload.TYPE,
+                ThreatSheetListRequestPayload.STREAM_CODEC);
+        PayloadTypeRegistry.playS2C().register(ThreatSheetListPayload.TYPE,
+                ThreatSheetListPayload.STREAM_CODEC);
+        PayloadTypeRegistry.playC2S().register(ThreatSheetSavePayload.TYPE,
+                ThreatSheetSavePayload.STREAM_CODEC);
+        PayloadTypeRegistry.playC2S().register(ThreatSheetDeletePayload.TYPE,
+                ThreatSheetDeletePayload.STREAM_CODEC);
+        PayloadTypeRegistry.playS2C().register(ThreatSheetResultPayload.TYPE,
+                ThreatSheetResultPayload.STREAM_CODEC);
         // 01/10/2026 (pagina 3 da ficha): a lista de magias.
         PayloadTypeRegistry.playC2S().register(SheetSpellPayload.TYPE, SheetSpellPayload.STREAM_CODEC);
         PayloadTypeRegistry.playS2C().register(DownedStatePayload.TYPE, DownedStatePayload.STREAM_CODEC);
@@ -1619,6 +1781,7 @@ public final class RpgNetworking {
 
         // Preset de rolagem criado pela tela de rolagem (01/10/2026).
         registerRollPresetReceiver();
+        registerThreatSheetReceiver();
     }
 
     // ------------------------------------------------------------------
@@ -1924,6 +2087,107 @@ public final class RpgNetworking {
             return;
         }
         ServerPlayNetworking.send(player, new PresetListPayload(RollPresetStore.list(player.getUUID())));
+    }
+
+    // ------------------------------------------------------------------
+    // FICHAS DE AMEACA (02/10/2026)
+    // ------------------------------------------------------------------
+
+    /**
+     * Receptores das fichas de ameaça.
+     *
+     * <p><b>Por que aqui a checagem de Mestre e obrigatoria e nos presets nao:</b> o
+     * preset e pessoal (decisao de 01/10/2026), a ficha de ameaça e do Mestre e describes
+     * a mesa inteira. Esconder o botão no menu nao e permissão: qualquer jogador pode
+     * mandar o pacote, entudo o handler é que recusa.
+     */
+    private static void registerThreatSheetReceiver() {
+        ServerPlayNetworking.registerGlobalReceiver(ThreatSheetListRequestPayload.TYPE,
+                (payload, context) -> sendThreatSheetList(context.player()));
+
+        ServerPlayNetworking.registerGlobalReceiver(ThreatSheetSavePayload.TYPE, (payload, context) ->
+                ServerPlayNetworking.send(context.player(),
+                        saveThreatSheetFromScreen(context.player(), payload)));
+
+        ServerPlayNetworking.registerGlobalReceiver(ThreatSheetDeletePayload.TYPE, (payload, context) ->
+                ServerPlayNetworking.send(context.player(),
+                        deleteThreatSheetFromScreen(context.player(), payload)));
+    }
+
+    /**
+     * Envia a lista de fichas do Mestre.
+     *
+     * <p>Joga fora a resposta para quem nao e Mestre: nao ha lista publica de ameacas,
+     * e a ficha guarda a descricao e as habilidades da criatura.
+     */
+    public static void sendThreatSheetList(ServerPlayer player) {
+        if (player == null || player.connection == null || !SessionManager.isMaster(player)) {
+            return;
+        }
+        ServerPlayNetworking.send(player, new ThreatSheetListPayload(
+                ThreatSheetStore.snapshot(player.getUUID())));
+    }
+
+    /**
+     * Salva a ficha pedida pela tela e entrega o item.
+     *
+     * <p><b>Por que o item e entregue a cada save (decisao do usuario em 02/10/2026):</b>
+     * igual ao preset, o item carrega o nome e o ND no proprio stack. Reentregar e o
+     * preco do item duplicado; a alternativa era reescrever os componentes dos stacks
+     * iguais na mochila, e o Mestre pediu a entrega nova.
+     *
+     * <p>A ficha e alinhada ao modelo antes de gravar: atributo que o Mestre acabou de
+     * criar no Sheet Editor aparece com valor 0, e atributo que ele removeu sai.
+     */
+    private static ThreatSheetResultPayload saveThreatSheetFromScreen(ServerPlayer player,
+                                                                       ThreatSheetSavePayload payload) {
+        if (!SessionManager.isMaster(player)) {
+            return threatSheetRefuse(player, "Só o mestre pode editar fichas de ameaça.");
+        }
+        if (payload == null || payload.sheet() == null) {
+            return threatSheetRefuse(player, "Ficha vazia.");
+        }
+        ThreatSheet aligned = payload.sheet().alignedTo(SheetModelHolder.current());
+        ThreatSheetStore.SaveResult result = ThreatSheetStore.save(player, aligned, payload.originalName());
+        if (!result.ok()) {
+            return threatSheetRefuse(player, result.message());
+        }
+
+        // O item e a apresentacao da ficha: o save acontece MESMO com a mochila cheia,
+        // porque perder a ficha seria pior do que o mestre receber o aviso. A mesma
+        // escolha que o save de preset ja faz.
+        ItemStack delivered = ModItems.giveThreatSheet(player, aligned);
+        String suffix = delivered == null
+                ? " (inventário cheio: a ficha foi salva, mas o item não coube)"
+                : "";
+        return new ThreatSheetResultPayload(true, result.message() + suffix,
+                ThreatSheetStore.snapshot(player.getUUID()));
+    }
+
+    /**
+     * Apaga a ficha pedida pela tela.
+     *
+     * <p><b>Por que o item NAO some junto:</b> o item e apresentacao, como no preset. A
+     * ficha continua valendo para o Mestre decidir; apagar a ficha e um ato explicito.
+     */
+    private static ThreatSheetResultPayload deleteThreatSheetFromScreen(ServerPlayer player,
+                                                                        ThreatSheetDeletePayload payload) {
+        if (!SessionManager.isMaster(player)) {
+            return threatSheetRefuse(player, "Só o mestre pode apagar fichas de ameaça.");
+        }
+        ThreatSheet removed = ThreatSheetStore.remove(player.getUUID(), payload.name());
+        if (removed == null) {
+            return threatSheetRefuse(player, "Essa ficha de ameaça não existe mais.");
+        }
+        return new ThreatSheetResultPayload(true, "Ficha de ameaça apagada.",
+                ThreatSheetStore.snapshot(player.getUUID()));
+    }
+
+    /** Recusa com a lista vazia: quem nao e Mestre nao recebe nem a lista nem o motivo. */
+    private static ThreatSheetResultPayload threatSheetRefuse(ServerPlayer player, String message) {
+        boolean master = SessionManager.isMaster(player);
+        List<ThreatSheet> sheets = master ? ThreatSheetStore.snapshot(player.getUUID()) : List.of();
+        return new ThreatSheetResultPayload(false, message, sheets);
     }
 
     /**

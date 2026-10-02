@@ -112,6 +112,17 @@ public class RpgMenuScreen extends Screen {
         //    (sem "My Sheet") e o jogador NAO tem "Players".
         if (isMaster) {
             y = addButton("Players", x, y, () -> openPlayers());
+            // 02/10/2026: as fichas de ameaça são do Mestre, e o botão fica no menu
+            // dele porque é onde o resto da mesa dele fica. Texto em português, como o
+            // resto do que entra nesta rodada; os botões antigos seguem em inglês.
+            //
+            // <b>Esconder o botão NÃO é permissão:</b> qualquer jogador pode mandar o
+            // pacote, e o handler no servidor recusa quem não for Mestre.
+            y = addButton("Fichas de Ameaça", x, y, () -> {
+                if (this.minecraft != null) {
+                    this.minecraft.setScreen(new ThreatSheetsScreen(this));
+                }
+            });
         } else {
             // 01/10/2026: o botao "Skills" saiu do menu. As skills (e as magias)
             // passaram a ser a TERCEIRA ABA da ficha, que o jogador abre pelo
