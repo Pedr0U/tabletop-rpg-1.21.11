@@ -38,3 +38,6 @@ hs_err_*.log
 replay_*.log
 *.hprof
 *.jfr
+
+# Log do runClient (validacao manual de boot)
+runClient.log
