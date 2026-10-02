@@ -416,6 +416,17 @@ public class TabletopRpgClient implements ClientModInitializer {
                     }
                 }));
 
+        // Clique no ar com a ficha na mao: abre a ficha em modo de ATUALIZAR. E o unico
+        // caminho que abre a ficha sem passar pelo menu, entao precisa tratar a tela
+        // que estiver aberta: recomecar de onde o Mestre estava e o comportamento
+        // normal de um botao.
+        ClientPlayNetworking.registerGlobalReceiver(RpgNetworking.ThreatSheetOpenPayload.TYPE,
+                (payload, context) -> context.client().execute(() -> {
+                    com.pedro.tabletoprpg.ThreatSheet sheet = payload.sheet();
+                    context.client().setScreen(new ThreatSheetScreen(
+                            context.client().screen, sheet, sheet.identity().name(), true));
+                }));
+
         ClientPlayNetworking.registerGlobalReceiver(RpgNetworking.PresetResultPayload.TYPE,
                 (payload, context) -> context.client().execute(() -> {
                     boolean screenOpen = context.client().screen instanceof PresetsScreen;

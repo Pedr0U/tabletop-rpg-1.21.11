@@ -131,6 +131,16 @@ public class MasterCommands {
                     .then(Commands.literal("camera")
                         .executes(MasterCommands::insertCamera)))
 
+                // /rpg mob <nome>  (só o mestre) -> aponta o monstro pelo NOME DE
+                // EXIBIÇÃO da ficha e o deixa selecionado, que é o que o /rpg remove
+                // enemy, o block_lock e o movimento usam. Existe porque não dá para
+                // citar um monstro por nome em comando do vanilla: /tp aceita seletor,
+                // e @e[name="..."] só acha quem já foi amarrado a uma ficha (02/10/2026).
+                .then(Commands.literal("mob")
+                    .then(Commands.argument("name", StringArgumentType.greedyString())
+                        .suggests(MasterCommands::suggestBoundMobs)
+                        .executes(MasterCommands::selectMobByName)))
+
                 // /rpg remove enemy  (só o mestre) -> remove o mob selecionado
                 // (clique direito nele primeiro). 1 mob por execução.
                 .then(Commands.literal("remove")
@@ -468,6 +478,85 @@ public class MasterCommands {
             ctx.getSource().sendFailure(Component.literal("§c[RPG] Failed to arm the camera."));
             return 0;
         }
+    }
+
+    /**
+     * /rpg mob &lt;nome&gt;: aponta o monstro pelo nome de exibição da ficha e o deixa
+     * selecionado.
+     *
+     * <p><b>Por que preciso deste comando:</b> o vanilla não cita criatura por nome em
+     * comando nenhum. {@code /tp} aceita seletor, e o seletor {@code @e[name="..."]} só
+     * acha quem tem nome customizado — ou seja, quem o Mestre já amarrou a uma ficha. Sem
+ * * este comando, o caminho seria clicar com o botão direito, e isso não escala para
+ * cima de uma mesa com dez ameaças (02/10/2026).
+     */
+    private static int selectMobByName(CommandContext<CommandSourceStack> ctx) {
+        if (!verifyMasterPermission(ctx)) return 0;
+        try {
+            ServerPlayer master = ctx.getSource().getPlayerOrException();
+            String wanted = RollPreset.normalizeKey(StringArgumentType.getString(ctx, "name"));
+            if (wanted.isEmpty()) {
+                ctx.getSource().sendFailure(Component.literal("§c[RPG] Diga o nome de exibição da ameaça."));
+                return 0;
+            }
+
+            List<Mob> hits = new ArrayList<>();
+            for (ServerLevel level : master.level().getServer().getAllLevels()) {
+                for (Entity entity : level.getAllEntities()) {
+                    if (!(entity instanceof Mob mob)) {
+                        continue;
+                    }
+                    // Só quem tem ficha vale: sem ficha o nome é o do vanilla e não
+                    // distingue duas criaturas iguais.
+                    if (ThreatSheetBinding.sheetOf(mob).isEmpty() || mob.getCustomName() == null) {
+                        continue;
+                    }
+                    if (RollPreset.normalizeKey(mob.getCustomName().getString()).equals(wanted)) {
+                        hits.add(mob);
+                    }
+                }
+            }
+
+            if (hits.isEmpty()) {
+                ctx.getSource().sendFailure(Component.literal("§c[RPG] Nenhuma ameaça amarrada com o nome \""
+                        + StringArgumentType.getString(ctx, "name") + "\"."));
+                return 0;
+            }
+            if (hits.size() > 1) {
+                // Duas criaturas com o mesmo nome dão um @e[name=...] ambíguo. Dizer isso
+                // é melhor do que escolher uma e o Mestre achar que escolheu.
+                ctx.getSource().sendFailure(Component.literal("§c[RPG] " + hits.size()
+                        + " ameaças usam esse nome. Deixe o nome de exibição delas diferente."));
+                return 0;
+            }
+
+            Mob mob = hits.get(0);
+            CombatController.selectMob((ServerLevel) mob.level(), master, mob);
+            return 1;
+        } catch (Exception e) {
+            TabletopRpg.LOGGER.error("[TabletopRPG] /rpg mob falhou: {}", e.getMessage());
+            ctx.getSource().sendFailure(Component.literal("§c[RPG] Failed to select the monster."));
+            return 0;
+        }
+    }
+
+    /** Sugere os nomes de exibição das fichas do Mestre: é o que ele digitou ao amarrar. */
+    private static CompletableFuture<Suggestions> suggestBoundMobs(
+            CommandContext<CommandSourceStack> ctx, SuggestionsBuilder builder) {
+        String remaining = builder.getRemaining().toLowerCase(Locale.ROOT);
+        try {
+            ServerPlayer master = ctx.getSource().getPlayerOrException();
+            for (ThreatSheet sheet : ThreatSheetStore.snapshot(master.getUUID())) {
+                String name = sheet.identity().displayName();
+                if (!name.isEmpty() && name.toLowerCase(Locale.ROOT).startsWith(remaining)) {
+                    builder.suggest(name);
+                }
+            }
+        } catch (Exception ignored) {
+            // Sugestao nunca recusa o comando: se o jogador nao for um jogador, o
+            // autocomplete fica vazio e o comando segue dando o erro dele mesmo.
+        }
+        return builder.buildFuture();
     }
 
     /**
