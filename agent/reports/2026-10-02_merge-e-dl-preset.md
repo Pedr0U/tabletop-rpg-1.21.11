@@ -79,8 +79,11 @@ necessariamente o mais recente. Isso e exatamente o que torna um arquivo de memo
 inutil: a leitura da licao pode ser a versao velha.
 
 **Nao corrigido nesta fase.** Deduplicar 8295 linhas automaticamente e arriscado sem
-saber qual das tres copias tem a edicao mais recente de cada licao. Fica para uma fase
-so, com diff antes de remover.
+saber qual das tres copias tem a edicao mais recente de cada licao.
+
+**RESOLVIDO depois, a pedido da jogadora.** Ver `2026-10-02_memoria-deduplicada.md`.
+8408 -> 2948 linhas, 17 caracteres de controle reparados, e **nenhuma** licao perdida --
+tres delas estavam prestes a ser.
 
 ## Validacao
 
