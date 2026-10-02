@@ -25,13 +25,12 @@ public class DiceRollScreen extends Screen {
     private float scale;
 
     /**
-     * O botao "Create Preset" (01/10/2026).
+     * O botao "Presets" (01/10/2026).
      *
-     * <p>Guardado em campo porque ele e o unico botao condicional da tela: depende de
-     * haver valor de rolagem, e isso muda a cada clique em dado ou modificador. Os
-     * outros ficam sempre.
+     * <p>Guardado em campo por causa do uso no {@link #render}: e ele quem sabe a
+     * rolagem atual, e a rolagem e o que a tela de presets recebe como formula inicial.
      */
-    private Button createPresetButton;
+    private Button presetsButton;
 
     // --- ESTADO DA ROLAGEM ---
     private final List<String> selectedDice = new ArrayList<>();
@@ -106,24 +105,34 @@ public class DiceRollScreen extends Screen {
         this.addRenderableWidget(Button.builder(Component.literal("Back"), b -> this.minecraft.setScreen(parentScreen))
                 .bounds(actionX + halfW + gap, bottomY, halfW, 20).build());
 
-        // "Create Preset", ABAIXO da linha Clear/Back e centralizado (01/10/2026).
+        // "Presets", ABAIXO da linha Clear/Back e centralizado (01/10/2026).
         // A linha 400 da textura e o primeiro espaco livre depois dos botoes: o
         // desenho do painel vai ate a linha 534, entao sobra sem mexer na arte.
+        //
+        // O botao e SEMPRE visivel agora: a tela nova tambem cria preset do zero, e
+        // esconder sem valor de rolagem tiraria da jogadora a unica forma de abrir
+        // a lista quando ela so quer reordenar ou apagar.
         int presetY = panelY + (int) (400 * scale);
-        this.createPresetButton = Button.builder(Component.literal("Create Preset"),
-                b -> openPresetCreate())
+        this.presetsButton = Button.builder(Component.literal("Presets"), b -> openPresets())
                 .bounds(actionX, presetY, buttonWidth, 20).build();
-        this.addRenderableWidget(createPresetButton);
+        this.addRenderableWidget(presetsButton);
     }
 
-    /** Abre o formulario, levando a rolagem atual como formula inicial. */
-    private void openPresetCreate() {
-        // A expressao visual vem com espacos ("d20 + 7"); o que o servidor aceita e
-        // sem espaco, que e o que o proprio botao Roll! envia. Passar o mesmo texto
-        // evita a jogadora ver um preset criado que nao rola.
-        String formula = getRollExpression().replace(" ", "");
-        PresetCreateScreen.clearStatus();
-        this.minecraft.setScreen(new PresetCreateScreen(this, formula));
+    /**
+     * Abre a tela de presets, levando a rolagem atual como formula inicial.
+     *
+     * <p><b>Por que leva a formula:</b> quando a jogadora monta um preset a partir de
+     * uma rolagem, essa rolagem e o que ela quer transformar em preset; digitar de novo
+     * seria trabalho jogado fora. Sem valor na rolagem, o campo começa vazio e a tela
+     * serve para criar do zero.
+     */
+    private void openPresets() {
+        String formula = hasRollValue() ? getRollExpression().replace(" ", "") : "";
+        PresetsScreen screen = new PresetsScreen(this);
+        this.minecraft.setScreen(screen);
+        // Pede a lista depois de trocar a tela: o receptor procura uma PresetsScreen
+        // na frente, e quem responde e o servidor.
+        screen.requestList();
     }
 
     private void addDiceButton(String dice, int x, int y, int w) {
@@ -191,15 +200,6 @@ public class DiceRollScreen extends Screen {
 
     @Override
     public void render(GuiGraphics graphics, int mouseX, int mouseY, float delta) {
-        // O "Create Preset" so aparece com valor de rolagem (01/10/2026): sem valor
-        // nao ha formula para preencher, e o botao levaria a uma tela vazia.
-        // Aqui, e nao em buildUI, porque addDiceButton/addModButton mudam o valor
-        // sem reconstruir a tela -- se fosse em buildUI o botao ficaria visivel
-        // errado ate a proxima troca de aba.
-        if (createPresetButton != null) {
-            createPresetButton.visible = hasRollValue();
-        }
-
         super.render(graphics, mouseX, mouseY, delta);
 
         // Título alinhado com o da outra tela

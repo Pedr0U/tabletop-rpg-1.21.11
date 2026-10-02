@@ -355,33 +355,41 @@ public class TabletopRpgClient implements ClientModInitializer {
                     context.client().setScreen(new SheetEditorScreen());
                 }));
 
-        // Resposta da criacao de preset pela tela de rolagem (01/10/2026).
-        //
-        // So o texto chega, sem nome nem formula: a tela precisa mostrar a frase, e
-        // qualquer campo novo no preset teria de ser empacotado de novo aqui sem
-        // ganho. Com `ok` verdadeiro a tela fecha e o aviso vai para o chat; com
-        // falso a tela fica aberta -- e e por isso que o texto e guardado num
-        // estatico da PresetCreateScreen: a resposta chega depois do clique e pode
-        // ser que a tela ja tenha sido fechada.
+        // Resposta do `/rpg preset create` quando o comando entrega o item fora da tela
+        // (01/10/2026). A tela nova nao usa mais este caminho -- ela manda o
+        // PresetSavePayload e recebe o PresetResultPayload -- mas o receptor fica:
+        // o payload continua registrado no servidor, e sem receptor um cliente com
+        // versao diferente derrubaria a conexao ao receber a resposta.
         ClientPlayNetworking.registerGlobalReceiver(RpgNetworking.PresetCreateResultPayload.TYPE,
                 (payload, context) -> context.client().execute(() -> {
-                    if (payload.ok()) {
-                        PresetCreateScreen.clearStatus();
-                        if (context.client().player != null && payload.message() != null) {
-                            // Component.literal: o texto ja vem resolvido do servidor
-                            // (ver RpgNetworking.translatableText), entao nao ha chave
-                            // para traduzir aqui. O prefixo e o do mod, o resto e a
-                            // frase que o comando mostraria.
-                            context.client().player.displayClientMessage(
-                                    Component.literal("§6[Preset] §f" + payload.message()), false);
-                        }
-                        // Volta ao menu de rolagem, e nao a null: a jogadora pode criar
-                        // outro preset sem reabrir a tela de rolagem.
-                        if (context.client().screen instanceof PresetCreateScreen presetScreen) {
-                            context.client().setScreen(presetScreen.parentScreen());
-                        }
-                    } else {
-                        PresetCreateScreen.setStatus(payload.message());
+                    if (payload.ok() && context.client().player != null && payload.message() != null) {
+                        context.client().player.displayClientMessage(
+                                Component.literal("§6[Preset] §f" + payload.message()), false);
+                    }
+                }));
+
+        // --- tela de Presets (01/10/2026) ---
+        //
+        // Tres pacotes, e todos eles precisam recarregar a lista: a seta muda a
+        // ordem, o Del apaga e o Save cria ou edita. Sem recarregar, a tela
+        // mostraria o estado antigo depois de cada acao e a jogadora teria que
+        // fechar e abrir para ver o resultado.
+
+        ClientPlayNetworking.registerGlobalReceiver(RpgNetworking.PresetListPayload.TYPE,
+                (payload, context) -> context.client().execute(() -> {
+                    if (context.client().screen instanceof PresetsScreen presetsScreen) {
+                        presetsScreen.applyResult(true, "", payload.presets());
+                    }
+                }));
+
+        ClientPlayNetworking.registerGlobalReceiver(RpgNetworking.PresetResultPayload.TYPE,
+                (payload, context) -> context.client().execute(() -> {
+                    if (context.client().player != null && payload.message() != null && !payload.message().isEmpty()) {
+                        context.client().player.displayClientMessage(
+                                Component.literal("\u00a76[Preset] \u00a7f" + payload.message()), false);
+                    }
+                    if (context.client().screen instanceof PresetsScreen presetsScreen) {
+                        presetsScreen.applyResult(payload.ok(), payload.message(), payload.presets());
                     }
                 }));
 

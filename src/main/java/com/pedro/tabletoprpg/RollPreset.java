@@ -2,6 +2,9 @@ package com.pedro.tabletoprpg;
 
 import com.mojang.serialization.Codec;
 import com.mojang.serialization.codecs.RecordCodecBuilder;
+import net.minecraft.network.codec.ByteBufCodecs;
+import net.minecraft.network.codec.StreamCodec;
+import net.minecraft.network.FriendlyByteBuf;
 
 import java.text.Normalizer;
 import java.util.Locale;
@@ -21,6 +24,21 @@ public record RollPreset(String name, String formula, String colorId) {
 
     public static final int MAX_NAME = 32;
     public static final int MAX_FORMULA = 128;
+
+    /**
+     * O preset na rede (01/10/2026), usado pela tela de presets.
+     *
+     * <p>Existe porque o {@link #CODEC} e do NBT e o NBT nao viaja em pacote. O
+     * record e o mesmo nas duas pontas, entao o que o servidor manda e o que o
+     * cliente guarda.
+     */
+    public static final StreamCodec<FriendlyByteBuf, RollPreset> STREAM_CODEC =
+            StreamCodec.composite(
+                    ByteBufCodecs.stringUtf8(MAX_NAME), RollPreset::name,
+                    ByteBufCodecs.stringUtf8(MAX_FORMULA), RollPreset::formula,
+                    ByteBufCodecs.stringUtf8(32), RollPreset::colorId,
+                    RollPreset::new
+            );
 
     // Sem limite de tamanho por campo: nesta versao do DFU o `Codec.STRING` nao tem
 // `maxLen`. O teto do NBT nao e o que segura um preset enorme -- e o clamp do

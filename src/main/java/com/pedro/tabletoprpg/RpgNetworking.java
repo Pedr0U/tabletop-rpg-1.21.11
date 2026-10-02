@@ -962,6 +962,185 @@ public final class RpgNetworking {
     }
 
     /**
+     * Servidor -&gt; Cliente: a lista de presets da jogadora, para a tela.
+     *
+     * <p><b>Por que o servidor manda a lista inteira e nao so um aviso:</b> a tela
+     * precisa mostrar os nomes, as formulas e as cores, e a ordem em que a jogadora
+     * montou. Sem isso, abrir a tela mostraria o que o cliente lembrava -- e o item do
+     * preset pode ter sido editado por comando enquanto a tela estava fechada, ou o
+     * preset pode ter sido criado em outra sessao.
+     *
+     * <p>Vem logo apos abrir a tela, entao a lista que ela mostra e a do servidor.
+     */
+    public record PresetListPayload(List<RollPreset> presets) implements CustomPacketPayload {
+        public static final Type<PresetListPayload> TYPE = new Type<>(TabletopRpg.id("preset_list"));
+        public static final StreamCodec<FriendlyByteBuf, PresetListPayload> STREAM_CODEC =
+                new StreamCodec<>() {
+                    @Override
+                    public PresetListPayload decode(FriendlyByteBuf buf) {
+                        int size = buf.readVarInt();
+                        List<RollPreset> presets = new ArrayList<>();
+                        for (int i = 0; i < size; i++) {
+                            presets.add(RollPreset.STREAM_CODEC.decode(buf));
+                        }
+                        return new PresetListPayload(presets);
+                    }
+
+                    @Override
+                    public void encode(FriendlyByteBuf buf, PresetListPayload payload) {
+                        List<RollPreset> presets = payload.presets();
+                        buf.writeVarInt(presets.size());
+                        for (RollPreset preset : presets) {
+                            RollPreset.STREAM_CODEC.encode(buf, preset);
+                        }
+                    }
+                };
+
+        public PresetListPayload {
+            presets = presets == null ? List.of() : List.copyOf(presets);
+        }
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
+    /**
+     * Cliente -&gt; Servidor: salva um preset, criando ou editando.
+     *
+     * <p><b>Por que um pacote so para as duas coisas:</b> criar e editar tem o mesmo
+     * corpo e a mesma resposta; o que muda e se {@code originalName} vem preenchido.
+     * Um pacote por operacao duplicaria a valicao de nome, de formula e de cor, que e
+     * justamente o que precisa ser igual nas duas.
+     *
+     * <p><b>Por que {@code originalName} viaja:</b> sem ele o servidor nao sabe qual
+     * preset foi editado quando o nome mudou, e o preset velho continuaria na lista
+     * com os dados novos por baixo da etiqueta antiga. E o que faz o item antigo ficar
+     * orfao quando a jogadora renomeia.
+     */
+    public record PresetSavePayload(String originalName, String name, String formula, String colorId)
+            implements CustomPacketPayload {
+        public static final Type<PresetSavePayload> TYPE = new Type<>(TabletopRpg.id("preset_save"));
+        public static final StreamCodec<FriendlyByteBuf, PresetSavePayload> STREAM_CODEC =
+                StreamCodec.composite(
+                        ByteBufCodecs.stringUtf8(64), PresetSavePayload::originalName,
+                        ByteBufCodecs.stringUtf8(64), PresetSavePayload::name,
+                        ByteBufCodecs.stringUtf8(128), PresetSavePayload::formula,
+                        ByteBufCodecs.stringUtf8(32), PresetSavePayload::colorId,
+                        PresetSavePayload::new
+                );
+
+        public PresetSavePayload {
+            originalName = clamp(originalName, 64);
+            name = clamp(name, 64);
+            formula = clamp(formula, 128);
+            colorId = clamp(colorId, 32);
+        }
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
+    /** Cliente -&gt; Servidor: apaga o preset deste nome. O item fica na mochila. */
+    public record PresetDeletePayload(String name) implements CustomPacketPayload {
+        public static final Type<PresetDeletePayload> TYPE = new Type<>(TabletopRpg.id("preset_delete"));
+        public static final StreamCodec<FriendlyByteBuf, PresetDeletePayload> STREAM_CODEC =
+                StreamCodec.composite(
+                        ByteBufCodecs.stringUtf8(64), PresetDeletePayload::name,
+                        PresetDeletePayload::new
+                );
+
+        public PresetDeletePayload {
+            name = clamp(name, 64);
+        }
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
+    /**
+     * Cliente -&gt; Servidor: uma das setas de reordenar.
+     *
+     * <p><b>Por que so o sentido e nao os dois indices:</b> "moveu uma casa para cima"
+     * e um evento, e um evento nao fica invalido se a lista mudou no meio do caminho.
+     * Trocar por dois indices transformaria cada clique em uma operacao que depende
+     * da lista que o cliente tinha, e um preset criado por comando no intervalo faria a
+     * seta trocar o preset errado.
+     */
+    public record PresetMovePayload(String name, boolean up) implements CustomPacketPayload {
+        public static final Type<PresetMovePayload> TYPE = new Type<>(TabletopRpg.id("preset_move"));
+        public static final StreamCodec<FriendlyByteBuf, PresetMovePayload> STREAM_CODEC =
+                StreamCodec.composite(
+                        ByteBufCodecs.stringUtf8(64), PresetMovePayload::name,
+                        ByteBufCodecs.BOOL, PresetMovePayload::up,
+                        PresetMovePayload::new
+                );
+
+        public PresetMovePayload {
+            name = clamp(name, 64);
+        }
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
+    /**
+     * Servidor -&gt; Cliente: resposta de qualquer operacao da tela de presets.
+     *
+     * <p><b>Por que o save e o delete compartilham a mesma resposta:</b> os dois
+     * precisam dizer a mesma coisa quando dá errado (nome vazio, formula invalida,
+     * nome repetido) e carregar a lista nova para a tela se atualizar. Uma resposta so
+     * reduz o numero de registros de pacote e deixa o tratame umto na tela.
+     */
+    public record PresetResultPayload(boolean ok, String message, List<RollPreset> presets)
+            implements CustomPacketPayload {
+        public static final Type<PresetResultPayload> TYPE =
+                new Type<>(TabletopRpg.id("preset_result"));
+        public static final StreamCodec<FriendlyByteBuf, PresetResultPayload> STREAM_CODEC =
+                new StreamCodec<>() {
+                    @Override
+                    public PresetResultPayload decode(FriendlyByteBuf buf) {
+                        boolean ok = buf.readBoolean();
+                        String message = ByteBufCodecs.stringUtf8(512).decode(buf);
+                        int size = buf.readVarInt();
+                        List<RollPreset> presets = new ArrayList<>();
+                        for (int i = 0; i < size; i++) {
+                            presets.add(RollPreset.STREAM_CODEC.decode(buf));
+                        }
+                        return new PresetResultPayload(ok, message, presets);
+                    }
+
+                    @Override
+                    public void encode(FriendlyByteBuf buf, PresetResultPayload payload) {
+                        buf.writeBoolean(payload.ok());
+                        ByteBufCodecs.stringUtf8(512).encode(buf, payload.message());
+                        List<RollPreset> presets = payload.presets();
+                        buf.writeVarInt(presets.size());
+                        for (RollPreset preset : presets) {
+                            RollPreset.STREAM_CODEC.encode(buf, preset);
+                        }
+                    }
+                };
+
+        public PresetResultPayload {
+            message = clamp(message, 512);
+            presets = presets == null ? List.of() : List.copyOf(presets);
+        }
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
+    /**
      * Servidor -&gt; Cliente: resposta do {@link PresetCreatePayload}.
      *
      * <p><b>Por que a resposta volta em texto e nao em chave + argumentos:</b> a tela
@@ -1034,6 +1213,14 @@ public final class RpgNetworking {
         PayloadTypeRegistry.playC2S().register(PresetCreatePayload.TYPE, PresetCreatePayload.STREAM_CODEC);
         PayloadTypeRegistry.playS2C().register(PresetCreateResultPayload.TYPE,
                 PresetCreateResultPayload.STREAM_CODEC);
+        // 01/10/2026: a tela de Presets (criar, editar, apagar, reordenar).
+        PayloadTypeRegistry.playS2C().register(PresetListPayload.TYPE, PresetListPayload.STREAM_CODEC);
+        PayloadTypeRegistry.playC2S().register(PresetSavePayload.TYPE, PresetSavePayload.STREAM_CODEC);
+        PayloadTypeRegistry.playC2S().register(PresetDeletePayload.TYPE, PresetDeletePayload.STREAM_CODEC);
+        PayloadTypeRegistry.playC2S().register(PresetMovePayload.TYPE, PresetMovePayload.STREAM_CODEC);
+        PayloadTypeRegistry.playS2C().register(PresetResultPayload.TYPE, PresetResultPayload.STREAM_CODEC);
+        PayloadTypeRegistry.playC2S().register(PresetListRequestPayload.TYPE,
+                PresetListRequestPayload.STREAM_CODEC);
         // 01/10/2026 (pagina 3 da ficha): a lista de magias.
         PayloadTypeRegistry.playC2S().register(SheetSpellPayload.TYPE, SheetSpellPayload.STREAM_CODEC);
         PayloadTypeRegistry.playS2C().register(DownedStatePayload.TYPE, DownedStatePayload.STREAM_CODEC);
@@ -1687,6 +1874,182 @@ public final class RpgNetworking {
             ServerPlayer player = context.player();
             ServerPlayNetworking.send(player, createPresetFromScreen(player, payload));
         });
+
+        // --- tela de Presets (01/10/2026) ---
+
+        ServerPlayNetworking.registerGlobalReceiver(PresetSavePayload.TYPE, (payload, context) ->
+                ServerPlayNetworking.send(context.player(), savePresetFromScreen(context.player(), payload)));
+
+        ServerPlayNetworking.registerGlobalReceiver(PresetDeletePayload.TYPE, (payload, context) ->
+                ServerPlayNetworking.send(context.player(),
+                        deletePresetFromScreen(context.player(), payload)));
+
+        ServerPlayNetworking.registerGlobalReceiver(PresetListRequestPayload.TYPE, (payload, context) ->
+                sendRollPresetList(context.player()));
+
+        ServerPlayNetworking.registerGlobalReceiver(PresetMovePayload.TYPE, (payload, context) -> {
+            ServerPlayer player = context.player();
+            movePresetFromScreen(player, payload);
+            // Reenvia a lista: a seta muda a ordem, e a tela que mandou o clique so
+            // tem a lista antiga. Sem este envio, a seta mexeria no servidor e a
+            // tela mostraria a ordem antiga ate fechar e abrir de novo.
+            ServerPlayNetworking.send(player, new PresetListPayload(RollPresetStore.list(player.getUUID())));
+        });
+    }
+
+    /**
+     * Cliente -&gt; Servidor: "me manda a lista".
+     *
+     * <p><b>Por que um pacote vazio em vez de a tela abrir com o que ela tem:</b> a
+     * lista da jogadora pode ter mudado desde a ultima vez que a tela esteve aberta
+     * (um preset criado por comando, ou editado e renomeado). O pedido e o que garante
+     * que a tela abra mostrando o estado real.
+     */
+    public record PresetListRequestPayload() implements CustomPacketPayload {
+        public static final Type<PresetListRequestPayload> TYPE =
+                new Type<>(TabletopRpg.id("preset_list_request"));
+        /** Nao transporta nada; o proprio tipo do pacote e a mensagem. */
+        public static final StreamCodec<FriendlyByteBuf, PresetListRequestPayload> STREAM_CODEC =
+                StreamCodec.unit(new PresetListRequestPayload());
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
+    /** Envia a lista de presets da jogadora, pedido pela abertura da tela. */
+    public static void sendRollPresetList(ServerPlayer player) {
+        if (player == null || player.connection == null) {
+            return;
+        }
+        ServerPlayNetworking.send(player, new PresetListPayload(RollPresetStore.list(player.getUUID())));
+    }
+
+    /**
+     * Salva o preset pedido pela tela, criando ou editando.
+     *
+     * <p><b>Por que o rename devolve item novo e o item antigo fica:</b> decisao do
+     * usuario em 01/10/2026. O item carrega o nome numa tag propria, entao editar o
+     * preset nao muda o item que ja esta na mochila. A opcao escolhida foi reentregar
+     * o item atualizado e avisar que o antigo continua la -- o preco e um item
+     * duplicado, e o ganho e que o item novo nunca mostra o nome velho.
+     *
+     * <p>A posicao e mantida pelo {@link RollPresetStore#put}: renomear nao manda o
+     * preset para o fim da lista.
+     */
+    private static PresetResultPayload savePresetFromScreen(ServerPlayer player, PresetSavePayload payload) {
+        String name = payload.name().trim();
+        if (name.isEmpty()) {
+            return presetRefuse(player, "message.tabletoprpg.preset_name_required");
+        }
+
+        RollPreset preset;
+        try {
+            preset = RollPreset.create(name, payload.formula(), payload.colorId());
+        } catch (RollPreset.PresetException e) {
+            // Formula ou cor invalida: se acusa aqui, com o texto do RollPreset, que
+            // e o mesmo que o comando mostraria.
+            return presetRefuse(player, "message.tabletoprpg.preset_create_failed", e.getMessage());
+        }
+
+        UUID uuid = player.getUUID();
+        boolean editing = payload.originalName() != null && !payload.originalName().isBlank();
+        String originalKey = editing ? RollPreset.normalizeKey(payload.originalName()) : "";
+        RollPreset original = editing
+                ? RollPresetStore.find(uuid, payload.originalName()).orElse(null) : null;
+
+        if (editing && original == null) {
+            // A tela tinha um preset na tela e o servidor nao tem mais (deletado por
+            // comando, por exemplo). Dizer isso e melhor que criar um preset novo
+            // sem a jogadora pedir.
+            return presetRefuse(player, "message.tabletoprpg.preset_not_found", payload.originalName());
+        }
+
+        // Colisao de nome: so recusa se o dono da chave for OUTRO preset. Editar sem
+        // mudar o nome tem que funcionar, e e o caso comum de arrumar a cor.
+        RollPreset conflict = RollPresetStore.find(uuid, preset.key()).orElse(null);
+        if (conflict != null && (original == null || !conflict.key().equals(original.key()))) {
+            return presetRefuse(player, "message.tabletoprpg.preset_already_exists", conflict.name());
+        }
+        if (original == null && RollPresetStore.count(uuid) >= RollPresetStore.MAX_PRESETS) {
+            return presetRefuse(player, "message.tabletoprpg.preset_limit",
+                    String.valueOf(RollPresetStore.MAX_PRESETS));
+        }
+
+        // Renomear e trocar a chave: o preset velho sai e o novo entra no lugar dele.
+        // Sem este passo, o preset renomeado ficaria duplicado, com o nome novo em
+        // cima do velho.
+        if (original != null && !original.key().equals(preset.key())) {
+            RollPresetStore.remove(uuid, original.name());
+        }
+        RollPresetStore.put(uuid, preset);
+
+        // Item: sempre no save. Criar precisa (o comando cria e entrega), e renomear
+        // precisa porque o item antigo mostra o nome velho. Editar sem renomear
+        // entrega tambem, para o item pegar a cor nova.
+        boolean gaveItem = ModItems.giveRollPreset(player, preset) != null;
+
+        if (!gaveItem) {
+            // Sem espaco: o preset foi SALVO, so o item nao coube. Recusa com o aviso
+            // do inventario cheio e a lista atualizada, para a tela nao ficar
+            // achando que perdeu o preset.
+            return new PresetResultPayload(false,
+                    translatableText("message.tabletoprpg.preset_no_room"),
+                    RollPresetStore.list(uuid));
+        }
+
+        String message = original != null && !original.key().equals(preset.key())
+                ? translatableText("message.tabletoprpg.preset_renamed",
+                        original.name(), preset.name())
+                : original != null
+                ? translatableText("message.tabletoprpg.preset_updated",
+                        preset.name(), preset.formula(), preset.color().displayName())
+                : translatableText("message.tabletoprpg.preset_created",
+                        preset.name(), preset.formula(), preset.color().displayName());
+        return new PresetResultPayload(true, message, RollPresetStore.list(uuid));
+    }
+
+    /**
+     * Apaga o preset pedido pela tela.
+     *
+     * <p><b>O item fica na mochila</b>: mesma decisao do comando e do comportamento que
+     * a jogadora ja conhece desde 01/10/2026. Usar o item depois mostra "preset nao
+     * existe".
+     */
+    private static PresetResultPayload deletePresetFromScreen(ServerPlayer player,
+                                                              PresetDeletePayload payload) {
+        UUID uuid = player.getUUID();
+        RollPreset removed = RollPresetStore.remove(uuid, payload.name()).orElse(null);
+        if (removed == null) {
+            return presetRefuse(player, "message.tabletoprpg.preset_not_found", payload.name());
+        }
+        return new PresetResultPayload(true,
+                translatableText("message.tabletoprpg.preset_deleted", removed.name()),
+                RollPresetStore.list(uuid));
+    }
+
+    /**
+     * Aplica uma seta de reordenar.
+     *
+     * <p>Indice fora da faixa e ignorar, nao falhar: o clique veio de uma lista que
+     * o cliente tinha, e se a lista do servidor mudou no meio do caminho (um preset
+     * criado por comando), mover o preset pela posicao dele por nome e o que mantem
+     * a seta mexendo no preset certo.
+     */
+    private static void movePresetFromScreen(ServerPlayer player, PresetMovePayload payload) {
+        int index = RollPresetStore.indexOf(player.getUUID(), payload.name());
+        if (index < 0) {
+            return;
+        }
+        int target = payload.up() ? index - 1 : index + 1;
+        RollPresetStore.move(player.getUUID(), index, target);
+    }
+
+    /** Recusa com a lista atual: a tela recobra o estado sem reabrir. */
+    private static PresetResultPayload presetRefuse(ServerPlayer player, String key, Object... args) {
+        return new PresetResultPayload(false, translatableText(key, args),
+                RollPresetStore.list(player.getUUID()));
     }
 
     /**
