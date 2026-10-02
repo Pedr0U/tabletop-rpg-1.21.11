@@ -8389,3 +8389,20 @@ O implementador aceitou duas pendencias em vez de resolver: (1) `mouseClicked` n
 inconsistente) — corrigi; (2) a faixa da barra cobre 4 px da borda direita dos botoes do cabecalho — **ainda
 assim**. Ele tambem rodou `javac` sem classpath e contou "100 erros" irrelevantes, e checou chaves/parenteses em
 vez de compilar de verdade. **Chaves balanceadas nao provam que compila: rode o build.**
+
+### Scanner de nome precisa conhecer os OPERADORES do parser (BUG, 02/10/2026)
+FormulaResolver.scanWords andava com isDiceAt ate o fim do d6 e caia no dl do
+dl1: nao achava atributo chamado dl, devolvia a palavra e o preset era recusado com
+unknown attribute 'dl'. **isDiceAt so olha o que vem DEPOIS do d, e depois do dado
+vem o operador** (kh, dl). **Licao:** quem faz scanner de texto sobre a grammatica de
+outro precisa ter uma lista de OPERADORES, nao so de dados e de nomes. dl, kh, ++
+sao palavra que parece atributo. **Como pegar:** teste de preset com a formula mais
+complicada que a jogadora realmente usa, nao com 1d6+Forca.
+**Prova:** o teste createAcceptsRepeatAndKeepDrop falhou com unknown attribute 'dl'
+antes do isKeepDropAt existir.
+
+### O commit do colega nao e a fonte do bug que ele disse ter arrumado (02/10/2026)
+A jogadora avisou que o commit do amigo resolvia 6#2d6dl1 no preset. git show --stat
+do commit mostrou so StatusScreen.java: **verificar a afirmacao no diff antes de
+assumir**. O bug era de um commit meu, tres fases antes. Se eu tivesse confiado na
+frase, o preset continuaria quebrado no push.
