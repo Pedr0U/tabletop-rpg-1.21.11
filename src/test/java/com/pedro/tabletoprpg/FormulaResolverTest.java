@@ -11,7 +11,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Testes do {@link FormulaResolver}: a troca de nome de atributo/pericia por numero.
+ * Testes do {@link FormulaResolver}: a troca do nome de um atributo pelo numero.
  *
  * <p><b>Por que estes testes existem.</b> A resolucao roda no meio do caminho da
  * rolagem, entao um erro dela nao quebra a compilacao: vira preset que rola o numero
@@ -22,7 +22,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class FormulaResolverTest {
 
-    /** O modelo padrao: strength/dexterity/... e pericia_1..18 (SheetModel:268-293). */
+    /** O modelo padrao: strength/dexterity/... (SheetModel:268-293). */
     private final SheetModel model = SheetModel.defaults();
 
     // --- a regra principal: nome vira o valor da ficha ---
@@ -32,14 +32,14 @@ class FormulaResolverTest {
     void resolvesAttributeByName() throws Exception {
         // Decisao do usuario em 01/10/2026: valor CRU, nao modificador. Forca 14
         // soma 14.
-        SheetData sheet = sheetWithAttribute("strength", 14);
+        SheetData sheet = sheetWith("strength", 14);
         assertEquals("1d6+14", FormulaResolver.resolve("1d6+Strength", sheet, model));
     }
 
     @Test
     @DisplayName("o mesmo atributo casa por id, por label e por nome")
     void resolvesAttributeByIdLabelOrName() throws Exception {
-        SheetData sheet = sheetWithAttribute("strength", 3);
+        SheetData sheet = sheetWith("strength", 3);
         // Os tres nomes do AttributeDef padrao: id "strength", label "STR", name
         // "Strength". A jogadora digita o que lembrar.
         assertEquals("7+3", FormulaResolver.resolve("7+strength", sheet, model));
@@ -51,25 +51,22 @@ class FormulaResolverTest {
     @DisplayName("o nome casa sem acento e sem diferenciar maiuscula")
     void resolvesIgnoringAccentAndCase() throws Exception {
         // O modelo padrao esta em ingles, entao o teste do acento precisa de um
-        // modelo com acento de verdade -- senao "FOrCa" seria recusado por nao
+        // modelo com acento de verdade -- senao "forca" seria recusado por nao
         // existir, e o teste passaria pelo motivo errado.
         SheetModel accentModel = model.withAttributeText("strength", "FOR", "Força");
-        SheetData sheet = sheetWithAttribute("strength", 5);
+        SheetData sheet = sheetWith("strength", 5);
         assertEquals("1d8+5", FormulaResolver.resolve("1d8+Força", sheet, accentModel));
         assertEquals("1d8+5", FormulaResolver.resolve("1d8+forca", sheet, accentModel));
         assertEquals("1d8+5", FormulaResolver.resolve("1d8+FORCA", sheet, accentModel));
     }
 
     @Test
-    @DisplayName("+Pericia soma o valor da pericia, e +Pericia+Strength soma os dois")
-    void resolvesPericiaAndCombinesWithAttribute() throws Exception {
-        // Decisao do usuario: a pericia e token independente. Quem quiser o padrao
-        // classico de RPG escreve os dois nomes na formula.
-        SheetData sheet = sheetWith("strength", 14, "pericia_4", "Athletics", 3);
-        // O resolve devolve a FORMULA resolvida, nao a soma: quem soma e o
-        // DiceFormula depois. Por isso o esperado aqui e "3+14", e nao "17".
-        assertEquals("3", FormulaResolver.resolve("Athletics", sheet, model));
-        assertEquals("3+14", FormulaResolver.resolve("Athletics+Strength", sheet, model));
+    @DisplayName("o mesmo atributo pode aparecer mais de uma vez")
+    void sumsRepeatedAttribute() throws Exception {
+        // Sem deduplicar de proposito: "+Strength+Strength" vale o dobro, e e o que a
+        // jogadora escreveu.
+        SheetData sheet = sheetWith("strength", 7);
+        assertEquals("1d6+7+7", FormulaResolver.resolve("1d6+Strength+Strength", sheet, model));
     }
 
     // --- o scanner nao pode confundir dado com nome ---
@@ -80,7 +77,7 @@ class FormulaResolverTest {
         // Este e o teste que impede o bug mais provavel: se 'd' fosse resolvido, a
         // formula viraria lixo e o preset pararia de rolar. O esperado mantem o
         // "d20" intacto -- o resolve NAO converte dado em numero.
-        SheetData sheet = sheetWithAttribute("strength", 2);
+        SheetData sheet = sheetWith("strength", 2);
         assertEquals("2d6+d20+2", FormulaResolver.resolve("2d6+d20+Strength", sheet, model));
         assertEquals("d20", FormulaResolver.resolve("d20", sheet, model));
     }
@@ -88,17 +85,49 @@ class FormulaResolverTest {
     @Test
     @DisplayName("minuscula e maiscula do d contam igual: D6 continua dado")
     void keepsUppercaseDiceIntact() throws Exception {
-        SheetData sheet = sheetWithAttribute("strength", 1);
+        SheetData sheet = sheetWith("strength", 1);
         assertEquals("D20+1", FormulaResolver.resolve("D20+Strength", sheet, model));
     }
 
     @Test
-    @DisplayName("nomes dentro de parenteses e com sinal negativo resolvem")
-    void resolvesInsideParenthesesAndWithMinus() throws Exception {
-        SheetData sheet = sheetWith("strength", 4, "pericia_2", "Animal Handling", 2);
-        // Espaco dentro do nome e normalizado, e o parentese e preservado porque o
+    @DisplayName("atributo com espaco no nome casa inteiro, e dentro de parenteses")
+    void resolvesMultiWordAttributeInsideParentheses() throws Exception {
+        // O scanner tenta o trecho mais longo primeiro: "Animal Handling" precisa casar
+        // inteiro, e nao parar no espaco e recusar. O parentese e preservado porque o
         // scanner so reescreve o trecho da palavra.
-        assertEquals("(4+2)", FormulaResolver.resolve("(Strength+Animal Handling)", sheet, model));
+        SheetModel spaced = model.withAttributeText("dexterity", "DEX", "Animal Handling");
+        SheetData sheet = sheetOf("dexterity", 4, "strength", 2);
+        // "(Strength+Animal Handling)" -> "(2+4)": Forca vale 2 e Dexterity vale 4.
+        assertEquals("(2+4)", FormulaResolver.resolve("(Strength+Animal Handling)", sheet, spaced));
+        // E o espaco no MEIO da formula nao pode entrar no nome. O espaco continua
+        // na string: quem remove e o `RollPreset.create`, nao o `resolve`.
+        assertEquals("2d6 + 4", FormulaResolver.resolve("2d6 + Strength", sheetWith("strength", 4), model));
+    }
+
+    // --- a pericia saiu do resolvido (02/10/2026) ---
+
+    @Test
+    @DisplayName("nome de pericia e recusado: a formula aceita so atributo")
+    void rejectsPericiaName() {
+        // Decisao do usuario em 02/10/2026: a pericia saiu do FormulaResolver. "Athletics"
+        // e nome de pericia no modelo padrao, entao agora e um nome desconhecido e a
+        // mensagem precisa dizer isso, em vez de somar a pericia em silencio.
+        SheetData sheet = sheetWith("strength", 14);
+        FormulaResolver.ResolveException error = assertThrows(FormulaResolver.ResolveException.class,
+                () -> FormulaResolver.resolve("1d6+Athletics", sheet, model));
+        assertTrue(error.getMessage().contains("Athletics"), error.getMessage());
+        assertTrue(error.getMessage().contains("unknown attribute"), error.getMessage());
+    }
+
+    @Test
+    @DisplayName("o placeholder tambem recusa nome de pericia")
+    void placeholderRejectsPericiaName() {
+        // O `placeholderFormula` e o que o `RollPreset.create` usa para validar no
+        // Save. Se ele ainda aceitasse pericia, o preset passaria pelo save e a
+        // rolagem recusaria depois -- o preset pareceria valido na tela.
+        FormulaResolver.ResolveException error = assertThrows(FormulaResolver.ResolveException.class,
+                () -> FormulaResolver.placeholderFormula("1d6+Athletics", model));
+        assertTrue(error.getMessage().contains("Athletics"), error.getMessage());
     }
 
     // --- recusas ---
@@ -106,7 +135,7 @@ class FormulaResolverTest {
     @Test
     @DisplayName("nome que nao existe e recusado, com a lista de nomes validos")
     void rejectsUnknownName() {
-        SheetData sheet = sheetWithAttribute("strength", 14);
+        SheetData sheet = sheetWith("strength", 14);
         // Nome inventado e SO com letra: o scanner recusa por trecho de letra, entao
         // "Carisma999" seria recusado como "Carisma" e a mensagem diria outra coisa.
         // O que se quer testar aqui e o nome inteiro desconhecido.
@@ -123,7 +152,7 @@ class FormulaResolverTest {
     void rejectsSingleLetter() {
         // "XYZ" nao casa com nenhum nome, e o scanner emite a letra solta para o
         // erro citar algo que a jogadora possa corrigir.
-        SheetData sheet = sheetWithAttribute("strength", 14);
+        SheetData sheet = sheetWith("strength", 14);
         FormulaResolver.ResolveException error = assertThrows(FormulaResolver.ResolveException.class,
                 () -> FormulaResolver.resolve("1d6+XYZ", sheet, model));
         assertTrue(error.getMessage().contains("XYZ"), error.getMessage());
@@ -139,40 +168,70 @@ class FormulaResolverTest {
     }
 
     @Test
-    @DisplayName("pericia que a ficha nao tem e recusada, nao somada como zero")
-    void rejectsPericiaMissingFromSheet() {
-        // Sheet SEM pericias: `sheetWithAttribute` cria as 18 do modelo, entao aqui
-        // a lista vai vazia de proposito.
-        SheetData sheet = sheetWithoutPericias(14);
+    @DisplayName("atributo que a ficha nao tem e recusado, nao somado como zero")
+    void rejectsAttributeMissingFromSheet() {
+        // Sheet sem o atributo STRENGTH. Zero silencioso daria um preset que rola
+        // errado sempre que a ficha nao tiver o atributo -- e nao haveria pista de
+        // que o preset e que esta quebrado.
+        SheetData sheet = sheetMissing("strength");
         FormulaResolver.ResolveException error = assertThrows(FormulaResolver.ResolveException.class,
-                () -> FormulaResolver.resolve("Athletics", sheet, model));
-        assertTrue(error.getMessage().contains("Athletics"), error.getMessage());
+                () -> FormulaResolver.resolve("1d6+Strength", sheet, model));
+        assertTrue(error.getMessage().contains("Strength"), error.getMessage());
     }
 
     @Test
     @DisplayName("formula com mais nomes que o teto e recusada")
     void rejectsTooManyNames() {
         StringBuilder formula = new StringBuilder("1d6");
-        SheetData sheet = sheetWithAttribute("strength", 1);
+        SheetData sheet = sheetWith("strength", 1);
         for (int i = 0; i <= FormulaResolver.MAX_TOKENS; i++) {
             formula.append("+Strength");
         }
-        assertThrows(FormulaResolver.ResolveException.class,
+        FormulaResolver.ResolveException error = assertThrows(FormulaResolver.ResolveException.class,
                 () -> FormulaResolver.resolve(formula.toString(), sheet, model));
+        assertTrue(error.getMessage().contains(String.valueOf(FormulaResolver.MAX_TOKENS)),
+                error.getMessage());
     }
 
-    // --- colisao de nome ---
+    @Test
+    @DisplayName("o placeholder tambem respeita o teto de nomes")
+    void placeholderRespectsMaxTokens() {
+        StringBuilder formula = new StringBuilder("1d6");
+        for (int i = 0; i <= FormulaResolver.MAX_TOKENS; i++) {
+            formula.append("+Strength");
+        }
+        // Sem este teto, o save aceitaria uma formula que a rolagem recusaria: o
+        // preset pareceria valido na tela e falharia toda vez que fosse usado.
+        FormulaResolver.ResolveException error = assertThrows(FormulaResolver.ResolveException.class,
+                () -> FormulaResolver.placeholderFormula(formula.toString(), model));
+        assertTrue(error.getMessage().contains(String.valueOf(FormulaResolver.MAX_TOKENS)),
+                error.getMessage());
+    }
+
+    // --- o placeholder: validacao de estrutura no save ---
 
     @Test
-    @DisplayName("quando atributo e pericia tem o mesmo nome, o atributo vence")
-    void attributeWinsNameCollision() throws Exception {
-        // A regra esta no javadoc da classe: sem ela, o mesmo preset resolveria para
-        // valores diferentes conforme a ordem da tabela.
-        SheetModel colliding = model.withAttributeText("strength", "ST", "Insight");
-        SheetData sheet = sheetWith("strength", 9, "pericia_7", "Insight", 2);
-        // "Insight" e nome de uma pericia no modelo padrao; aqui virou nome do
-        // atributo. O atributo tem de ganhar.
-        assertEquals("9", FormulaResolver.resolve("Insight", sheet, colliding));
+    @DisplayName("o placeholder troca o nome por 0 e mantem dados e sinais")
+    void placeholderKeepsStructure() throws Exception {
+        // E o que o `DiceFormula` consegue julgar: `1d6+0` e uma rolagem valida,
+        // enquanto `1d6+Strength` nao e.
+        assertEquals("1d6+0", FormulaResolver.placeholderFormula("1d6+Strength", model));
+        assertEquals("2d6+d20+0-0", FormulaResolver.placeholderFormula("2d6+d20+Strength-Dex", model));
+        assertEquals("(0+0)", FormulaResolver.placeholderFormula("(Strength+Dex)", model));
+        assertEquals("1d20+5", FormulaResolver.placeholderFormula("1d20+5", model));
+    }
+
+    @Test
+    @DisplayName("o placeholder sobrevive ao DiceFormula, e e isso que o save usa")
+    void placeholderIsParseableByDiceFormula() throws Exception {
+        // Este e o teste que amarra o save com a rolagem: a string que o
+        // `RollPreset.create` entrega ao parser tem de passar, senao `1d6+Strength`
+        // seria recusado como sintaxe invalida e o recurso ficaria inalcancavel.
+        String placeholder = FormulaResolver.placeholderFormula("1d6+Strength", model);
+        DiceFormula.Outcome outcome = DiceFormula.parse(placeholder).evaluate(sides -> 3);
+        // O 0 do placeholder entra como numero: 3 + 0 = 3. O que importa aqui e que
+        // o TOTAL tem de bater com a formula, e nao virar lixo.
+        assertEquals(3, outcome.total());
     }
 
     // --- a saida ainda e uma rolagem valida ---
@@ -182,95 +241,97 @@ class FormulaResolverTest {
     void resolvedFormulaStillParses() throws Exception {
         // Este e o teste que amarra as duas metades: nao basta trocar o nome, a
         // formula resolvida tem de continuar sendo rolavel de verdade.
-        SheetData sheet = sheetWith("strength", 14, "pericia_4", "Athletics", 3);
-        String resolved = FormulaResolver.resolve("2d6+Strength+Athletics", sheet, model);
-        assertEquals("2d6+14+3", resolved);
+        SheetData sheet = sheetWith("strength", 14);
+        String resolved = FormulaResolver.resolve("2d6+Strength+Dex", sheet, model);
+        assertEquals("2d6+14+0", resolved);
         // `evaluate` devolve sempre 3 (1+2), entao 2d6 da 6. A soma dos numeros
-        // resolvidos entra inteira: 6 + 14 + 3 = 23. O valor da pericia e do
-        // atributo tem de chegar no total, e nao ser descartado.
+        // resolvidos entra inteira: 6 + 14 = 20. O valor do atributo tem de chegar
+        // no total, e nao ser descartado.
         DiceFormula.Outcome outcome = DiceFormula.parse(resolved).evaluate(sides -> 3);
-        assertEquals(23, outcome.total());
+        assertEquals(20, outcome.total());
     }
 
-    // --- tokens() ---
+    // --- dois atributos com o mesmo nome ---
 
     @Test
-    @DisplayName("tokens lista os nomes usados, na ordem, sem deduplicar")
-    void listsTokensInOrder() throws Exception {
-        SheetData sheet = sheetWith("strength", 14, "pericia_4", "Athletics", 3);
-        // Sem deduplicar de proposito: "+Strength+Strength" vale o dobro, e a tela
-        // precisa mostrar as duas ocorrencias.
-        assertEquals(List.of("Strength", "Athletics", "Strength"),
-                FormulaResolver.tokens("Strength+Athletics+Strength", model));
-    }
-
-    @Test
-    @DisplayName("tokens de formula so com numeros devolve lista vazia")
-    void tokensOfPlainFormulaIsEmpty() throws Exception {
-        assertTrue(FormulaResolver.tokens("1d20+5", model).isEmpty());
-    }
-
-    @Test
-    @DisplayName("tokens normaliza o nome: STR aparece como Strength")
-    void tokensShowDisplayName() throws Exception {
-        assertEquals(List.of("Strength"), FormulaResolver.tokens("1d6+STR", model));
+    @DisplayName("quando dois atributos têm o mesmo nome, o primeiro do modelo vence")
+    void firstAttributeWinsDuplicateName() throws Exception {
+        // O Mestre pode renomear dois atributos para a mesma coisa. Sem uma regra
+        // fixa, o mesmo preset resolveria para valores diferentes conforme a ordem
+        // da tabela; `putIfAbsent` faz o primeiro do modelo ser o dono da chave.
+        SheetModel colliding = model.withAttributeText("dexterity", "DE", "Insight");
+        SheetData sheet = sheetOf("dexterity", 2, "strength", 9);
+        assertEquals("2", FormulaResolver.resolve("Insight", sheet, colliding));
     }
 
     // --- ficha de teste ---
 
     /**
-     * Ficha com um atributo em 0 e uma pericia em 0.
+     * Ficha com um atributo no valor pedido e todos os outros em zero.
      *
      * <p><b>Por que comecar em tudo zero:</b> o teste tem de mudar so o campo que
-     * esta exercitando. Se a ficha ja viesse com Forca 12, um teste de pericia
-     * passaria por causa do atributo e nao por causa da pericia.
+     * esta exercitando. Se a ficha ja viesse com Forca 12, um teste passaria por
+     * causa do atributo que nao esta em foco.
      */
-    private SheetData sheetWithAttribute(String attributeId, int value) {
-        return sheetWith(attributeId, value, null, null, 0);
+    private SheetData sheetWith(String attributeId, int value) {
+        return sheetOf(new String[]{attributeId}, new int[]{value});
     }
 
-    private SheetData sheetWith(String attributeId, int attributeValue,
-                                String periciaId, String periciaName, int periciaValue) {
-        // A pericia entra no lugar da que o modelo ja define, e NAO e append: um
-        // append criaria o mesmo id duas vezes, e `SheetData.sanitizePericias`
-        // descarta a duplicata -- o teste passaria por causa da pericia com valor 0
-        // em vez da que ele montou.
-        List<SheetData.Pericia> pericias = new ArrayList<>();
-        for (SheetModel.PericiaDef def : model.pericias()) {
-            boolean isTarget = periciaId != null && def.id().equals(periciaId);
-            pericias.add(new SheetData.Pericia(def.id(),
-                    isTarget ? periciaName : def.name(),
-                    isTarget ? periciaValue : 0,
-                    def.attributeId()));
-        }
-        return sheet(attributeId, attributeValue, pericias);
-    }
-
-    /** Ficha com as seis pericias do modelo ausentes: so o atributo interessa. */
-    private SheetData sheetWithoutPericias(int attributeValue) {
-        return sheet("strength", attributeValue, List.of());
-    }
-
-    private SheetData sheet(String attributeId, int attributeValue,
-                            List<SheetData.Pericia> pericias) {
-
-        List<SheetData.Attributes.AttributeValue> values = new ArrayList<>();
+    /**
+     * Ficha sem o atributo pedido: o id simplesmente nao aparece na lista.
+     *
+     * <p>Diferente de {@link #sheetWith} com valor zero: aqui o id nao existe na
+     * ficha. Os dois casos precisam dar recusa diferente -- "nao tem o que somar" e
+     * "tem, mas vale zero" -- e um helper so nao separa os dois.
+     */
+    private SheetData sheetMissing(String attributeId) {
+        List<SheetData.Attributes.AttributeValue> out = new ArrayList<>();
         for (SheetModel.AttributeDef def : model.attributes()) {
-            values.add(new SheetData.Attributes.AttributeValue(def.id(),
-                    def.id().equals(attributeId) ? attributeValue : 0));
+            if (def.id().equals(attributeId)) {
+                continue;
+            }
+            out.add(new SheetData.Attributes.AttributeValue(def.id(), 0));
         }
+        return sheet(out);
+    }
 
+    /**
+     * Ficha com dois atributos nos valores pedidos, e o resto em zero.
+     *
+     * <p>Os ids sao percorridos na ordem do modelo, e nao na ordem dos argumentos:
+     * assim a ficha fica igual a que o jogo monta, e o teste nao depende de uma
+     * ordem de insercao que so ele produz.
+     */
+    private SheetData sheetOf(String firstId, int firstValue, String secondId, int secondValue) {
+        return sheetOf(new String[]{firstId, secondId}, new int[]{firstValue, secondValue});
+    }
+
+    private SheetData sheetOf(String[] attributeIds, int[] values) {
+        List<SheetData.Attributes.AttributeValue> out = new ArrayList<>();
+        for (SheetModel.AttributeDef def : model.attributes()) {
+            int value = 0;
+            for (int i = 0; i < attributeIds.length; i++) {
+                if (def.id().equals(attributeIds[i])) {
+                    value = values[i];
+                }
+            }
+            out.add(new SheetData.Attributes.AttributeValue(def.id(), value));
+        }
+        return sheet(out);
+    }
+
+    private SheetData sheet(List<SheetData.Attributes.AttributeValue> values) {
         // Constroi a ficha pelo construtor canonico, com os defaults dos outros
-        // grupos. O que o teste mexe e so `attributes` e `pericias`; se aparecer
-        // um campo novo no record, este `new` quebra na hora em vez de devolver
-        // uma ficha silenciosamente errada.
+        // grupos. O que o teste mexe e so `attributes`; se aparecer um campo novo no
+        // record, este `new` quebra na hora em vez de devolver uma ficha
+        // silenciosamente errada.
         return new SheetData(
                 new SheetData.Identity("Heroi", "", "", "", "Tester", "", ""),
                 SheetData.Vitals.defaults(),
                 SheetData.Progress.defaults(),
                 new SheetData.Attributes(values),
                 List.of(),
-                pericias,
+                List.of(),
                 SheetModel.DEFAULT_ATTRIBUTE_VALUE_MIN,
                 SheetModel.DEFAULT_ATTRIBUTE_VALUE_MAX,
                 SheetModel.DEFAULT_PERICIA_VALUE_MAX,

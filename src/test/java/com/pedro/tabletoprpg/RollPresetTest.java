@@ -61,6 +61,93 @@ class RollPresetTest {
                 () -> RollPreset.create("Ruim", "banana", "red"));
     }
 
+    // --- formula com nome de atributo (02/10/2026) ---
+
+    @Test
+    @DisplayName("create aceita 1d6+Strength e guarda a formula com o nome")
+    void createAcceptsAttributeName() throws Exception {
+        // Este e o teste do bug que a jogadora reportou. A ordem das checagens em
+        // `create` importava: o `DiceFormula.parse` rodava PRIMEIRO, sobre a formula
+        // crua, e recusava `1d6+Strength` como sintaxe invalida -- o `FormulaResolver`
+        // nunca chegava a ser chamado e o recurso ficava inalcancavel pela tela.
+        RollPreset preset = RollPreset.create("Dano", "1d6+Strength", "red");
+        assertEquals("Dano", preset.name());
+        assertEquals("1d6+Strength", preset.formula());
+    }
+
+    @Test
+    @DisplayName("o preset guarda o nome, nunca o valor nem o placeholder")
+    void createKeepsTheNameNotTheValue() throws Exception {
+        // Se guardasse o valor, o preset envelheceria junto com a ficha; se guardasse
+        // o placeholder, a rolagem somaria zero sempre.
+        RollPreset preset = RollPreset.create("Dano", "1d6+Strength", "white");
+        assertFalse(preset.formula().contains("0"), preset.formula());
+        assertFalse(preset.formula().contains("14"), preset.formula());
+    }
+
+    @Test
+    @DisplayName("create aceita o nome por id, por label e sem acento")
+    void createAcceptsEverySpellingOfTheAttribute() throws Exception {
+        assertEquals("1d6+strength", RollPreset.create("A", "1d6+strength", "white").formula());
+        assertEquals("1d6+STR", RollPreset.create("B", "1d6+STR", "white").formula());
+        // O modelo padrao esta em ingles, entao o acento so e testavel com um modelo
+        // que o tenha -- "forca" seria recusado por nao existir, e o teste passaria
+        // pelo motivo errado. `SheetModelHolder` e um campo estatico: o `set` volta
+        // para o padrao no fim, senao os testes seguintes herdariam o modelo trocado.
+        SheetModelHolder.set(SheetModel.defaults().withAttributeText("strength", "FOR", "Força"));
+        try {
+            assertEquals("1d6+Força", RollPreset.create("C", "1d6+Força", "white").formula());
+            assertEquals("1d6+FORCA", RollPreset.create("D", "1d6+FORCA", "white").formula());
+        } finally {
+            SheetModelHolder.set(SheetModel.defaults());
+        }
+    }
+
+    @Test
+    @DisplayName("create recusa nome de atributo que nao existe, com a lista de validos")
+    void createRejectsUnknownAttributeName() {
+        RollPreset.PresetException error = assertThrows(RollPreset.PresetException.class,
+                () -> RollPreset.create("Ruim", "1d6+CarismaMaximo", "red"));
+        assertTrue(error.getMessage().contains("CarismaMaximo"), error.getMessage());
+        assertTrue(error.getMessage().contains("Valid names"), error.getMessage());
+    }
+
+    @Test
+    @DisplayName("create recusa nome de pericia: a formula aceita so atributo")
+    void createRejectsPericiaName() {
+        // Decisao do usuario em 02/10/2026. `Athletics` e pericia no modelo padrao,
+        // entao agora e recusado no save -- e nao aceito aqui para so dar erro na
+        // rolagem, depois que a jogadora achou que o preset estava valido.
+        RollPreset.PresetException error = assertThrows(RollPreset.PresetException.class,
+                () -> RollPreset.create("Ruim", "1d6+Athletics", "red"));
+        assertTrue(error.getMessage().contains("Athletics"), error.getMessage());
+    }
+
+    @Test
+    @DisplayName("o erro de estrutura cita a formula que a jogadora digitou, nao o placeholder")
+    void structureErrorQuotesTheTypedFormula() {
+        // O parser so viu `1d6+0+`. Se a mensagem repetisse isso, a jogadora iria
+        // procurar um zero que nunca escreveu. E o problema aqui e de leitura: o
+        // ponto final do sinal e um erro comum de digitar.
+        RollPreset.PresetException error = assertThrows(RollPreset.PresetException.class,
+                () -> RollPreset.create("Ruim", "1d6+Strength+", "red"));
+        assertTrue(error.getMessage().contains("1d6+Strength+"), error.getMessage());
+        assertFalse(error.getMessage().contains("1d6+0+"), error.getMessage());
+    }
+
+    @Test
+    @DisplayName("create nao aceita formula com mais nomes que o teto do resolver")
+    void createRejectsTooManyAttributeNames() {
+        StringBuilder formula = new StringBuilder("1d6");
+        for (int i = 0; i <= FormulaResolver.MAX_TOKENS; i++) {
+            formula.append("+Strength");
+        }
+        // Sem o teto aqui, o save aceitaria e a rolagem recusaria a toda hora: o
+        // preset pareceria valido na tela e falharia toda vez que fosse usado.
+        assertThrows(RollPreset.PresetException.class,
+                () -> RollPreset.create("Longa", formula.toString(), "red"));
+    }
+
     @Test
     @DisplayName("create remove os espacos da formula, como a rolagem da tela mostra")
     void createStripsFormulaSpaces() throws Exception {

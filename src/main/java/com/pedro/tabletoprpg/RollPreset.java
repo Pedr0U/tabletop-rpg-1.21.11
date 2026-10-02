@@ -126,28 +126,46 @@ public record RollPreset(String name, String formula, String colorId) {
                     + " characters (got " + formula.length() + ")");
         }
 
-        // A formula passa pelo MESMO parser que a rolagem usa. Se o DiceFormula recusar,
-        // a SyntaxException dele ja e uma frase pronta para o chat.
-        try {
-            DiceFormula.parse(formula);
-        } catch (DiceFormula.SyntaxException e) {
-            throw new PresetException(e.getMessage());
-        }
-
         // Nomes de atributo e pericia sao conferidos AQUI, e nao na hora da rolagem.
-        // O motivo e a mesma razao da validacao acima: se o erro so aparecesse ao
-        // rolar, a jogadora descobriria o nome errado tarde demais, e o preset
-        // pareceria valido na tela. Recusar no Save com a mensagem do
+        // O motivo e a mesma razao da validacao de estrutura logo abaixo: se o erro so
+        // aparecesse ao rolar, a jogadora descobriria o nome errado tarde demais, e o
+        // preset pareceria valido na tela. Recusar no Save com a mensagem do
         // FormulaResolver e o que mantem as duas portas (comando e tela) dizendo a
         // mesma coisa.
         //
-        // O `sheet` e null de proposito: esta checagem e so de NOME. Se o id existir
+        // O `sheet` e null de proposito: aqui so se confere o NOME. Se o id existir
         // no modelo mas a ficha da jogadora nao tiver o valor, isso e problema da
         // ficha e nao do preset -- e a resolucao recusa com o aviso certo na rolagem.
+        String forParsing;
         try {
-            FormulaResolver.tokens(formula, SheetModelHolder.current());
+            // O `placeholderFormula` faz as DUAS coisas de uma vez: recusa nome
+            // desconhecido e devolve a formula com os nomes trocados por 0.
+            forParsing = FormulaResolver.placeholderFormula(formula, SheetModelHolder.current());
         } catch (FormulaResolver.ResolveException e) {
             throw new PresetException(e.getMessage());
+        }
+
+        // A estrutura da formula passa pelo MESMO parser que a rolagem usa, mas
+        // sobre a formula com os NOMES trocados por 0 (02/10/2026).
+        //
+        // <b>Por que nao a `formula` crua:</b> o DiceFormula so entende numeros e
+        // dados. Passando `1d6+Strength` para ele, a formula seria recusada como
+        // sintaxe invalida e o recurso inteiro ficaria inalcancavel pela tela e pelo
+        // comando. O `forParsing` e o que sobra quando cada nome vira 0, e sobra
+        // exatamente a parte que o parser sabe julgar: dados e sinais.
+        //
+        // E o `forParsing` que o preset NAO guarda: o preset guarda a `formula` com o
+        // nome, porque a resolucao de verdade acontece na rolagem, com a ficha de quem
+        // esta rolando.
+        try {
+            DiceFormula.parse(forParsing);
+        } catch (DiceFormula.SyntaxException e) {
+            // A mensagem do parser cita a string que ele recebeu, que e o placeholder.
+            // Trocar o trecho de volta pela formula original evita que a jogadora
+            // veja "unexpected '+' ... in '1d6+0+'" e fique procurando um zero que
+            // ela nunca digitou. Quando a formula nao tem nome nenhum, as duas
+            // strings sao iguais e a troca nao muda nada.
+            throw new PresetException(e.getMessage().replace(forParsing, formula));
         }
 
         // Cor ausente cai em WHITE: a opcao "default" saiu em 01/10/2026 porque marrom
