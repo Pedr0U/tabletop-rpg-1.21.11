@@ -78,6 +78,30 @@ public record RollPreset(String name, String formula, String colorId) {
     }
 
     /**
+     * O nome na forma que o comando aceita: espaco vira {@code _}, o resto fica igual.
+     *
+     * <p><b>Por que espaco quebra o comando:</b> no Brigadier 1.3.10 o
+     * {@code StringArgumentType.string()} deixou de ser guloso. Ele le uma palavra sem
+     * aspas ou uma frase entre aspas, entao {@code /rpg preset use Dano Espada} falha no
+     * parse, antes deste mod ver o nome. A chave de busca ja trocava espaco por
+     * {@code _} ({@link #normalizeKey}), entao {@code Dano_Espada} encontra exatamente o
+     * mesmo preset: e a forma que a jogadora precisa ver na sugestao e e a que o botao
+     * Use precisa mandar.
+     *
+     * <p><b>Por que nao devolver a {@link #key()}:</b> a chave e minuscula e sem
+     * acento porque serve para comparar. Aqui o texto volta para o chat da jogadora, e
+     * "dano espada" lido em voz alta seria outro preset.
+     */
+    public String commandName() {
+        return commandName(name);
+    }
+
+    /** Igual a {@link #commandName()}, para um nome que ainda nao virou preset. */
+    public static String commandName(String rawName) {
+        return rawName == null ? "" : rawName.trim().replaceAll("\\s+", "_");
+    }
+
+    /**
      * Normaliza um nome digitado para virar chave de busca.
      *
      * <p><b>Estatico de proposito:</b> buscar e deletar precisam desta regra com um nome

@@ -111,6 +111,15 @@ public class PresetsScreen extends Screen {
     private static final int ROW_BTN_W = 20;
     private static final int ROW_BTN_GAP = 2;
 
+    /**
+     * Ate onde vai o quadradinho da cor no comeco da linha.
+     *
+     * <p><b>Por que e um numero e nao um offset solto:</b> o quadradinho e desenhado por
+     * cima do botao do nome (o botao e opaco), e o nome dentro dele e centralizado. Sem
+     * reservar esta faixa, um nome longo passa por baixo do quadradinho.
+     */
+    private static final int ROW_CHIP_W = 10;
+
     public PresetsScreen(Screen parentScreen) {
         super(Component.literal("Presets"));
         this.parentScreen = parentScreen;
@@ -318,7 +327,7 @@ public class PresetsScreen extends Screen {
      * Onde comeca e termina cada coluna da linha da lista.
      *
      * <p><b>Por que metodos e nao numeros no meio do codigo:</b> o desenho da linha
-     * ({@code drawList}) e os botoes ({@code rebuildListOnly}) precisam concordar
+     * ({@code drawListOverlay}) e os botoes ({@code rebuildListOnly}) precisam concordar
      * exatamente, e um numero escrito em cada um vira divergencia na primeira
      * alteracao de largura. A ordem das colunas, da esquerda para a direita:
      * nome, setas, Del.
@@ -357,7 +366,7 @@ public class PresetsScreen extends Screen {
      * Os dois textos de uma linha, ja cortados para nao se atropelarem.
      *
      * <p>O nome e a formula sao cortados com o mesmo criterio aqui, e nao em cada
-     * lugar: o {@code drawList} desenha a formula e o {@code rebuildListOnly} põe o
+     * lugar: o {@code drawListOverlay} desenha a formula e o {@code rebuildListOnly} põe o
      * nome no botao, e dois cortes independentes dao uma linha onde um texto entra em
      * cima do outro.
      *
@@ -366,7 +375,9 @@ public class PresetsScreen extends Screen {
     private String[] rowTexts(RollPreset preset) {
         int available = formulaRight() - rowLeft();
         String formula = truncate(preset.formula(), Math.max(20, available * 2 / 5));
-        int nameMax = available - this.font.width(formula) - GAP;
+        // A faixa do quadradinho da cor entra na conta: o nome e centralizado no botao,
+        // e sem esta reserva ele passa por baixo do quadradinho em nome longo.
+        int nameMax = available - this.font.width(formula) - GAP - ROW_CHIP_W;
         return new String[]{truncate(preset.name(), Math.max(16, nameMax)), formula};
     }
 
@@ -454,7 +465,20 @@ public class PresetsScreen extends Screen {
         if (index < 0 || index >= presets.size()) {
             return;
         }
-        editing = presets.get(index);
+        RollPreset chosen = presets.get(index);
+
+        // Clicar na linha que ja esta em edicao desmarca (pedido da jogadora): sem
+        // isso o unico jeito de limpar a selecao era fechar e abrir a tela de novo.
+        // E o mesmo dois-cliques do Del, sem a confirmacao: nao apaga nada.
+        if (editing != null && editing.key().equals(chosen.key())) {
+            editing = null;
+            nameBox.setValue("");
+            formulaBox.setValue("");
+            deletePending = -1;
+            return;
+        }
+
+        editing = chosen;
         nameBox.setValue(editing.name());
         formulaBox.setValue(editing.formula());
         selectedColor = editing.color();
@@ -481,8 +505,10 @@ public class PresetsScreen extends Screen {
         }
         // O preset ja foi validado quando foi salvo, entao rolar direto pelo nome e
         // o mesmo caminho do item: o servidor procura, rola e avisa se sumiu.
+        // O nome vai na forma de comando porque o chat nao aceita espaco sem aspas
+        // nesse argumento: ver RollPreset.commandName().
         if (this.minecraft != null && this.minecraft.player != null) {
-            this.minecraft.player.connection.sendCommand("rpg preset use " + editing.name());
+            this.minecraft.player.connection.sendCommand("rpg preset use " + editing.commandName());
         }
         onClose();
     }
@@ -607,11 +633,17 @@ public class PresetsScreen extends Screen {
         graphics.fill(panelX, panelY + panelHeight - 1, panelX + panelWidth, panelY + panelHeight,
                 0xFF6B4A2A);
 
+        // Fundo da lista ANTES de `super.render`. O `fill` e opaco: desenhado depois, ele
+        // tapa os botoes das linhas, que continuam clicaveis porque clique nao depende
+        // de ordem de desenho. Era esse o bug de "o botao do Del nao aparece mas da
+        // para clicar nele".
+        drawListPanel(graphics);
+
         super.render(graphics, mouseX, mouseY, delta);
 
         graphics.drawCenteredString(this.font, this.title, this.width / 2, panelY + PAD, 0xFFE0C080);
 
-        drawList(graphics);
+        drawListOverlay(graphics);
         drawSwatches(graphics);
 
         // Rotulo a direita do campo: e a coluna que o bloco centralizado no `layout`
@@ -641,13 +673,13 @@ public class PresetsScreen extends Screen {
     }
 
     /**
-     * A lista: fundo, linha selecionada e as formulas ao lado dos nomes.
+     * O fundo da lista e a marca da linha em edicao.
      *
-     * <p><b>Por que a formula aparece na linha e tambem no tooltip:</b> o tooltip so
-     * aparece quando o mouse esta em cima, e a lista pode ter seis linhas. Ver a
-     * formula de todos de uma vez e o que faz a tela ser util sem passar o mouse.
+     * <p><b>Por que vai antes dos widgets:</b> sao {@code fill} opacos, e o
+     * {@link #render} desenha os botoes depois. Desenhar isto por cima do que ja foi
+     * desenhado esconde o botao sem tirar o clique dele.
      */
-    private void drawList(GuiGraphics graphics) {
+    private void drawListPanel(GuiGraphics graphics) {
         graphics.fill(panelX + 4, listTop, panelX + panelWidth - 4, listBottom, 0xFF161616);
 
         int visibleFrom = listScroll;
@@ -664,6 +696,30 @@ public class PresetsScreen extends Screen {
                 graphics.fill(panelX + 5, rowY, panelX + panelWidth - 5, rowY + listRowHeight - 2,
                         0xFF3A3A3A);
             }
+        }
+    }
+
+    /**
+     * O que fica por cima dos botoes da lista: o quadradinho da cor e a formula.
+     *
+     * <p><b>Por que a formula aparece na linha e tambem no tooltip:</b> o tooltip so
+     * aparece quando o mouse esta em cima, e a lista pode ter seis linhas. Ver a
+     * formula de todos de uma vez e o que faz a tela ser util sem passar o mouse.
+     *
+     * <p><b>Por que estes dois vao DEPOIS dos widgets e o fundo nao:</b> o botao do
+     * nome e opaco, entao o quadradinho so aparece se for desenhado depois. A formula e
+     * o caso oposto: e o unico texto da linha que o botao nao desenha, porque o botao
+     * mostra so o nome, e precisa ficar na frente do botao para nao ser coberta pelo
+     * texto dele. {@code rowTexts} corta os dois com o mesmo criterio, entao nome e
+     * formula nunca se sobrepoem.
+     */
+    private void drawListOverlay(GuiGraphics graphics) {
+        int visibleFrom = listScroll;
+        int visibleTo = Math.min(presets.size(), listScroll + visibleRows);
+
+        for (int i = visibleFrom; i < visibleTo; i++) {
+            RollPreset preset = presets.get(i);
+            int rowY = listTop + (i - listScroll) * listRowHeight;
 
             // A cor do preset como um quadradinho antes do nome: e a unica coisa
             // que distingue dois presets com o mesmo nome visualmente.

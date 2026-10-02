@@ -1176,7 +1176,15 @@ public class MasterCommands {
         return presets.size();
     }
 
-    /** Completa os nomes de preset da própria jogadora (use/delete). */
+    /**
+     * Completa os nomes de preset da propria jogadora (use/delete/give/edit).
+     *
+     * <p><b>Por que sugerir {@link RollPreset#commandName()} e nao o nome:</b> o nome com
+     * espaco nao entra no comando. {@code StringArgumentType.string()} do Brigadier 1.3.10
+     * le uma palavra sem aspas ou uma frase entre aspas, e a sugestao que oferece "Dano
+     * Espada" entrega um comando que falha no parse. A chave de busca ja ignora o
+     * espaco, entao "Dano_Espada" acha o mesmo preset.
+     */
     private static CompletableFuture<Suggestions> suggestOwnRollPresets(
             CommandContext<CommandSourceStack> ctx, SuggestionsBuilder builder) {
         ServerPlayer player = presetPlayer(ctx);
@@ -1185,8 +1193,9 @@ public class MasterCommands {
         }
         String remaining = builder.getRemainingLowerCase();
         for (RollPreset preset : RollPresetStore.list(player.getUUID())) {
-            if (preset.name().toLowerCase(Locale.ROOT).startsWith(remaining)) {
-                builder.suggest(preset.name());
+            String commandName = preset.commandName();
+            if (commandName.toLowerCase(Locale.ROOT).startsWith(remaining)) {
+                builder.suggest(commandName);
             }
         }
         return builder.buildFuture();

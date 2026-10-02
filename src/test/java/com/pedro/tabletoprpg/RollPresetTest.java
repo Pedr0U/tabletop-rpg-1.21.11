@@ -208,6 +208,44 @@ class RollPresetTest {
         assertEquals("golpe_duplo", RollPreset.create("Golpe Duplo", "1d20", "red").key());
     }
 
+    // --- forma de comando ---
+
+    @Test
+    @DisplayName("no comando o espaco vem como _ e a caixa do nome se mantem")
+    void commandNameReplacesSpaces() throws Exception {
+        assertEquals("Dano_Espada", RollPreset.create("Dano Espada", "1d20", "red").commandName());
+        assertEquals("Golpe_Duplo", RollPreset.create("Golpe Duplo", "1d20", "red").commandName());
+        assertEquals("Ataque", RollPreset.create("Ataque", "1d20", "red").commandName());
+    }
+
+    @Test
+    @DisplayName("a forma de comando acha o preset salvo, que a do chat nao alcança")
+    void commandNameFindsTheStoredPreset() throws Exception {
+        UUID uuid = UUID.randomUUID();
+        RollPresetStore.forget(uuid);
+        try {
+            RollPreset created = RollPreset.create("Dano Espada", "2d6+Strength", "yellow");
+            RollPresetStore.put(uuid, created);
+
+            // E o caminho real: o comando entrega o underscored e a busca normaliza
+            // para a mesma chave do nome salvo, com espaco.
+            assertTrue(RollPresetStore.find(uuid, created.commandName()).isPresent());
+            assertEquals(created.key(),
+                    RollPreset.normalizeKey(created.commandName()));
+            assertTrue(RollPresetStore.exists(uuid, created.commandName()));
+        } finally {
+            RollPresetStore.forget(uuid);
+        }
+    }
+
+    @Test
+    @DisplayName("espaco sobrando ou do meio nao vira dois _")
+    void commandNameCollapsesWhitespace() {
+        assertEquals("Dano_Espada", RollPreset.commandName("  Dano   Espada  "));
+        assertEquals("Golpe", RollPreset.commandName("Golpe"));
+        assertEquals("", RollPreset.commandName(null));
+    }
+
     // --- codec ---
 
     @Test
