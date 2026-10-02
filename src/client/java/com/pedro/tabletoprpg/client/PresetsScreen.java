@@ -376,54 +376,71 @@ public class PresetsScreen extends Screen {
     }
 
     /**
-     * Onde terminam as duas setas.
+     * Onde terminam as duas setas, isto e, a borda DIREITA do grupo.
      *
-     * <p><b>Por que o vao ate o Del e {@code ROW_BTN_GAP} e nao {@code GAP}
-     * (02/10/2026):</b> pedido da jogadora para as setas ficarem "ao lado do Del". Com
-     * {@code GAP} as setas pareciam um bloco solto no meio da linha e a formula perdia
-     * espaco para um vao que nao separava nada. As setas e o Del formam um grupo unico,
-     * do mesmo jeito que as duas setas ja se tocavam entre si.
+     * <p>Estrutura do grupo, da esquerda para a direita: seta de cima, seta de baixo,
+     * {@code ROW_BTN_GAP}, {@code Del}.
+     *
+     * <p><b>Por que a largura do grupo NAO entra aqui (02/10/2026):</b> entrava, e
+     * era um erro de 42px. {@code upX} ja subtrai {@code ROW_BTN_W * 2 +
+     * ROW_BTN_GAP} para achar a borda ESQUERDA; subtrair tambem aqui punha as duas
+     * contas em sequencia e deixava 42 pixels de vazio entre a seta de baixo e o
+     * {@code Del}. O efeito visivel era o
+     * oposto do pedido: as setas pareciam soltas no meio da linha, e o nome e a
+     * formula perdiam espaco para um buraco que nao separava nada. A causa raiz do
+     * "as setas em cima da formula" era esta, e nao a posicao do texto.
      */
     private int arrowsRight() {
-        return delX() - ROW_BTN_GAP - (ROW_BTN_W * 2 + ROW_BTN_GAP);
+        return delX() - ROW_BTN_GAP;
     }
 
     /**
      * Onde comeca a seta da esquerda, isto e, a borda ESQUERDA do grupo das duas.
-     *
-     * <p>Estrutura do grupo, da esquerda para a direita: seta de cima, seta de baixo,
-     * {@code ROW_BTN_GAP}, {@code Del}.
      */
     private int arrowsLeft() {
         return arrowsRight() - (ROW_BTN_W * 2 + ROW_BTN_GAP);
     }
 
     /**
-     * A largura da coluna do nome: metade do que sobra da linha.
+     * Onde comeca o botao do nome, depois da faixa do quadradinho da cor.
      *
-     * <p><b>Por que metade, e nao tres quintos (02/10/2026):</b> tres quintos eram
-     * calculados sobre {@code arrowsRight()}, que e a borda DIREITA do grupo das setas,
-     * e nao a esquerda. Com esse numero o nome recebia 43px que ninguem desenhava, e a
-     * formula ficava com 37px -- poco mais que um "...". Agora os dois textos dividem a
-     * faixa que vai ate {@link #formulaRight()}, que e onde a formula realmente pode
-     * chegar.
+     * <p>O quadradinho e desenhado sobre a linha ({@code drawListOverlay}), nao dentro
+     * de um widget, entao ele ocupa largura mesmo assim: e por isso que ele sai da
+     * largura do nome, e nao da largura toda da linha.
+     */
+    private int nameButtonX() {
+        return rowLeft() + ROW_CHIP_W + GAP;
+    }
+
+    /**
+     * A largura do botao do nome: tres quintos do que resta entre ele e a formula.
+     *
+     * <p><b>Por que tres quintos (02/10/2026):</b> o nome e o botao -- e o alvo de
+     * clique da linha, e por isso fica com a parte maior. Uma divisao fixa mantem as
+     * duas colunas independentes do texto que veio, que e o que impede a formula de
+     * encurtar o nome (e vice-versa) dependendo do preset da linha.
      */
     private int rowNameWidth() {
-        return Math.max(20, (formulaRight() - rowLeft() - ROW_CHIP_W - GAP) / 2);
+        int room = formulaRight() - nameButtonX() - GAP;
+        return Math.max(20, room * 3 / 5);
     }
 
     /**
      * Onde termina a formula: na borda ESQUERDA do grupo das setas, menos um vao.
      *
-     * <p><b>Por que a esquerda e nao a direita (02/10/2026):</b> este era o bug das
-     * "setas em cima da formula". {@code arrowsRight()} e a borda DIREITA do grupo, e
-     * a formula terminava 6px antes dela -- ou seja, 14px DENTRO do botao da seta de
-     * baixo, que tem 20px de largura. O texto da formula e desenhado depois dos
-     * widgets, entao o que aparecia era a seta com a formula escrita atravessada em
-     * cima. A formula nunca pode passar de {@link #arrowsLeft()}.
+     * <p><b>Por que a esquerda e nao a direita:</b> a formula e desenhada depois dos
+     * widgets, entao qualquer pixel que passe da borda esquerda da seta aparece como
+     * texto por cima do botao. Era esse o "as setas em cima da formula".
      */
     private int formulaRight() {
         return arrowsLeft() - GAP;
+    }
+
+    /**
+     * A largura maxima da formula, sem passar do botao do nome nem da seta.
+     */
+    private int formulaMax() {
+        return formulaRight() - (nameButtonX() + rowNameWidth() + GAP);
     }
 
     /**
@@ -439,10 +456,7 @@ public class PresetsScreen extends Screen {
     private String[] rowTexts(RollPreset preset) {
         // A formula e desenhada por cima do botao do nome, entao o que manda e a borda
         // DIREITA do botao: a formula precisa caber entre ela e o `formulaRight`.
-        // Antes a conta era uma fracao da largura toda, e sobrava por volta de 3px
-        // -- era o "a esquerda da formula esta invadindo o botao do nome".
-        int formulaMax = formulaRight() - (rowLeft() + rowNameWidth() + GAP);
-        String formula = truncate(preset.formula(), Math.max(20, formulaMax));
+        String formula = truncate(preset.formula(), Math.max(20, formulaMax()));
 
         // O nome vive dentro do botao: a faixa do quadradinho da cor e um vao saem
         // da largura do botao, nao da largura toda da linha.
