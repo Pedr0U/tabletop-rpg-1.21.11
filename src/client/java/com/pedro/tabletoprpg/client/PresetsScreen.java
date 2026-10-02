@@ -725,6 +725,17 @@ public class PresetsScreen extends Screen {
             // que distingue dois presets com o mesmo nome visualmente.
             graphics.fill(rowLeft() + 2, rowY + 6, rowLeft() + 10, rowY + 14, preset.color().argb());
 
+            if (editing != null && editing.key().equals(preset.key())) {
+                // A linha em edicao ganha um risco por baixo. O realce de fundo esta
+                // no `drawListPanel`, atras dos botoes, e nesta altura ele fica so nos
+                // vaos entre eles; o risco e desenhado na faixa de baixo da linha
+                // (listRowHeight - 2), que nenhum botao da linha ocupa, porque todos
+                // eles tem ROW_H - 2 de altura. Sem ele, a unica pista de qual preset o
+                // Save vai sobrescrever e o campo Name la em cima.
+                graphics.fill(panelX + 5, rowY + listRowHeight - 2,
+                        panelX + panelWidth - 5, rowY + listRowHeight - 1, 0xFFE0C080);
+            }
+
             // O mesmo texto que o botao da linha mostra: `rowTexts` corta os dois de
             // uma vez, entao nome e formula nunca se sobrepoem aqui.
             String formula = rowTexts(preset)[1];
