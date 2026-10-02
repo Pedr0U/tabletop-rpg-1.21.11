@@ -8230,3 +8230,31 @@ qualquer ferramenta. Repara byte a byte, nunca conversao global.
 .ToCharArray() | Where-Object { [int]\ -gt 127 })
 `
 Reparar por palavra, nunca conversao global (ver a licao do byte NUL, acima).
+### Sentido do scroll: scrollY e POSITIVO ao rolar para CIMA (LICAO, 02/10/2026)
+Conferido no bytecode do MouseHandler.onScroll (1.21.11), que repassa o offset vertical do
+GLFW direto para Screen.mouseScrolled. Logo a forma CORRETA de mover um offset de lista e
+offset + (int) -Math.signum(scrollY): scrollY negativo (roda para baixo) somado com +1.
+O PresetsScreen era o **unico** do projeto com offset - (int) -Math.signum(scrollY), que e
+exatamente o oposto; StatusScreen, AttributePickerScreen e SheetEditorScreen ja estavam
+corretos. **Como provar sem depender de memoria:** comparar com outra lista do proprio projeto e
+ler o bytecode. Ver a armadilha da repeticao adiante.
+
+### Widget invisivel AINDA RECEBE CLIQUE (FATO verificado em bytecode, 02/10/2026)
+AbstractWidget.mouseClicked testa isActive() e isMouseOver(), e **nao** testa isVisible().
+Entao um botao so no hover precisa de isible = false **e** ctive = false juntos: so o
+isible deixa um botao invisivel reordenando a lista num clique cego.
+Conferir com: javap -p -c -cp <minecraft-clientonly.jar> net.minecraft.client.gui.components.AbstractWidget.
+
+### Texto que NAO pode ser cortado e ainda precisa caber no painel (LICAO, 02/10/2026)
+Quando a tela esta aberta, o aviso do servidor vai **so** para a linha de status e **nao** tambem
+para o chat (o receptor escolhe tela OU chat). Entao cortar o texto esconderia a recusa. A saida
+e quebrar em ate N linhas com Font.plainSubstrByWidth.
+**Armadilha de API:** plainSubstrByWidth(String, int) devolve a **String** que cabe, nao um
+indice. A assinatura que devolve indice e a de 3 argumentos com oolean; tratar o retorno como
+int nem compila (erro "incompatible types: String cannot be converted to int").
+
+### O script de layout envelhece junto com o codigo (LICAO, 02/10/2026)
+O script espelha as formulas do layout() na mao. Ao mudar o chrome (duas linhas de status
+custaram STATUS_H), o script continuou rodando e imprimiu **numeros antigos com "OK"** -- um
+falso negativo silencioso, pior que falhar. Mudou no layout(), muda no script, e compara os
+numeros antes de acreditar neles.
