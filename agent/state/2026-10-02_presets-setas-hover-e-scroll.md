@@ -19,20 +19,31 @@ Arquivo unico: `src/client/java/com/pedro/tabletoprpg/client/PresetsScreen.java`
 | 1 | setas mais proximas do `Del`, mesma ordem | `arrowsRight()` com `ROW_BTN_GAP` em vez de `GAP` | script de layout: formula ganha 4px |
 | 2 | setas so no hover | `showArrowsOnHoveredRow()`, antes de `super.render` | `visible` **e** `active` juntos |
 | 3 | seta travada mais escura | `addArrow()` cria as duas sempre; `DARK_GRAY` + `active = false` | tooltip `Already first/last` |
-| 4 | formula invadindo o nome | `rowTexts` usa a borda real do botao, nao fracao | formula 88px -> 79px, nome 119px |
+| 4 | formula invadindo o nome | `rowTexts` usa a borda real do botao, nao fracao | formula 88px -> 91px, nome 119px -> 65px |
 | 5 | scroll invertido | `+ (int) -Math.signum(scrollY)` | bytecode + 3 telas irmas ja certas |
 | 6 | aviso branco, 2 linhas, dentro do quadro | `layoutStatus()` + `STATUS_LINES = 2`, `0xFFFFFFFF` | com tela aberta o aviso nao vai ao chat |
+| 7 | setas **em cima** da formula (2a volta) | `arrowsLeft()` novo; `formulaRight()` para nele | check reprova com a geometria antiga |
 
 ## Armadilhas ja vencidas (nao repetir)
 
+- **`arrowsRight()` nao e a borda esquerda do grupo.** Era esse o bug das "setas em cima
+  da formula": a formula parava 14px DENTRO do botao da seta de baixo. Novo
+  `arrowsLeft()`. Um metodo que devolve uma borda lateral precisa ser nomeado pelo lado
+  que ele representa, e nao pelo lado que o codigo antigo usava.
+- **Check novo tem que ser calibrado.** O script de layout mede a geometria da linha e
+  reprova com a formula antiga (`formula invade a seta: 288 > 246`). Um check que nunca
+  falhou nao prova nada.
 - **Script de layout envelhece junto.** Mudou o `chrome`, o script continuou imprimindo
-  os numeros antigos com "OK". Falso negativo silencioso. Atualizado.
-- **`plainSubstrByWidth` devolve String, nao indice.** A assinatura de indice tem 3
-  argumentos com `boolean`. Tratar como `int` nao compila.
+  os numeros antigos com "OK". Falso negativo silencioso. Atualizado duas vezes.
+- **`plainSubstrByWidth` devolve String, nao indice.** A assinatura que devolve indice e
+  a de 3 argumentos com `boolean`. Tratar como `int` nao compila.
 - **Widget invisivel ainda recebe clique.** `AbstractWidget.mouseClicked` testa
   `isActive()` e `isMouseOver()`, nunca `isVisible()`.
 - **Editor de texto converte escape Unicode.** Nao passa `\u2191` pelo `edit`; as
   setas foram trocadas por faixa de linhas num script.
+- **`AddRange` no PowerShell exige `[string[]]`.** Com `@(...)` o array vem `Object[]` e
+  o metodo lanca; o script seguiu e **escreveu o arquivo sem o bloco**, comendo o
+  cabecalho e a tabela. Ancorar e conferir antes de gravar.
 
 ## Custo aceito
 

@@ -8258,3 +8258,18 @@ O script espelha as formulas do layout() na mao. Ao mudar o chrome (duas linhas 
 custaram STATUS_H), o script continuou rodando e imprimiu **numeros antigos com "OK"** -- um
 falso negativo silencioso, pior que falhar. Mudou no layout(), muda no script, e compara os
 numeros antes de acreditar neles.
+
+### rrowsRight() usado como se fosse a borda ESQUERDA (BUG, 02/10/2026)
+A formula terminava em rrowsRight() - GAP. rrowsRight() e a borda **DIREITA** do grupo
+das duas setas, e o botao da seta de baixo tem 20px de largura: a formula acabava 6px antes
+dela, ou seja **14px DENTRO do botao**. Como a formula e desenhada DEPOIS dos widgets, o
+que aparecia era a seta com o texto da formula atravessado em cima -- exatamente o "as setas
+estao em cima da formula". Agora existe rrowsLeft() e a formula para em
+rrowsLeft() - GAP.
+**Licao geral:** um metodo que devolve uma borda lateral e nomeado pelo LADO que ele
+representa, e nao pelo lado que o CODIGO ANTIGO usava. Nome herdado de geometria errada
+vira mais um bug, porque parece descriptive e ninguem reexamina.
+**Como isso foi pegado:** o script de layout passou a medir a linha da lista e a
+**calibrar o detector** -- rodar o script com a geometria antiga e ver reprovar. Sem
+calibrar, um check que sempre passa nao prova nada. Ver a licao do script que envelhece,
+duas acima.

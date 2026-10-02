@@ -365,7 +365,7 @@ public class PresetsScreen extends Screen {
      * ({@code drawListOverlay}) e os botoes ({@code rebuildListOnly}) precisam concordar
      * exatamente, e um numero escrito em cada um vira divergencia na primeira
      * alteracao de largura. A ordem das colunas, da esquerda para a direita:
-     * nome, setas, Del.
+     * cor, nome, formula, setas, Del.
      */
     private int rowLeft() {
         return panelX + 4;
@@ -389,20 +389,41 @@ public class PresetsScreen extends Screen {
     }
 
     /**
-     * A largura da coluna do nome: tres quintos da linha.
+     * Onde comeca a seta da esquerda, isto e, a borda ESQUERDA do grupo das duas.
      *
-     * <p><b>Por que um fracao e nao "o que sobrar":</b> a formula tambem e desenhada na
-     * linha, e as duas se atropelam se o nome for calculado pelo espaco restante. Com
-     * a divisao fixa, o nome ocupa um terco da esquerda e a formula um terco da
-     * direita, e nenhuma depende do texto que veio.
+     * <p>Estrutura do grupo, da esquerda para a direita: seta de cima, seta de baixo,
+     * {@code ROW_BTN_GAP}, {@code Del}.
      */
-    private int rowNameWidth() {
-        return Math.max(20, (arrowsRight() - rowLeft()) * 3 / 5);
+    private int arrowsLeft() {
+        return arrowsRight() - (ROW_BTN_W * 2 + ROW_BTN_GAP);
     }
 
-    /** Onde termina a formula, encostando nas setas. */
+    /**
+     * A largura da coluna do nome: metade do que sobra da linha.
+     *
+     * <p><b>Por que metade, e nao tres quintos (02/10/2026):</b> tres quintos eram
+     * calculados sobre {@code arrowsRight()}, que e a borda DIREITA do grupo das setas,
+     * e nao a esquerda. Com esse numero o nome recebia 43px que ninguem desenhava, e a
+     * formula ficava com 37px -- poco mais que um "...". Agora os dois textos dividem a
+     * faixa que vai ate {@link #formulaRight()}, que e onde a formula realmente pode
+     * chegar.
+     */
+    private int rowNameWidth() {
+        return Math.max(20, (formulaRight() - rowLeft() - ROW_CHIP_W - GAP) / 2);
+    }
+
+    /**
+     * Onde termina a formula: na borda ESQUERDA do grupo das setas, menos um vao.
+     *
+     * <p><b>Por que a esquerda e nao a direita (02/10/2026):</b> este era o bug das
+     * "setas em cima da formula". {@code arrowsRight()} e a borda DIREITA do grupo, e
+     * a formula terminava 6px antes dela -- ou seja, 14px DENTRO do botao da seta de
+     * baixo, que tem 20px de largura. O texto da formula e desenhado depois dos
+     * widgets, entao o que aparecia era a seta com a formula escrita atravessada em
+     * cima. A formula nunca pode passar de {@link #arrowsLeft()}.
+     */
     private int formulaRight() {
-        return arrowsRight() - GAP;
+        return arrowsLeft() - GAP;
     }
 
     /**

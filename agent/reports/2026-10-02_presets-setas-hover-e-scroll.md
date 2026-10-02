@@ -118,25 +118,71 @@ Em troca: a opcao era afastar as setas para o outro lado do `Del` ou reduzir a f
 aviso; nenhuma das duas foi escolhida, e a alternativa de reservar a segunda linha **so
 quando a lista ja tem folga** nao foi implementada por estar fora do escopo.
 
+## Segunda volta: "as setas ainda estao em cima da formula"
+
+A jogadora testou o jar e o conjunto passou, mas as setas continuam sobre a formula.
+**Nao era gosto: e um bug de geometria, confirmado por conta.**
+
+**Causa raiz.** `formulaRight()` era `arrowsRight() - GAP`. `arrowsRight()` e a borda
+**DIREITA** do grupo das duas setas, e o botao da seta de baixo tem 20px de largura. A
+formula terminava 6px antes dessa borda, ou seja **14px DENTRO do botao da seta de
+baixo**. Como a formula e desenhada em `drawListOverlay`, depois de `super.render`, o que
+aparecia na tela era a seta com o texto da formula atravessado por cima -- lido pelo
+lado da jogadora como "a seta esta em cima da formula".
+
+O erro da volta anterior foi de 4px (mover as setas para perto do `Del`), e **nao** a
+causa. Por isso mexer no vao entre setas e `Del` nao resolveu nada.
+
+**Correcao.**
+
+- Novo `arrowsLeft()` = borda esquerda do grupo das setas.
+- `formulaRight()` = `arrowsLeft() - GAP`: a formula nunca mais passa da seta.
+- `rowNameWidth()` deixou de ser `3/5` de `arrowsRight() - rowLeft()` e passou a ser
+  metade do que sobra ate `formulaRight()`. Com o numero antigo o nome recebia 43px que
+  ninguem desenhava e a formula ficava com 37px -- poco mais que um `...`.
+
+| Texto da linha (painel 300px) | Antes | Agora |
+| --- | --- | --- |
+| nome | 120px | **65px** |
+| formula | 78px (14px sobre a seta) | **91px** (nunca toca a seta) |
+
+O nome ficou mais apertado: e o preco de dar a faixa que sobra a quem a jogadora
+reclamou duas vezes. `Dano Espada` ainda cabe em 65px.
+
+**Como foi provado, e nao afirmado.** O script de layout passou a medir a geometria da
+linha da lista. E, para o check valer alguma coisa, ele foi **calibrado**: rodar o
+script com a geometria antiga e ver reprovar. Resultado com a geometria antiga:
+
+```
+FALHA  427x240  ...
+        linha: nome=120px formula=78px setas=252-294 Del=338
+        -> LINHA: formula invade a seta: 288 > 246
+```
+
+Com a geometria nova, as mesmas telas passam. Um check que nunca falhou nao prova nada;
+este falhou quando deveria.
+
 ## Validacao
 
 | Verificacao | Resultado |
 | --- | --- |
 | `gradlew build` | BUILD SUCCESSFUL |
-| `scanEncoding` | OK: 145 arquivos, 0 mojibake, 0 ideograma, 0 U+FFFD |
+| `scanEncoding` | OK: 147 arquivos, 0 mojibake, 0 ideograma, 0 U+FFFD |
 | Testes | **165 testes, 0 falhas, 0 erros** |
-| Script de layout | 7 telas OK; so 240x180 reprova (preexistente) |
-| Jar | `build/libs/tabletop-rpg-1.0.0.jar` 659KB, 01:58:35 |
-| Jar contem a correcao | `javap` na classe `PresetsScreen` do jar: `showArrowsOnHoveredRow`, `addArrow`, `layoutStatus`, `statusLines`, `upArrows`, `downArrows`, `STATUS_LINES`, `ARROW_UP` |
+| Script de layout | 9 telas OK; so 240x180 reprova (preexistente) |
+| Calibracao do check da linha | geometria antiga reprova, nova passa |
+| Jar | `build/libs/tabletop-rpg-1.0.0.jar` 659KB, 02:10:51 |
+| Jar contem a correcao | `javap` em `PresetsScreen`: `arrowsLeft`, `formulaRight`, `rowNameWidth` |
 
-O script de layout precisou ser atualizado junto (o `chrome` ganhou uma linha de
-status). Sem isso ele imprimia os **numeros antigos com "OK"** -- falso negativo
-silencioso.
+O script de layout precisou ser atualizado duas vezes: quando o `chrome` ganhou a segunda
+linha de status, e quando a geometria da linha da lista entrou na medicao. Sem isso ele
+imprimia os **numeros antigos com "OK"** -- falso negativo silencioso. E um check novo
+precisa ser **calibrado**: se nunca falhou, ainda nao prova nada.
 
 ## Nao validado
 
 Nenhuma correcao visual desta rodada foi vista em jogo. `Screen` nao roda em JUnit e o
-`runClient` do ambiente nao injeta clique nem hover de mouse. Os cinco pontos acima
+`runClient` do ambiente nao injeta clique nem hover de mouse. Os seis pontos acima
 dependem de pixel e de gesto, e so a jogadora fecha isso.
 
 Em especial, **o sentido do hover nao tem teste**: a logica esta em
@@ -146,6 +192,7 @@ grande demais para a percepcao dela, isso so aparece em jogo.
 ## Arquivos
 
 - `src/client/java/com/pedro/tabletoprpg/client/PresetsScreen.java` -- todas as mudancas.
-- `agent/memory/project-memory.md` -- 4 licoes novas.
+- `agent/memory/project-memory.md` -- 5 licoes novas.
 - `C:\Users\Pedro\AppData\Local\Temp\opencode\check-presets-layout.ps1` -- atualizado
-  (2 linhas de status). Fora do repositorio, entao nao versionado.
+  (2 linhas de status e medicao da linha da lista). Fora do repositorio, entao nao
+  versionado.
