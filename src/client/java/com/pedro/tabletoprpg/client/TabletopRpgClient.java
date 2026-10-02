@@ -384,12 +384,17 @@ public class TabletopRpgClient implements ClientModInitializer {
 
         ClientPlayNetworking.registerGlobalReceiver(RpgNetworking.PresetResultPayload.TYPE,
                 (payload, context) -> context.client().execute(() -> {
-                    if (context.client().player != null && payload.message() != null && !payload.message().isEmpty()) {
+                    if (context.client().screen instanceof PresetsScreen presetsScreen) {
+                        // Tela aberta: a resposta aparece na propria linha de status.
+                        // Mandar tambem para o chat mostraria a mesma frase duas vezes
+                        // -- uma na tela que a jogadora esta olhando e outra no log.
+                        presetsScreen.applyResult(payload.ok(), payload.message(), payload.presets());
+                    } else if (context.client().player != null
+                            && payload.message() != null && !payload.message().isEmpty()) {
+                        // Sem tela (a jogadora fechou no meio do caminho): o aviso vai
+                        // so para o chat, senao a recusa sumiria sem ela ver.
                         context.client().player.displayClientMessage(
                                 Component.literal("\u00a76[Preset] \u00a7f" + payload.message()), false);
-                    }
-                    if (context.client().screen instanceof PresetsScreen presetsScreen) {
-                        presetsScreen.applyResult(payload.ok(), payload.message(), payload.presets());
                     }
                 }));
 
