@@ -2732,7 +2732,8 @@ qualquer ferramenta. Repara byte a byte, nunca conversao global.
 
 ### Brigadier 1.3.10: StringArgumentType.string() NAO e mais guloso (LICAO, 02/10/2026)
 Em rigadier-1.3.10, string() devolve StringType.QUOTABLE_PHRASE e parse chama
-eader.readString(): uma palavra sem aspas, ou uma frase **entre aspas**. Espaco sem aspas falha
+
+eader.readString(): uma palavra sem aspas, ou uma frase **entre aspas**. Espaco sem aspas falha
 no parse do Brigadier, antes de qualquer codigo do mod ver o argumento. greedyString() continua
 existindo se algum comando precisar mesmo do resto da linha. Sintoma: build verde, comando com
 espaco nao funciona, e a mesma coisa sem espaco funciona.
@@ -8292,3 +8293,99 @@ Com os 42px vazios na linha, "corrigi" a formula estreitando o nome do preset (1
 65px). O nome ficou menor **para sempre**, mesmo depois de o buraco ser arrumado, porque
 ninguem tinha ligado as duas coisas. **Nao aperte um elemento para caber num espaco que
 voce ainda nao auditou: ache de onde vem o espaco primeiro.**
+
+## 01/10/2026 — Aba 3 (Skills/Magias): scroll vazando, card fixo, ▲▼ (FATO verificado)
+
+**PAUSADO com codigo nao commitado.** `StatusScreen.java` +360/-40, HEAD `d031a92`. Relatorio:
+`agent/reports/2026-10-01-pausa-skill-magia-layout.md`. `compileClientJava` verde; **nada validado em jogo**.
+
+### Bug: scroll da aba 3 desenhado na aba 2 (causa raiz)
+Nao era "faltou esconder a barra" — a barra **nunca foi widget**, e desenhada a mao por
+`Column.renderBar(GuiGraphics)` com guarda so `barH <= 0 || maxScroll() <= 0`. A geometria (`contentH`, `barH`,
+`thumbY`) so e recalculada por `Column.layout()`, que roda DENTRO de `addSkillColumn`/`addSpellColumn`, **so na
+aba 2**. Saindo da aba, `buildInfoTab()` nao toca nessas colunas: sobra `contentH` antigo, `maxScroll() > 0`, e a
+barra antiga sai por cima. **Correcao: as duas chamadas de `renderBar` dentro de `if (activeTab == 2)`.**
+A interacao ja era filtrada por aba (`columnUnderBar`, `mouseScrolled`), entao antes o clique parava e o desenho
+nao: barra "viva sem fazer nada". **Licao: `Column` e estado de tela, nao widget — guarda de aba e obrigatoria
+para TODO desenho que use a geometria de uma coluna.**
+
+### Card de altura FIXA, igual em skill e magia
+`LIST_ENTRY_H = INV_PAD*2 + LIST_NAME_BTN_H + LIST_LINE1_ADV + LIST_LINE2_ADV + LIST_LINE3_ADV + LIST_ROW_GAP`
+= **71**. `LIST_DEL_BTN_H=16`, `LIST_LINE1_ADV=14`, `LIST_LINE2_ADV=11`, `LIST_LINE3_ADV=16`.
+`skillEntryHeight` e `spellEntryHeight` devolvem `LIST_ENTRY_H` sem condicional — **as 3 linhas contam sempre,
+mesmo vazias**, e e isso que faz os dois cards terem a mesma altura.
+`LIST_LINE3_ADV = 16` e nao 11 porque e a **linha do Del** e o Del tem 16 px; com 11 invadiria a folga do card.
+`addDeleteButton` passou a usar `LIST_DEL_BTN_H`. `skillColumn.nameBtnH = LIST_NAME_BTN_H` (antes ficava 12).
+O Del da skill desceu para a 3a linha (`right = null` no `addEntryNameButton`), dando ao nome a largura toda; o
+Del da **magia continua na ultima linha COM TEXTO** (pedido do usuario em 01/10/2026, nao regrediu).
+
+### ▲▼ a esquerda das skills
+`addSkillMoveButtons(x, y, skillName, index, total)`: ▲ so se `index > 0`, ▼ so se `index < total - 1` (sem botao
+morto). Respeita `clippedHeight`. `LIST_MOVE_W=12`, `LIST_MOVE_GAP=2`, faixa de 28 px. Zera `delPending` junto
+(mover troca o indice guardado). Envia `SheetSkillPayload.move(targetName, skill, ±1)`.
+**Magias nao tem mover, e proposital:** a ordem exibida nao e a guardada (`Spellbook#visible` ordena por circulo
+e depois por nome), entao nao existe indice guardado para mover.
+
+### `SkillOp.MOVE` ja existia (FATO verificado)
+`RpgNetworking.SheetSkillPayload.move(targetName, skill, delta)` + `moveSkill` (valida `delta` em `{-1,+1}`) +
+`SheetData.withSkillMoved` estavam prontos. **Delegar UI sem ler o servidor antes leva o subagente a criar payload
+duplicado.** Ler o caminho de rede ANTES de delegar e o que evitou tocar `RpgNetworking.java`.
+
+### Delegar UI com constante nova
+O prompt tem que trazer as constantes **ja calculadas** e a lista do que **nao** pode ser tocado. Sem isso o
+subagente recalcula e diverge da conta que voce ja fechou.
+
+### Validador que nao abriu o arquivo (FATO verificado)
+`tcc-validador` recebeu um checklist de 10 itens e devolveu o **checklist reescrito como "defeito"**, sem abrir o
+arquivo. Afirmou que `renderBar` estava fora da guarda de aba — eu tinha acabado de confirmar que estava dentro
+(linha 3155). **Regra: relatorio de validador sem `arquivo:linha` e suspecto; confirme antes de virar "defeito"
+no relatorio.** Os 10 itens dele NAO foram registrados como defeitos reais.
+
+### ▲▼ e a fonte do Minecraft (HIPOTESE, nao verificada)
+Codepoints 9650/9660 estao no arquivo (UTF-8 sem BOM, verificado), mas a fonte padrao do jogo **pode nao ter os
+glifos**, e nesse caso o botao sai como caixa vazia. Nao troquei por ASCII porque o usuario pediu setas; se
+aparecerem vazios em jogo, a troca e por texto.
+
+### Terminal: glifo ausente e nao glifo apagado (FATO verificado)
+`Select-String` imprimiu `Component.literal("")` para `literal("▲")`. O arquivo estava correto: o console do
+PowerShell nao renderiza o caractere. **Confirme os codepoints (`[int]$_.Groups[1].Value.ToCharArray()`) antes de
+"consertar" um bug de codificacao que nao existe.**
+
+## 01/10/2026 — Arrastar a barra e lista com altura zero (FATO verificado, NAO validado em jogo)
+
+Rodada seguinte, ainda **nao commitada** em `StatusScreen.java`. Build verde (`build`, 17s).
+
+### Arrastar nao desce: faltava `rebuildWidgets()` (FATO verificado)
+`Column` **nao e viewport**: a lista e feita de widgets recriados a cada montagem. Mudar o campo `scroll` sem
+remontar **nao move nada na tela**. `scrollFromMouse(double)` so atribui `scroll`; `mouseDragged` nao remontava.
+A roda ja fazia certo (`scrollColumn`: `flushCd()` + `delPending = -1` + `rebuildWidgets()`), e e por isso que
+uma funcionava e a outra nao. **Corrigido nos dois blocos de `mouseDragged`, e tambem em `mouseClicked`** (o
+primeiro clique saltava a barra e deixava a lista 1 frame atras: e assim que "arrastar nao funciona" comeca).
+`draggingBar` sobrevive ao rebuild porque e field da `Column` e `buildPanel` so reseta `delPendingBox`/`contentH`/`scroll`.
+
+### "Roda desce mas nao mostra" era o bug de altura zero (FATO verificado)
+Nao era problema de redesenho. Em janela pequena `listBottom == listTop` (altura zero), mas `contentH` continuava
+soma de todos os cards, entao `maxScroll() > 0`: **a barra se movia sem haver lista atras**. Mesmo sintoma do
+"nao da pra descer" das magias.
+
+### Cabecalho dentro da faixa rolavel (decisao do usuario, 01/10/2026)
+O usuario escolheu **rolar o cabecalho** (nao encolher). Nas DUAS colunas agora: secao FIXA, e o resto do
+cabecalho rola com a lista. Magias: `headerH = rowH * 5`, `contentH = headerH + spellsH`, `listTop` logo abaixo
+do titulo, cabecalho montado por `addSpellHeader(x, w, rowY)` com `rowY = listTop - scroll`. Skills: `headerH = rowH`,
+"+ Skill" rolavel.
+`addSection` devolve `top + rowH`, entao `listTop = Math.max(y, top)` **ja** fica abaixo do titulo fixo — nao e
+preciso de `top` cru. **Cada widget do cabecalho tem de nascer por `clippedHeight` + `Math.max(y, listTop)`, e cada
+rotulo (`TextLine`) guardado por `lineFits`**; sem isso o cabecalho invade o titulo ao rolar.
+O `headerH` **tem de entrar** no `contentH`: sem ele a rolagem para uma faixa antes do fim e o "+ Magia" nunca
+aparece ao descer.
+
+### O cliente encerra sozinho, sem crash (FATO verificado, 2x)
+Duas vezes: `Player joined the game` e, ~1 a 2 min depois, `Stopping!` + `Stopping singleplayer server as player
+logged out`, **sem `Exception` nem `ERROR` no log**. Encerra limpo, nao quebra. Se voltar a acontecer e nao for
+voce fechando a janela, e coisa para investigar (pedir o `runclient-*.log` da hora).
+
+### Cuidado com subagente que reporta pendencia como entregue
+O implementador aceitou duas pendencias em vez de resolver: (1) `mouseClicked` nao remontava (1 frame
+inconsistente) — corrigi; (2) a faixa da barra cobre 4 px da borda direita dos botoes do cabecalho — **ainda
+assim**. Ele tambem rodou `javac` sem classpath e contou "100 erros" irrelevantes, e checou chaves/parenteses em
+vez de compilar de verdade. **Chaves balanceadas nao provam que compila: rode o build.**
