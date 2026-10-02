@@ -4,6 +4,7 @@ import com.pedro.tabletoprpg.RollPreset;
 import com.pedro.tabletoprpg.RollPresetColor;
 import com.pedro.tabletoprpg.RpgNetworking;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
+import net.minecraft.ChatFormatting;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.EditBox;
@@ -100,6 +101,14 @@ public class PresetsScreen extends Screen {
     private static final int TIGHT_GAP = 4;
     /** Altura da linha de status (a fonte tem 9px). */
     private static final int STATUS_H = 10;
+    /**
+     * Quantas linhas o aviso de status pode ocupar.
+     *
+     * <p>Reservar duas custa {@code STATUS_H} a mais de altura do painel, e esse pixel
+     * sai da lista em janela baixa. Uma linha era pouco: "Preset 'Dano Espada' created
+     * (2d6+Strength, Yellow)" nao cabe em 288px de uma vez.
+     */
+    private static final int STATUS_LINES = 2;
     /** Lado do quadradinho de cor. */
     private static final int SWATCH_SIZE = 12;
     /** Vaos entre quadradinhos. */
@@ -119,6 +128,16 @@ public class PresetsScreen extends Screen {
      * reservar esta faixa, um nome longo passa por baixo do quadradinho.
      */
     private static final int ROW_CHIP_W = 10;
+
+    /**
+     * As setas de reordenar.
+     *
+     * <p><b>Por que escapes e nao o caractere:</b> fonte e dados do projeto sao
+     * ASCII (ver {@code scanEncoding}); o caractere de seta e um caractere nao-ASCII
+     * que ja passou por reescrita de encoding nesta sessao.
+     */
+    private static final String ARROW_UP = "\u2191";
+    private static final String ARROW_DOWN = "\u2193";
 
     public PresetsScreen(Screen parentScreen) {
         super(Component.literal("Presets"));
@@ -178,7 +197,7 @@ public class PresetsScreen extends Screen {
                 + STATUS_H + TIGHT_GAP          // rotulo "Color: <nome>"
                 + swatchBlockHeight + GAP
                 + ROW_H + TIGHT_GAP             // rodape: Back | Save | Use
-                + STATUS_H                      // linha de status
+                + 2 * STATUS_H                  // aviso, em duas linhas
                 + PAD;                           // folga antes da borda
 
         // <b>Por que 4 PAD e nao 2 (02/10/2026):</b> a altura do painel e
@@ -232,6 +251,10 @@ public class PresetsScreen extends Screen {
         // A rolagem pode ter ficado invalida: a lista encolheu com a janela e o
         // `listScroll` antigo apontaria para uma linha que nao existe mais.
         listScroll = Math.min(listScroll, maxScroll());
+
+        // O aviso e quebrado depois do painel ter a largura definitiva: a quebra usa
+        // `font.plainSubstrByWidth` com a largura do painel, que so existe aqui.
+        layoutStatus();
 
         // O layout inteiro em uma linha (02/10/2026). Estourar a tela nao da erro nem
         // aviso: os botoes simplesmente nao aparecem, e o log do jogo nao diz nada.
@@ -309,6 +332,18 @@ public class PresetsScreen extends Screen {
      * antigos, e o clique passaria a acionar o indice de uma lista que nao existe mais.
      */
     private final List<Button> listWidgets = new ArrayList<>();
+    /**
+     * As setas de cada linha visivel, na ordem das linhas.
+     *
+     * <p>Separadas de {@link #listWidgets} porque o {@code render} precisa ligar e
+     * desligar a visibilidade delas conforme o mouse entra e sai da linha, e nao faz
+     * sentido ficar procurando seta dentro de uma lista que tambem tem nome e Del.
+     */
+    private final List<Button> upArrows = new ArrayList<>();
+    private final List<Button> downArrows = new ArrayList<>();
+
+    /** O aviso de status quebrado em linhas, montado por {@link #layoutStatus()}. */
+    private final List<String> statusLines = new ArrayList<>();
 
     /**
      * Um widget da lista, ja registrado para a proxima remocao.
@@ -340,9 +375,17 @@ public class PresetsScreen extends Screen {
         return panelX + panelWidth - 4 - ROW_BTN_W - ROW_BTN_GAP;
     }
 
-    /** Onde terminam as duas setas. */
+    /**
+     * Onde terminam as duas setas.
+     *
+     * <p><b>Por que o vao ate o Del e {@code ROW_BTN_GAP} e nao {@code GAP}
+     * (02/10/2026):</b> pedido da jogadora para as setas ficarem "ao lado do Del". Com
+     * {@code GAP} as setas pareciam um bloco solto no meio da linha e a formula perdia
+     * espaco para um vao que nao separava nada. As setas e o Del formam um grupo unico,
+     * do mesmo jeito que as duas setas ja se tocavam entre si.
+     */
     private int arrowsRight() {
-        return delX() - GAP - (ROW_BTN_W * 2 + ROW_BTN_GAP);
+        return delX() - ROW_BTN_GAP - (ROW_BTN_W * 2 + ROW_BTN_GAP);
     }
 
     /**
@@ -373,11 +416,16 @@ public class PresetsScreen extends Screen {
      * @return {@code [nome, formula]}, na ordem em que a linha mostra
      */
     private String[] rowTexts(RollPreset preset) {
-        int available = formulaRight() - rowLeft();
-        String formula = truncate(preset.formula(), Math.max(20, available * 2 / 5));
-        // A faixa do quadradinho da cor entra na conta: o nome e centralizado no botao,
-        // e sem esta reserva ele passa por baixo do quadradinho em nome longo.
-        int nameMax = available - this.font.width(formula) - GAP - ROW_CHIP_W;
+        // A formula e desenhada por cima do botao do nome, entao o que manda e a borda
+        // DIREITA do botao: a formula precisa caber entre ela e o `formulaRight`.
+        // Antes a conta era uma fracao da largura toda, e sobrava por volta de 3px
+        // -- era o "a esquerda da formula esta invadindo o botao do nome".
+        int formulaMax = formulaRight() - (rowLeft() + rowNameWidth() + GAP);
+        String formula = truncate(preset.formula(), Math.max(20, formulaMax));
+
+        // O nome vive dentro do botao: a faixa do quadradinho da cor e um vao saem
+        // da largura do botao, nao da largura toda da linha.
+        int nameMax = rowNameWidth() - ROW_CHIP_W - GAP;
         return new String[]{truncate(preset.name(), Math.max(16, nameMax)), formula};
     }
 
@@ -389,6 +437,10 @@ public class PresetsScreen extends Screen {
             removeWidget(old);
         }
         listWidgets.clear();
+        // Sem isto, `addArrow` acrescentaria as setas do scroll antigo em cima das
+        // novas, e o `render` passaria a esconder as setas da linha errada.
+        upArrows.clear();
+        downArrows.clear();
 
         int visibleFrom = listScroll;
         int visibleTo = Math.min(presets.size(), listScroll + visibleRows);
@@ -400,20 +452,13 @@ public class PresetsScreen extends Screen {
             int rowY = listTop + (i - listScroll) * listRowHeight;
             int storedIndex = i;
 
-            // Setas: uma casa por clique. A primeira e a ultima linha nao tem seta
-            // naquela direcao, e nao e erro -- e so a borda da lista.
-            if (i > 0) {
-                addListWidget(Button.builder(Component.literal("\u2191"), b -> move(storedIndex, true))
-                        .bounds(upX, rowY, ROW_BTN_W, btnH)
-                        .tooltip(Tooltip.create(Component.literal("Move up")))
-                        .build());
-            }
-            if (i < presets.size() - 1) {
-                addListWidget(Button.builder(Component.literal("\u2193"), b -> move(storedIndex, false))
-                        .bounds(upX + ROW_BTN_W + ROW_BTN_GAP, rowY, ROW_BTN_W, btnH)
-                        .tooltip(Tooltip.create(Component.literal("Move down")))
-                        .build());
-            }
+            // Setas: uma casa por clique. As DUAS existem em toda linha, mesmo na
+            // primeira e na ultima: quem nao tem para onde ir fica escura e travada
+            // em vez de sumir (pedido da jogadora). Sumir fazia a borda da lista
+            // parecer um botao quebrado, e ela nao descobria que o preset ja estava
+            // no topo ou no fim da lista.
+            addArrow(rowY, upX, btnH, storedIndex, true);
+            addArrow(rowY, upX + ROW_BTN_W + ROW_BTN_GAP, btnH, storedIndex, false);
 
             // O nome: abre para edicao, e mostra a formula no hover (pedido do
             // usuario). O tooltip e a resposta ao "ao passar o mouse aparecera a
@@ -436,6 +481,39 @@ public class PresetsScreen extends Screen {
                             pending ? "Click again to confirm" : "Delete")))
                     .build());
         }
+    }
+
+    /**
+     * Uma seta de reordenar, na posicao pedida.
+     *
+     * <p><b>Por que a seta travada existe em vez de nao existir:</b> pedido da
+     * jogadora. A seta que nao tem para onde ir e desenhada escura e nao faz nada,
+     * em vez de sumir. Sumir deixava a borda da lista com um buraco que parecia botao
+     * quebrado, e nao dizia nada sobre o preset ja estar no topo ou no fim.
+     *
+     * <p><b>Por que o widget fica em lista propria:</b> o {@code render} precisa
+     * saber quais botoes sao setas para mostrar so as da linha sob o mouse. Guardar a
+     * posicao no indice da lista seria fragil: {@code listScroll} muda e o indice
+     * deixa de valer.
+     *
+     * @param up {@code true} = seta para cima
+     */
+    private void addArrow(int rowY, int x, int btnH, int index, boolean up) {
+        boolean canMove = up ? index > 0 : index < presets.size() - 1;
+        Button arrow = Button.builder(
+                        Component.literal(up ? ARROW_UP : ARROW_DOWN)
+                                .withStyle(canMove ? ChatFormatting.WHITE : ChatFormatting.DARK_GRAY),
+                        b -> move(index, up))
+                .bounds(x, rowY, ROW_BTN_W, btnH)
+                .tooltip(Tooltip.create(Component.literal(
+                        !canMove ? (up ? "Already first" : "Already last")
+                                : (up ? "Move up" : "Move down"))))
+                .build();
+        // `active = false` impede o clique E escurece o botao inteiro no vanilla.
+        // Sem isto, a seta travada continuaria reordenando a lista se clicada.
+        arrow.active = canMove;
+        addListWidget(arrow);
+        (up ? upArrows : downArrows).add(arrow);
     }
 
     private String truncate(String text, int maxWidth) {
@@ -610,7 +688,16 @@ public class PresetsScreen extends Screen {
     @Override
     public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
         if (mouseY >= listTop && mouseY < listBottom && maxScroll() > 0) {
-            listScroll = Math.max(0, Math.min(maxScroll(), listScroll - (int) -Math.signum(scrollY)));
+            // `scrollY` e o offset vertical do GLFW e vale POSITIVO ao rolar para CIMA
+            // (conferido no bytecode do `MouseHandler.onScroll`, que o repassa direto
+            // para `mouseScrolled`). Logo, descer a lista e `scrollY` negativo, que tem
+            // que AUMENTAR o offset: `- (int) -Math.signum(scrollY)` = `+1`.
+            //
+            // <b>Por que o menos duplo e o sinal certo (02/10/2026):</b> o gesto estava
+            // invertido, e a forma correta ja e a das outras tres listas deste projeto
+            // (`StatusScreen`, `AttributePickerScreen`, `SheetEditorScreen`), todas com
+            // `offset - signum(scrollY)`. Esta era a unica com `offset + signum(...)`.
+            listScroll = Math.max(0, Math.min(maxScroll(), listScroll + (int) -Math.signum(scrollY)));
             rebuildListOnly();
             return true;
         }
@@ -632,6 +719,10 @@ public class PresetsScreen extends Screen {
         graphics.fill(panelX, panelY, panelX + panelWidth, panelY + 1, 0xFF6B4A2A);
         graphics.fill(panelX, panelY + panelHeight - 1, panelX + panelWidth, panelY + panelHeight,
                 0xFF6B4A2A);
+
+        // As setas dependem do mouse, entao a visibilidade delas e resolvida ANTES de
+        // `super.render`: e o `render` dos widgets que le `visible`.
+        showArrowsOnHoveredRow(mouseX, mouseY);
 
         // Fundo da lista ANTES de `super.render`. O `fill` e opaco: desenhado depois, ele
         // tapa os botoes das linhas, que continuam clicaveis porque clique nao depende
@@ -667,8 +758,89 @@ public class PresetsScreen extends Screen {
         graphics.drawString(this.font, colorValue, pairX + this.font.width(colorLabel) + GAP,
                 colorLabelY, 0xFFE0C080, false);
 
-        if (!pendingStatus.isEmpty()) {
-            graphics.drawCenteredString(this.font, pendingStatus, this.width / 2, statusY, 0xFFFF6060);
+        // O aviso ocupa ate duas linhas, quebradas na largura do painel. Com tela
+        // aberta ele NAO vai tambem para o chat (ver o receptor em
+        // `TabletopRpgClient`), entao cortar o texto esconderia a mensagem. A cor e
+        // branca: o vermelho era leitura de "erro", e a linha carrega sucesso e
+        // recusa do mesmo jeito.
+        for (int i = 0; i < statusLines.size(); i++) {
+            graphics.drawCenteredString(this.font, statusLines.get(i),
+                    this.width / 2, statusY + i * STATUS_H, 0xFFFFFFFF);
+        }
+    }
+
+    /**
+     * O aviso quebrado em ate {@link #STATUS_LINES} linhas, cada uma cabendo no painel.
+     *
+     * <p><b>Por que quebrar e nao cortar:</b> com a tela aberta o aviso do servidor nao
+     * vai tambem para o chat -- o receptor em {@code TabletopRpgClient} manda para a
+     * tela OU para o chat, nunca para os dois. Cortar esconderia a recusa. Se ainda
+     * assim sobrar texto, a ultima linha recebe reticencias, para o jogador saber que
+     * ha mais em vez de achar que leu tudo.
+     */
+    private void layoutStatus() {
+        statusLines.clear();
+        if (pendingStatus.isEmpty()) {
+            return;
+        }
+
+        int maxWidth = panelWidth - 2 * PAD;
+        String rest = pendingStatus;
+        while (statusLines.size() < STATUS_LINES && !rest.isEmpty()) {
+            // `plainSubstrByWidth` devolve o pedaco que CABE, e nao onde ele acaba: o
+            // que importa e o tamanho da proxima linha, nao o indice. Cortar no meio
+            // de uma palavra e permitido, porque um nome de preset nao tem espaco e
+            // partir "Dano_Espada" em duas linhas e melhor que esconder metade.
+            String head = font.plainSubstrByWidth(rest, maxWidth);
+            if (head.isEmpty()) {
+                // Nem um caractere cabe na largura (so aconteceria com painel
+                // degenerado). Mostra um so, porque devolver a palavra inteira
+                // estouraria o painel -- que e exatamente o defeito que esta funcao
+                // existe para impedir.
+                head = rest.substring(0, 1);
+            }
+            statusLines.add(head.trim());
+            rest = rest.substring(head.length()).trim();
+        }
+        if (!rest.isEmpty() && !statusLines.isEmpty()) {
+            int last = statusLines.size() - 1;
+            statusLines.set(last, truncate(statusLines.get(last) + " ...", maxWidth));
+        }
+    }
+
+    /**
+     * Mostra as setas so da linha que esta sob o mouse (pedido da jogadora).
+     *
+     * <p><b>Por que tambem desligar o {@code active}:</b> conferido no bytecode do
+     * {@code AbstractWidget.mouseClicked}, que testa {@code isActive()} e
+     * {@code isMouseOver()} e <b>nao</b> testa {@code isVisible()}. Esconder a seta
+     * sem desativar deixaria um botao invisivel reordenando a lista num clique cego.
+     *
+     * <p><b>Por que o {@code active} nao volta a {@code true} aqui:</b> a seta travada
+     * do topo e do fim precisa continuar inativa mesmo com o mouse em cima dela. Por
+     * isso quem decide e {@code canMove}, recalculado do indice da linha, e nao o
+     * {@code active} que o botao nasceu com.
+     */
+    private void showArrowsOnHoveredRow(int mouseX, int mouseY) {
+        int hoveredRow = -1;
+        for (int j = 0; j < visibleRows; j++) {
+            int rowY = listTop + j * listRowHeight;
+            if (mouseX >= panelX && mouseX < panelX + panelWidth
+                    && mouseY >= rowY && mouseY < rowY + listRowHeight) {
+                hoveredRow = j;
+                break;
+            }
+        }
+        for (int j = 0; j < upArrows.size(); j++) {
+            int index = listScroll + j;
+            boolean canUp = index > 0;
+            boolean canDown = index < presets.size() - 1;
+            Button up = upArrows.get(j);
+            Button down = downArrows.get(j);
+            up.visible = j == hoveredRow;
+            down.visible = j == hoveredRow;
+            up.active = canUp && j == hoveredRow;
+            down.active = canDown && j == hoveredRow;
         }
     }
 
@@ -802,6 +974,9 @@ public class PresetsScreen extends Screen {
             presets = new ArrayList<>();
         }
         pendingStatus = message == null ? "" : message;
+        if (panelWidth > 0) {
+            layoutStatus();
+        }
 
         // O preset em edicao continua sendo o mesmo objeto da lista, entao a linha
         // segue marcada depois de salvar.
@@ -834,5 +1009,11 @@ public class PresetsScreen extends Screen {
 
     public void setStatus(String message) {
         pendingStatus = message == null ? "" : message;
+        // A tela pode nem estar montada ainda (`setStatus` e chamado antes do `init`).
+        // `layoutStatus` so depende da largura do painel, que ainda e 0 nesse ponto, e
+        // quem chama de novo e o `layout`.
+        if (panelWidth > 0) {
+            layoutStatus();
+        }
     }
 }
