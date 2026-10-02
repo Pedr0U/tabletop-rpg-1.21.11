@@ -251,6 +251,14 @@ public final class FormulaResolver {
                 }
                 continue;
             }
+            // `kh3`/`dl1` sao OPERADOR de dado, pelo mesmo motivo do `d20` acima.
+            if (isKeepDropAt(formula, i)) {
+                i += 2;
+                while (i < n && Character.isDigit(formula.charAt(i))) {
+                    i++;
+                }
+                continue;
+            }
             // grown e o fim do trecho candidato mais longo. A chave ignora espaco,
             // entao o espaco entre duas palavras pode ser servido.
             int grown = i;
@@ -300,6 +308,34 @@ public final class FormulaResolver {
             return false;
         }
         return i + 1 < formula.length() && Character.isDigit(formula.charAt(i + 1));
+    }
+
+    /**
+     * O caractere na posicao {@code i} abre um {@code kh}/{@code dl} com numero?
+     *
+     * <p><b>Por que este metodo existe (02/10/2026):</b> preset com {@code 6#2d6dl1}
+     * era recusado com {@code unknown attribute 'dl'}. O {@link #isDiceAt} andava ate o
+     * fim do {@code d6} e o scanner caia no {@code dl} do {@code dl1}: nao achava
+     * atributo com esse nome e devolvia a palavra inteira, como se a jogadora tivesse
+     * escrito o nome {@code dl}. {@code dl} e {@code kh} sao operadores do
+     * {@code DiceFormula}, entao o scanner precisa saber disso tanto quanto sabe que
+     * {@code d6} e dado. O {@code isDiceAt} so olhava para o que vem DEPOIS do
+     * {@code d}, e depois do dado vem o operador.
+     *
+     * <p>O numero e obrigatorio porque {@code dl} sem dado antes nao tem o que
+     * descartar: o {@code DiceFormula} recusa assim mesmo. A guarda existe para o
+     * scanner nao acusar a jogadora de escrever um atributo chamado {@code dl}, e
+     * nao para aceitar a formula.
+     */
+    private static boolean isKeepDropAt(String formula, int i) {
+        if (i + 2 >= formula.length()) {
+            return false;
+        }
+        char first = Character.toLowerCase(formula.charAt(i));
+        char second = Character.toLowerCase(formula.charAt(i + 1));
+        boolean operator = (first == 'k' && second == 'h')
+                || (first == 'd' && second == 'l');
+        return operator && Character.isDigit(formula.charAt(i + 2));
     }
 
     /** Chave de comparacao dos nomes: sem acento, minuscula, sem espaco. */

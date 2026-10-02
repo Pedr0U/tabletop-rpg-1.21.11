@@ -76,6 +76,28 @@ class RollPresetTest {
     }
 
     @Test
+    @DisplayName("create aceita repeticao e keep/drop: 6#2d6dl1 nao e atributo 'dl'")
+    void createAcceptsRepeatAndKeepDrop() throws Exception {
+        // `dl` e `kh` sao OPERADORES de dado, nao nomes de atributo. O scanner de
+        // `FormulaResolver` nao os conhecia: ele parava em `d6`, depois encontrava o
+        // `dl` de `dl1`, nao achava nenhum atributo com esse nome e recusava o preset
+        // inteiro com "unknown attribute 'dl'". Quem escreveu o scanner via `d` como
+        // dado e `d`+digito como dado, e esqueceu que depois do dado vem um operador.
+        RollPreset preset = RollPreset.create("Seis", "6#2d6dl1", "red");
+        assertEquals("6#2d6dl1", preset.formula());
+
+        // Os dois operadores, e o `++` (que comeca com `+`, entao nunca chegou aqui).
+        assertEquals("4d6kh3", RollPreset.create("Kh", "4d6kh3", "white").formula());
+        assertEquals("4d6dl1kh3", RollPreset.create("DlKh", "4d6dl1kh3", "white").formula());
+        assertEquals("3d6++2dl1", RollPreset.create("Exp", "3d6++2dl1", "white").formula());
+
+        // E o que prova que nao e "aceita qualquer coisa": `dl` sozinho continua
+        // invalido, porque sem dado antes nao ha o que descartar.
+        assertThrows(RollPreset.PresetException.class,
+                () -> RollPreset.create("Ruim", "dl1", "red"));
+    }
+
+    @Test
     @DisplayName("o preset guarda o nome, nunca o valor nem o placeholder")
     void createKeepsTheNameNotTheValue() throws Exception {
         // Se guardasse o valor, o preset envelheceria junto com a ficha; se guardasse
