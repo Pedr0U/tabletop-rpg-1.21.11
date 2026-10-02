@@ -127,9 +127,15 @@ public class DiceRollScreen extends Screen {
      * serve para criar do zero.
      */
     private void openPresets() {
-        String formula = hasRollValue() ? getRollExpression().replace(" ", "") : "";
         PresetsScreen screen = new PresetsScreen(this);
         this.minecraft.setScreen(screen);
+        // Uma linha por abertura, com o tamanho da janela: e o que permite confirmar,
+        // pelo log, que a tela foi aberta E com quanto espaco ela foi desenhada. Um
+        // layout estourado so e visivel aqui (02/10/2026).
+        TabletopRpgClient.LOGGER.info(
+                "[TabletopRPG] PresetsScreen aberta ({}x{}).",
+                this.minecraft.getWindow().getGuiScaledWidth(),
+                this.minecraft.getWindow().getGuiScaledHeight());
         // Pede a lista depois de trocar a tela: o receptor procura uma PresetsScreen
         // na frente, e quem responde e o servidor.
         screen.requestList();

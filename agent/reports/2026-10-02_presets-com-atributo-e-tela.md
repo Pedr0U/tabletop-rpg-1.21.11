@@ -178,8 +178,8 @@ Regras no servidor (todas em `savePresetFromScreen`):
 5. **`withAlternative` com dois argumentos.** A assinatura e de um argumento nesta
    versao do DFU; a segunda string nao existe.
 6. **Mojibake e ideograma em `PresetsScreen`.** O `scanEncoding` pegou dois ideogramas
-   chineses que entraram num comentario ("滚动 nele"). O build **falhou** — e o detector
-   estava certo: nao ha scroll vertical em portugues.
+   chineses que entraram num comentario, no lugar de "rolar nele". O build **falhou** — e
+   o detector estava certo: nao ha scroll vertical em portugues.
 7. **Seis expectativas minhas erradas nos testes** (`2d6+20+2` em vez de `2d6+d20+2`,
    `resolve` devolvendo soma em vez de formula, helper que duplicava pericia em vez de
    mexer na existente). Corrigidas no teste, nunca no codigo de producao.

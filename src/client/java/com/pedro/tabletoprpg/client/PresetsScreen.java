@@ -70,16 +70,46 @@ public class PresetsScreen extends Screen {
     private EditBox formulaBox;
     private RollPresetColor selectedColor = RollPresetColor.WHITE;
 
-    private int panelX, panelY, panelWidth;
-    private int listTop, listBottom, listScroll, listRowHeight;
-    private int swatchX, swatchY, swatchSize = 14, swatchGap = 3, swatchPerRow = 9;
-    private int statusY;
+    private int panelX, panelY, panelWidth, panelHeight;
+    private int listTop, listBottom, listScroll, listRowHeight, visibleRows;
+    private int swatchX, swatchY, swatchSize, swatchGap, swatchPerRow, swatchBlockHeight;
+    private int colorLabelY, footerY, statusY;
 
     /** Os squares, na ordem do enum: a tela mostra a mesma ordem das cores. */
     private static final RollPresetColor[] SWATCHES = RollPresetColor.values();
 
-    /** Quantas linhas a lista mostra antes de rolar. */
-    private static final int VISIBLE_ROWS = 6;
+    // --- medidas do layout (02/10/2026) ---
+    //
+    // <b>Por que sao constantes e nao numeros soltos no {@code init}:</b> o layout e
+    // inteiro calculado a partir da altura da tela (ver `layout`). Espalhar 20 e 6
+    // pelo codigo fazia a soma nao fechar, e foi exatamente o que mandou o painel
+    // para fora da tela: 6 linhas de 22px mais o formulario davam 326px num painel de
+    // 240px, e Save, Use e o botao de voltar ficavam abaixo da dobra.
+
+    /** Borda interna do painel. */
+    private static final int PAD = 6;
+    /** Altura reservada ao titulo. */
+    private static final int TITLE_H = 14;
+    /** Altura de um campo de texto. */
+    private static final int FIELD_H = 18;
+    /** Altura de uma linha da lista e dos botoes do rodape. */
+    private static final int ROW_H = 20;
+    /** Espaco entre um bloco e o seguinte. */
+    private static final int GAP = 6;
+    /** Espaco menor, entre o rotulo e o campo que ele nomeia. */
+    private static final int TIGHT_GAP = 4;
+    /** Altura da linha de status (a fonte tem 9px). */
+    private static final int STATUS_H = 10;
+    /** Lado do quadradinho de cor. */
+    private static final int SWATCH_SIZE = 12;
+    /** Vaos entre quadradinhos. */
+    private static final int SWATCH_GAP = 2;
+    /** Teto de linhas da lista, quando sobra altura. */
+    private static final int MAX_ROWS = 6;
+
+    /** Botao e vao das setas e do Del na linha da lista. */
+    private static final int ROW_BTN_W = 20;
+    private static final int ROW_BTN_GAP = 2;
 
     public PresetsScreen(Screen parentScreen) {
         super(Component.literal("Presets"));
@@ -95,43 +125,7 @@ public class PresetsScreen extends Screen {
     protected void init() {
         super.init();
 
-        panelWidth = Math.min(this.width - 24, 280);
-        panelX = (this.width - panelWidth) / 2;
-        panelY = 12;
-
-        listRowHeight = 22;
-        int titleH = 20;
-        int listTopLocal = panelY + titleH;
-        int formH = 26 * 3          // Name + Formula + rotulo de cor
-                + rowsOfSwatches() * (swatchSize + swatchGap)
-                + 26                 // Save / Use
-                + 20                 // status
-                + 26;                // voltar para Rolls
-        int listHeight = VISIBLE_ROWS * listRowHeight;
-        listTop = listTopLocal;
-        listBottom = listTopLocal + listHeight;
-
-        int boxX = panelX + (panelWidth - 200) / 2;
-        int labelW = 50;
-        int boxW = 200;
-
-        int y = listBottom + 8;
-        nameBox = field("Name", boxX + labelW, y, boxW);
-        nameBox.setMaxLength(RollPreset.MAX_NAME);
-
-        y += 26;
-        formulaBox = field("Formula", boxX + labelW, y, boxW);
-        formulaBox.setMaxLength(RollPreset.MAX_FORMULA);
-
-        // Amostras centralizadas, abaixo do rotulo "Color".
-        int colorLabelY = y + 26;
-        int swatchRows = rowsOfSwatches();
-        int swatchesWidth = swatchPerRow * swatchSize + (swatchPerRow - 1) * swatchGap;
-        swatchX = (this.width - swatchesWidth) / 2;
-        swatchY = colorLabelY + 14;
-
-        statusY = swatchY + swatchRows * (swatchSize + swatchGap) + 6 + 26;
-
+        layout();
         rebuildFooter();
         // A lista e desenhada linha a linha, com widget por linha. Sem
         // `rebuildWidgets` aqui: quem chama e o receptor do pacote, que pode chegar
@@ -139,12 +133,118 @@ public class PresetsScreen extends Screen {
         rebuildListOnly();
     }
 
+    /**
+     * Calcula todas as coordenadas da tela a partir do tamanho da janela.
+     *
+     * <p><b>Por que a lista e medida e as outras coisas nao (02/10/2026):</b> a lista e
+     * a unica parte que pode encolher. Titulo, campos, amostras e botoes tem altura
+     * fixa, porque o que a jogadora precisa ver e o formulario inteiro; se a lista
+     * tivesse altura fixa tambem, o painel inteiro passaria da tela. Entao a ordem e
+     * Measure primeiro, lista no meio, e o resto em volta.
+     *
+     * <p><b>Por que centralizar na vertical:</b> sobra de altura num monitor grande
+     * deixaria o painel colado no topo, e o centro da tela e onde o olho ja esta.
+     */
+    private void layout() {
+        panelWidth = Math.min(this.width - 24, 300);
+        panelX = (this.width - panelWidth) / 2;
+        listRowHeight = ROW_H;
+
+        // Amostras: quantas cabem numa linha, sem estourar o painel.
+        swatchSize = SWATCH_SIZE;
+        swatchGap = SWATCH_GAP;
+        int usable = panelWidth - 2 * PAD;
+        swatchPerRow = Math.max(1, Math.min(SWATCHES.length, usable / (swatchSize + swatchGap)));
+        swatchBlockHeight = rowsOfSwatches() * swatchSize
+                + (rowsOfSwatches() - 1) * swatchGap;
+
+        // Tudo que nao e lista. A lista recebe o que sobrar da altura.
+        //
+        // O PAD do fim entra aqui, e nao so o do comeco: a linha de status termina
+        // logo abaixo do rodape, e sem este PAD ela encostava na borda inferior do
+        // painel.
+        int chrome = TITLE_H + GAP
+                + FIELD_H + TIGHT_GAP
+                + FIELD_H + GAP
+                + STATUS_H + TIGHT_GAP          // rotulo "Color: <nome>"
+                + swatchBlockHeight + GAP
+                + ROW_H + TIGHT_GAP             // rodape: Back | Save | Use
+                + STATUS_H                      // linha de status
+                + PAD;                           // folga antes da borda
+
+        // <b>Por que 4 PAD e nao 2 (02/10/2026):</b> a altura do painel e
+        // `2 * PAD + chrome + listHeight`, e `panelY` nunca e menor que PAD. Logo o
+        // espaco REAL que a lista pode tomar e `height - 4 * PAD - chrome`: contar
+        // so as duas margens do painel fazia o painel passar da tela em 427x240
+        // (244px num painel de 240), e o que sobrava embaixo era o Save, o Use e a
+        // linha de status. E o tamanho de tela em que a jogadora estava testando.
+        int available = this.height - 4 * PAD - chrome;
+        // Uma linha e o piso absoluto. Duas era o piso desejado, mas numa janela tao
+        // baixa quanto esta nao cabem nem duas, e forcar as duas punha o rodape fora
+        // da tela -- o mesmo defeito que isto corrige, so que agora no rodape.
+        int listHeight = Math.min(MAX_ROWS * ROW_H, Math.max(ROW_H, available));
+
+        visibleRows = Math.max(1, listHeight / ROW_H);
+        // A altura volta a ser multipla da linha: sobra de meio pixel de folga ficaria
+        // como uma faixa vazia no fim da lista.
+        listHeight = visibleRows * ROW_H;
+
+        panelHeight = 2 * PAD + chrome + listHeight;
+        panelY = Math.max(PAD, (this.height - panelHeight) / 2);
+
+        // A posicao da lista e do formulario sai do topo do painel, para as duas
+        // metades concordarem em onde uma acaba e a outra comeca.
+        int y = panelY + PAD + TITLE_H + GAP;
+        listTop = y;
+        listBottom = listTop + listHeight;
+
+        // O campo e o rotulo dele sao centralizados como um BLOCO. Centralizar so o
+        // campo punha o rotulo "Formula" para fora do painel, porque o rotulo e mais
+        // largo que o espaco sobrando de um lado.
+        int labelW = 46;
+        int boxW = Math.max(60, Math.min(200, usable - labelW - TIGHT_GAP));
+        int boxX = panelX + (panelWidth - (labelW + boxW)) / 2 + labelW;
+
+        nameBox = field("Name", boxX, listBottom + GAP, boxW);
+        nameBox.setMaxLength(RollPreset.MAX_NAME);
+
+        formulaBox = field("Formula", boxX, nameBox.getY() + FIELD_H + TIGHT_GAP, boxW);
+        formulaBox.setMaxLength(RollPreset.MAX_FORMULA);
+
+        colorLabelY = formulaBox.getY() + FIELD_H + GAP;
+        int swatchRows = rowsOfSwatches();
+        int swatchesWidth = swatchPerRow * swatchSize + (swatchPerRow - 1) * swatchGap;
+        swatchX = panelX + (panelWidth - swatchesWidth) / 2;
+        swatchY = colorLabelY + STATUS_H + TIGHT_GAP;
+
+        footerY = swatchY + swatchBlockHeight + GAP;
+        statusY = footerY + ROW_H + TIGHT_GAP;
+
+        // A rolagem pode ter ficado invalida: a lista encolheu com a janela e o
+        // `listScroll` antigo apontaria para uma linha que nao existe mais.
+        listScroll = Math.min(listScroll, maxScroll());
+
+        // O layout inteiro em uma linha (02/10/2026). Estourar a tela nao da erro nem
+        // aviso: os botoes simplesmente nao aparecem, e o log do jogo nao diz nada.
+        // Com estas medidas no log, um layout quebrado aparece como numero, e nao
+        // como "a jogadora jurou que nao tinha visto o botao".
+        TabletopRpgClient.LOGGER.info(
+                "[TabletopRPG] PresetsScreen layout: tela={}x{} painel={}x{} em ({},{}) "
+                        + "lista={}..{} ({} linha(s) de {}) campo={}x{} campoX={} "
+                        + "amostras={} linha(s) de {} px cor={} rodapeY={} statusY={}",
+                this.width, this.height, panelWidth, panelHeight, panelX, panelY,
+                listTop, listBottom, visibleRows, listRowHeight,
+                nameBox.getWidth(), nameBox.getHeight(), nameBox.getX(),
+                rowsOfSwatches(), swatchPerRow, selectedColor.id(),
+                footerY, statusY);
+    }
+
     private int rowsOfSwatches() {
         return (SWATCHES.length + swatchPerRow - 1) / swatchPerRow;
     }
 
     private EditBox field(String label, int x, int y, int w) {
-        EditBox box = new EditBox(this.font, x, y, w, 18, Component.literal(label));
+        EditBox box = new EditBox(this.font, x, y, w, FIELD_H, Component.literal(label));
         // OBRIGATORIO: sem addRenderableWidget a caixa nao entra no ciclo de desenho
         // nem no de clique (mesmo cuidado anotado em InventoryItemScreen).
         addRenderableWidget(box);
@@ -154,20 +254,38 @@ public class PresetsScreen extends Screen {
     /**
      * Recria Save, Use e o botao de voltar.
      *
-     * <p><b>Por que um metodo so para o rodape:</b> a lista e o formulario sao
-     * recriados em separado, e o rodape depende das coordenadas do formulario, que so
-     * o {@code init} calcula. Fica em metodo para o layout do rodape estar escrito em
-     * um lugar so.
+     * <p><b>Por que os tres na MESMA linha:</b> antes eles ocupavam duas linhas (Save e
+     * Use, depois o de voltar), e essa linha extra era justamente a que empurrava o
+     * rodape para fora da tela. Voltar continua no canto inferior esquerdo, que e onde
+     * a jogadora procura saida, e Save/Use continuam abaixo dos campos.
+     *
+     * <p><b>Por que a largura do botao de voltar sai da fonte:</b> um numero fixo
+     * deixava "< Back to Rolls" estourando o botao quando a fonte era maior, ou sobrava
+     * espaco quando era menor.
      */
     private void rebuildFooter() {
-        int btnY = swatchY + rowsOfSwatches() * (swatchSize + swatchGap) + 6;
-        int btnW = (panelWidth - 20) / 2;
+        String backLabel = "< Back to Rolls";
+        int usable = panelWidth - 2 * PAD;
+        // O botao de voltar nunca passa da metade do painel: se a fonte estiver grande
+        // demais para o espaco, e melhor o texto apertar do que empurrar Save e Use
+        // para fora do painel.
+        int backW = Math.min(Math.max(60, this.font.width(backLabel) + 10), usable / 2);
+        int btnW = Math.max(40, (usable - backW - GAP - TIGHT_GAP) / 2);
+
+        int backX = panelX + PAD;
+        int useX = panelX + panelWidth - PAD - btnW;
+        int saveX = useX - btnW - TIGHT_GAP;
+        // A largura real do botao de voltar e o que sobra ate o Save. Calcular a
+        // posicao a partir da largura desejada e nao do espaco disponivel e o que
+        // permite a sobreposicao quando os dois números nao batem.
+        int backActualW = Math.max(20, saveX - GAP - backX);
+
+        this.addRenderableWidget(Button.builder(Component.literal(backLabel), b -> onClose())
+                .bounds(backX, footerY, backActualW, ROW_H).build());
         this.addRenderableWidget(Button.builder(Component.literal("Save"), b -> save())
-                .bounds(panelX + 10, btnY, btnW, 20).build());
+                .bounds(saveX, footerY, btnW, ROW_H).build());
         this.addRenderableWidget(Button.builder(Component.literal("Use"), b -> usePreset())
-                .bounds(panelX + 10 + btnW + 8, btnY, btnW, 20).build());
-        this.addRenderableWidget(Button.builder(Component.literal("< Back to Rolls"), b -> onClose())
-                .bounds(panelX, statusY + 14, 110, 20).build());
+                .bounds(useX, footerY, btnW, ROW_H).build());
     }
 
     /**
@@ -196,6 +314,62 @@ public class PresetsScreen extends Screen {
         return button;
     }
 
+    /**
+     * Onde comeca e termina cada coluna da linha da lista.
+     *
+     * <p><b>Por que metodos e nao numeros no meio do codigo:</b> o desenho da linha
+     * ({@code drawList}) e os botoes ({@code rebuildListOnly}) precisam concordar
+     * exatamente, e um numero escrito em cada um vira divergencia na primeira
+     * alteracao de largura. A ordem das colunas, da esquerda para a direita:
+     * nome, setas, Del.
+     */
+    private int rowLeft() {
+        return panelX + 4;
+    }
+
+    private int delX() {
+        return panelX + panelWidth - 4 - ROW_BTN_W - ROW_BTN_GAP;
+    }
+
+    /** Onde terminam as duas setas. */
+    private int arrowsRight() {
+        return delX() - GAP - (ROW_BTN_W * 2 + ROW_BTN_GAP);
+    }
+
+    /**
+     * A largura da coluna do nome: tres quintos da linha.
+     *
+     * <p><b>Por que um fracao e nao "o que sobrar":</b> a formula tambem e desenhada na
+     * linha, e as duas se atropelam se o nome for calculado pelo espaco restante. Com
+     * a divisao fixa, o nome ocupa um terco da esquerda e a formula um terco da
+     * direita, e nenhuma depende do texto que veio.
+     */
+    private int rowNameWidth() {
+        return Math.max(20, (arrowsRight() - rowLeft()) * 3 / 5);
+    }
+
+    /** Onde termina a formula, encostando nas setas. */
+    private int formulaRight() {
+        return arrowsRight() - GAP;
+    }
+
+    /**
+     * Os dois textos de uma linha, ja cortados para nao se atropelarem.
+     *
+     * <p>O nome e a formula sao cortados com o mesmo criterio aqui, e nao em cada
+     * lugar: o {@code drawList} desenha a formula e o {@code rebuildListOnly} põe o
+     * nome no botao, e dois cortes independentes dao uma linha onde um texto entra em
+     * cima do outro.
+     *
+     * @return {@code [nome, formula]}, na ordem em que a linha mostra
+     */
+    private String[] rowTexts(RollPreset preset) {
+        int available = formulaRight() - rowLeft();
+        String formula = truncate(preset.formula(), Math.max(20, available * 2 / 5));
+        int nameMax = available - this.font.width(formula) - GAP;
+        return new String[]{truncate(preset.name(), Math.max(16, nameMax)), formula};
+    }
+
     /** Recria so os widgets das linhas da lista, sem mexer no formulario. */
     private void rebuildListOnly() {
         // Remove os widgets da lista ANTES de criar os novos: e o que impede o
@@ -206,11 +380,9 @@ public class PresetsScreen extends Screen {
         listWidgets.clear();
 
         int visibleFrom = listScroll;
-        int visibleTo = Math.min(presets.size(), listScroll + VISIBLE_ROWS);
-        int btnH = 18;
-        int btnW = 20;
-        int upX = panelX + panelWidth - 4 - btnW * 3 - 6;
-        int delX = panelX + panelWidth - 4 - btnW - 2;
+        int visibleTo = Math.min(presets.size(), listScroll + visibleRows);
+        int btnH = ROW_H - 2;
+        int upX = arrowsRight() - (ROW_BTN_W * 2 + ROW_BTN_GAP);
 
         for (int i = visibleFrom; i < visibleTo; i++) {
             RollPreset preset = presets.get(i);
@@ -221,13 +393,13 @@ public class PresetsScreen extends Screen {
             // naquela direcao, e nao e erro -- e so a borda da lista.
             if (i > 0) {
                 addListWidget(Button.builder(Component.literal("\u2191"), b -> move(storedIndex, true))
-                        .bounds(upX, rowY, btnW, btnH)
+                        .bounds(upX, rowY, ROW_BTN_W, btnH)
                         .tooltip(Tooltip.create(Component.literal("Move up")))
                         .build());
             }
             if (i < presets.size() - 1) {
                 addListWidget(Button.builder(Component.literal("\u2193"), b -> move(storedIndex, false))
-                        .bounds(upX + btnW + 2, rowY, btnW, btnH)
+                        .bounds(upX + ROW_BTN_W + ROW_BTN_GAP, rowY, ROW_BTN_W, btnH)
                         .tooltip(Tooltip.create(Component.literal("Move down")))
                         .build());
             }
@@ -236,9 +408,9 @@ public class PresetsScreen extends Screen {
             // usuario). O tooltip e a resposta ao "ao passar o mouse aparecera a
             // formula".
             addListWidget(Button.builder(
-                            Component.literal(truncate(preset.name(), 120)),
+                            Component.literal(rowTexts(preset)[0]),
                             b -> loadForEdit(storedIndex))
-                    .bounds(panelX + 4, rowY, Math.max(20, upX - panelX - 8), btnH)
+                    .bounds(rowLeft(), rowY, rowNameWidth(), btnH)
                     .tooltip(Tooltip.create(Component.literal(preset.formula()),
                             Component.literal("Color: " + preset.color().displayName())))
                     .build());
@@ -248,7 +420,7 @@ public class PresetsScreen extends Screen {
             addListWidget(Button.builder(
                             Component.literal(pending ? "Del?" : "Del"),
                             b -> onDelete(storedIndex))
-                    .bounds(delX, rowY, btnW, btnH)
+                    .bounds(delX(), rowY, ROW_BTN_W, btnH)
                     .tooltip(Tooltip.create(Component.literal(
                             pending ? "Click again to confirm" : "Delete")))
                     .build());
@@ -378,12 +550,12 @@ public class PresetsScreen extends Screen {
 
     /** O quadradinho da cor, ou -1 se o clique foi fora de todos. */
     private int swatchAt(double mouseX, double mouseY) {
-        int rows = rowsOfSwatches();
-        if (mouseY < swatchY || mouseY >= swatchY + rows * (swatchSize + swatchGap)) {
+        if (mouseY < swatchY || mouseY >= swatchY + swatchBlockHeight) {
             return -1;
         }
-        int row = (int) ((mouseY - swatchY) / (swatchSize + swatchGap));
-        int col = (int) ((mouseX - swatchX) / (swatchSize + swatchGap));
+        int step = swatchSize + swatchGap;
+        int row = (int) ((mouseY - swatchY) / step);
+        int col = (int) ((mouseX - swatchX) / step);
         if (col < 0 || col >= swatchPerRow) {
             return -1;
         }
@@ -391,9 +563,10 @@ public class PresetsScreen extends Screen {
         if (index < 0 || index >= SWATCHES.length) {
             return -1;
         }
-        // A ultima linha tem menos de 9; o espaco sobrando nao e clicavel.
-        double localX = mouseX - (swatchX + col * (swatchSize + swatchGap));
-        double localY = mouseY - (swatchY + row * (swatchSize + swatchGap));
+        // A ultima linha pode ter menos que `swatchPerRow`; o espaco sobrando nao e
+        // clicavel, senao o clique num canto vazio escolheria a cor da linha de baixo.
+        double localX = mouseX - (swatchX + col * step);
+        double localY = mouseY - (swatchY + row * step);
         if (localX > swatchSize || localY > swatchSize) {
             return -1;
         }
@@ -419,36 +592,48 @@ public class PresetsScreen extends Screen {
     }
 
     private int maxScroll() {
-        return Math.max(0, presets.size() - VISIBLE_ROWS);
+        return Math.max(0, presets.size() - visibleRows);
     }
 
     @Override
     public void render(GuiGraphics graphics, int mouseX, int mouseY, float delta) {
         graphics.fill(0, 0, this.width, this.height, 0x99000000);
 
-        // O painel vai ate a linha de status mais o botao de voltar. Medido pelo
-        // conteudo: o desenho e retangulo, entao a altura accompanies o que ha
-        // dentro dele em vez de cortar o campo novo.
-        int backY = statusY + 14;
-        graphics.fill(panelX, panelY, panelX + panelWidth, backY + 20, 0xFF202020);
+        // O painel usa a altura calculada no `layout`, e nao uma soma de"Y ate onde
+        // estava o botao". A soma dava 326px num painel de 240px, e o que passasse
+        // disso saia da tela sem nenhuma pista de que era para ter saido.
+        graphics.fill(panelX, panelY, panelX + panelWidth, panelY + panelHeight, 0xFF202020);
         graphics.fill(panelX, panelY, panelX + panelWidth, panelY + 1, 0xFF6B4A2A);
-        graphics.fill(panelX, backY + 19, panelX + panelWidth, backY + 20, 0xFF6B4A2A);
+        graphics.fill(panelX, panelY + panelHeight - 1, panelX + panelWidth, panelY + panelHeight,
+                0xFF6B4A2A);
 
         super.render(graphics, mouseX, mouseY, delta);
 
-        graphics.drawCenteredString(this.font, this.title, this.width / 2, panelY + 6, 0xFFE0C080);
+        graphics.drawCenteredString(this.font, this.title, this.width / 2, panelY + PAD, 0xFFE0C080);
 
         drawList(graphics);
         drawSwatches(graphics);
 
-        int boxX = nameBox.getX();
-        graphics.drawString(this.font, "Name", boxX - 4 - this.font.width("Name"),
+        // Rotulo a direita do campo: e a coluna que o bloco centralizado no `layout`
+        // abriu para ele. Alinhar pela direita do campo e o que mantem "Name" e
+        // "Formula" na mesma coluna, mesmo com nomes de largura diferente.
+        graphics.drawString(this.font, "Name",
+                nameBox.getX() - TIGHT_GAP - this.font.width("Name"),
                 nameBox.getY() + 5, 0xFFB0B0B0, false);
-        graphics.drawString(this.font, "Formula", boxX - 4 - this.font.width("Formula"),
+        graphics.drawString(this.font, "Formula",
+                formulaBox.getX() - TIGHT_GAP - this.font.width("Formula"),
                 formulaBox.getY() + 5, 0xFFB0B0B0, false);
-        graphics.drawCenteredString(this.font, "Color", this.width / 2, swatchY - 16, 0xFFB0B0B0);
-        graphics.drawString(this.font, selectedColor.displayName(),
-                boxX - 4 - this.font.width(selectedColor.displayName()), swatchY, 0xFFB0B0B0, false);
+
+        // "Color: <nome>" centrado como um par. O nome da cor sozinho, encostado no
+        // campo, era mais largo que a coluna do rotulo e saia pela esquerda do painel
+        // em cores como "Light Gray".
+        String colorLabel = "Color";
+        String colorValue = selectedColor.displayName();
+        int pairW = this.font.width(colorLabel) + GAP + this.font.width(colorValue);
+        int pairX = panelX + (panelWidth - pairW) / 2;
+        graphics.drawString(this.font, colorLabel, pairX, colorLabelY, 0xFFB0B0B0, false);
+        graphics.drawString(this.font, colorValue, pairX + this.font.width(colorLabel) + GAP,
+                colorLabelY, 0xFFE0C080, false);
 
         if (!pendingStatus.isEmpty()) {
             graphics.drawCenteredString(this.font, pendingStatus, this.width / 2, statusY, 0xFFFF6060);
@@ -466,8 +651,7 @@ public class PresetsScreen extends Screen {
         graphics.fill(panelX + 4, listTop, panelX + panelWidth - 4, listBottom, 0xFF161616);
 
         int visibleFrom = listScroll;
-        int visibleTo = Math.min(presets.size(), listScroll + VISIBLE_ROWS);
-        int nameRight = panelX + panelWidth - 4 - 20 * 3 - 10;
+        int visibleTo = Math.min(presets.size(), listScroll + visibleRows);
 
         for (int i = visibleFrom; i < visibleTo; i++) {
             RollPreset preset = presets.get(i);
@@ -481,14 +665,15 @@ public class PresetsScreen extends Screen {
                         0xFF3A3A3A);
             }
 
-            // A cor do preset como um quadradinho antes da formula: e a unica coisa
+            // A cor do preset como um quadradinho antes do nome: e a unica coisa
             // que distingue dois presets com o mesmo nome visualmente.
-            graphics.fill(panelX + 6, rowY + 5, panelX + 14, rowY + 13, preset.color().argb());
+            graphics.fill(rowLeft() + 2, rowY + 6, rowLeft() + 10, rowY + 14, preset.color().argb());
 
-            String formula = truncate(preset.formula(),
-                    Math.max(10, nameRight - (panelX + 6) - 24));
+            // O mesmo texto que o botao da linha mostra: `rowTexts` corta os dois de
+            // uma vez, entao nome e formula nunca se sobrepoem aqui.
+            String formula = rowTexts(preset)[1];
             graphics.drawString(this.font, formula,
-                    nameRight - this.font.width(formula), rowY + 5, 0xFF7F7F7F, false);
+                    formulaRight() - this.font.width(formula), rowY + 6, 0xFF7F7F7F, false);
         }
 
         if (presets.isEmpty()) {

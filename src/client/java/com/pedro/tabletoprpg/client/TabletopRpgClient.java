@@ -374,9 +374,19 @@ public class TabletopRpgClient implements ClientModInitializer {
         // ordem, o Del apaga e o Save cria ou edita. Sem recarregar, a tela
         // mostraria o estado antigo depois de cada acao e a jogadora teria que
         // fechar e abrir para ver o resultado.
+        //
+        // <b>Por que logar (02/10/2026):</b> nenhuma linha de log existe aqui, e sem
+        // elas o `runClient.log` mostra a sessao inteira sem nenhuma prova de que a
+        // tela chegou a ser aberta. Isso deixa um bug de tela -- layout estourado,
+        // codec furado -- indistinguivel de uma sessao em que ninguem clicou no
+        // botao. O log responde a pergunta sem depender da memoria de quem testou.
 
         ClientPlayNetworking.registerGlobalReceiver(RpgNetworking.PresetListPayload.TYPE,
                 (payload, context) -> context.client().execute(() -> {
+                    LOGGER.info("[TabletopRPG] PresetListPayload recebido: {} preset(s)."
+                            + " Tela de Presets aberta? {}",
+                            payload.presets().size(),
+                            context.client().screen instanceof PresetsScreen);
                     if (context.client().screen instanceof PresetsScreen presetsScreen) {
                         presetsScreen.applyResult(true, "", payload.presets());
                     }
@@ -384,7 +394,15 @@ public class TabletopRpgClient implements ClientModInitializer {
 
         ClientPlayNetworking.registerGlobalReceiver(RpgNetworking.PresetResultPayload.TYPE,
                 (payload, context) -> context.client().execute(() -> {
-                    if (context.client().screen instanceof PresetsScreen presetsScreen) {
+                    boolean screenOpen = context.client().screen instanceof PresetsScreen;
+                    // O ok=false e o que interessa no log: e o save recusado por nome
+                    // duplicado, cor invalida ou formula que o DiceFormula nao
+                    // reconhece. Sem esta linha, uma recusa e uma tela parada sao a
+                    // mesma coisa no log.
+                    LOGGER.info("[TabletopRPG] PresetResultPayload: ok={} msg=\"{}\" tela={}",
+                            payload.ok(), payload.message(), screenOpen);
+                    if (screenOpen) {
+                        PresetsScreen presetsScreen = (PresetsScreen) context.client().screen;
                         // Tela aberta: a resposta aparece na propria linha de status.
                         // Mandar tambem para o chat mostraria a mesma frase duas vezes
                         // -- uma na tela que a jogadora esta olhando e outra no log.
