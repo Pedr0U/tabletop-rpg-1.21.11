@@ -2608,3 +2608,76 @@ CA entra na conta da largura reservada).
 Cada metade reserva a **mesma** largura de rotulo das linhas de campo unico, de proposito: encolher faria um
 rotulo configurado ("Armadura") quebrar e invadir a caixa vizinha (o bug de 27/09/2026). Os rotulos quebram,
 as caixas nao se movem. A soma das metades fecha em `leftW`.
+
+---
+
+## Presets de rolagem (02/10/2026)
+
+### `rollMessageFor` e o funil de TODA rolagem (FATO)
+`MasterCommands.rollMessageFor` (`:1308`) e por onde passam `/rpg roll`, `/rpg openroll`,
+`/rpg preset use` e o clique no item. Qualquer coisa que mude o **resultado** de uma rolagem entra
+la e **nao** em `presetUse`: em `presetUse`, `/rpg roll 1d6+Strength` e o clique no item dariam
+numeros diferentes. A resolucao de atributo/pericia foi posta logo depois do `formula.isEmpty()`, antes
+do `DiceFormula.parse`.
+
+### Formula aceita nome de atributo e de pericia (FATO)
+`FormulaResolver` (novo, `src/main/java/.../FormulaResolver.java`) troca `+Strength` pelo **valor
+cru** da ficha de quem rola. Decisoes do usuario em 02/10/2026:
+- **valor cru**, nao modificador D&D (14 soma 14). O codigo nunca calculou modificador.
+- pericia e **token separado**: `+Athletics` soma o valor dela, `+Athletics+Strength` soma os dois.
+- nomes aceitos: `id`, `label` e `name` do `SheetModel` (atributo e pericia), casados sem acento,
+  sem diferenciar maiuscula e **sem espaco**. `+STR` == `+strength` == `+Strength`.
+- **colisao: atributo vence pericia.** Sem regra fixa o mesmo preset resolveria valores diferentes
+  conforme a ordem da tabela.
+- sem ficha, ou sem o valor na ficha → **recusa**, nunca zero silencioso.
+
+O scanner casa o **maior trecho primeiro** (`+Animal Handling` funciona) e filtra `d20`/`D20` por
+`d` seguido de digito, antes de qualquer tentativa de nome.
+
+### Teto de nomes tem que existir em `resolve`, nao so em `tokens` (LICAO)
+O primeiro `MAX_TOKENS` foi posto so em `tokens()`. `resolve()` rodava sem teto: uma formula com mil
+nomes passava e cada nome virava uma busca na ficha. **Achado por teste, nao por revisao.** Toda
+fronteira de recurso precisa existir em **todos** os caminhos que recebem entrada do jogador, e nao
+no que parece o principal.
+
+### Validacao de nome no `create`, resolucao na rolagem (DECISAO)
+`RollPreset.create` chama `FormulaResolver.tokens(formula, SheetModelHolder.current())` e recusa
+nome desconhecido. O `sheet` e `null` de proposito: ali so se confere o **nome**; se o id existe no
+modelo mas a ficha da jogadora nao tem o valor, isso e problema da ficha e a resolucao recusa na
+rolagem. Sem isso o preset pareceria valido na tela e falharia so ao rolar.
+
+### `RollPresetStore` e lista ordenada, e o NBT antigo migra (FATO)
+Era `Map<String, RollPreset>` reordenado por nome a cada leitura. As setas da tela nao tinham onde
+gravar e um preset editado mudava de lugar por causa do alfabeto. Agora:
+- `list` na ordem gravada; `put` **mantem a posicao** ao editar (arrumar um erro de digitacao nao
+  custa a posicao na tela); `move(from,to)`; `indexOf(name)`; `list` e **copia defensiva**.
+- `CODEC = Codec.list(...).withAlternative(codecDoMapaAntigo)`. O `withAlternative` testa a
+  alternativa so quando o **principal** falha, entao o principal tem de ser o formato **novo**, e a
+  distincao tem de ser do tipo de tag (`ListTag` contra `CompoundTag`). A migracao ordena por nome,
+  que e a ordem que a versao anterior exibia.
+- `withAlternative` aqui tem **um** argumento: a assinatura de dois (`codec`, `String`) nao existe
+  nesta versao do DFU.
+
+### Tela: `Screen` nao remove widget individual (LICAO, BUG CORRIGIDO)
+`rebuildListOnly()` era chamado a cada seta e a cada clique do `Del`, e **somava** widgets novos.
+`Screen` nao tem como remover um widget especifico, entao 6 linhas viravam 12 botoes no mesmo lugar
+com indices velhos presos nos antigos, e a seta movia o preset errado. `clearWidgets()` resolveria,
+mas leva o texto digitado dos `EditBox` junto. Solucao: `List<Button> listWidgets` + `addListWidget`
+que registra + `removeWidget` antes de recriar. **Achado revisando o codigo, nao rodando.**
+
+Outras tres da mesma tela: `EditBox` **exige** `addRenderableWidget`; em 1.21.11 `mouseClicked`
+recebe `MouseButtonEvent` e nao `(double,double,int)`; o `Del` guarda **indice** e nao nome, porque
+o nome pode mudar entre o primeiro e o segundo clique e apagar o preset errado e pior do que nao
+apagar.
+
+### Resposta de operacao: na tela, e no chat so se a tela fechou (DECISAO)
+A resposta do servidor aparecia na linha de status **e** no chat, mostrando a mesma frase duas
+vezes. Agora: com `PresetsScreen` na frente, so na linha de status; sem tela (a jogadora fechou no
+meio do caminho), so no chat, senao a recusa sumiria sem ela ver.
+
+### Item apos renomear preset (DECISAO do usuario, 02/10/2026)
+O item guarda o nome numa tag propria, entao editar o preset nao muda o item que ja esta na mochila.
+Escolha: **reentregar o item atualizado e avisar que o antigo continua la**. O preco e um item
+duplicado com o nome velho; o ganho e que o item novo nunca mostra nome errado. No servidor,
+renomear **remove o preset viejo e poe o novo no lugar dele** — sem isso o renomeado ficaria
+duplicado, com o nome novo em cima do velho. Aviso em `message.tabletoprpg.preset_renamed`.
