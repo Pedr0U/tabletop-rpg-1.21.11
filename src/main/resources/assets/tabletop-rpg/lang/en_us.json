@@ -38,6 +38,8 @@
   "message.tabletoprpg.preset_players_only": "Only players can use roll presets.",
   "message.tabletoprpg.preset_limit": "You already have the maximum of %s roll presets. Delete one first.",
   "message.tabletoprpg.preset_no_room": "No room in your inventory for the preset item.",
+  "message.tabletoprpg.preset_updated": "Preset '%s' updated (%s, %s). A new item was given; the old one stays in your inventory.",
+  "message.tabletoprpg.preset_renamed": "Preset '%s' renamed to '%s'. A new item was given; the old one stays in your inventory with the old name.",
   "message.tabletoprpg.preset_given": "Roll preset item given again: '%s'.",
   "message.tabletoprpg.preset_given_all": "Given %s preset item(s). %s could not fit in your inventory.",
   "message.tabletoprpg.preset_list_empty": "You have no roll presets yet. Create one with /rpg preset create <name> <formula> <color>.",
