@@ -168,21 +168,39 @@ omite-lo -- que e justamente a distincao que o teste queria exercitar.
 
 ## Validacao
 
-**Feita:**
+**Feita em teste de codigo:**
 
 - `gradlew build` verde, incluindo `scanEncoding`.
-- 162 testes, 0 falhas.
-- Layout conferido por script nas dimensoes reais (tabela acima). 427x240, que era o
-  caso reportado, fecha com 4px de folga embaixo.
+- 165 testes, 0 falhas (82 `DiceFormulaTest`, 30 `RollPresetTest`, 19
+  `FormulaResolverTest`, 22 `SheetModelCodecTest`, 10 `SheetDataInventoryTest`,
+  2 `LangKeyArgsTest`).
+- Layout conferido por script nas dimensoes reais. 427x240, que era o caso
+  reportado, fecha com 4px de folga embaixo.
+- `RollPreset.commandName()` conferido ponta a ponta contra o armazenamento:
+  `create("Dano Espada")` -> salvo -> `find(uuid, commandName())` encontra, e a
+  chave da forma underscored e igual a chave do nome com espaco.
 
-**Nao feita -- depende de clique humano:**
+**Feita em jogo (`runClient` da sessao anterior a esta, log de 02:25-02:26):**
 
-- A tela nao foi aberta em jogo **nesta** sessao ainda. O que o `runClient.log`
-  conseguir responder depende do log novo (abertura + layout calculado + pacotes).
-- Nenhum preset foi criado em jogo desde a correcao. O caminho de rede do
-  `PresetSavePayload` continua sem exercicio real.
-- `1d6+Strength` na rolagem: coberto por teste unitario (`FormulaResolverTest` +
-  `DiceFormulaTest` amarra as duas metades), mas nao observado no chat do jogo.
+- A `PresetsScreen` abriu 4 vezes. Zero excecao do mod.
+- Layout real registrado: `tela=960x505 painel=300x270 em (330,117)
+  lista=143..263 (6 linha(s) de 20) campo=200x18 campoX=403
+  amostras=1 linha(s) de 16 px` -- bate com o previsto pelo script.
+- `PresetListPayload recebido: 0 -> 1 preset(s)`.
+- `PresetResultPayload: ok=true msg="Preset 'Dano Espada' created
+  (2d6+Strength, Yellow)"`.
+- No chat: `rolled a: 2d6 [6,4] + 2 = 12`. `DiceFormula.parse("2d6+Strength")`
+  lanca excecao, entao uma rolagem bem-sucedida do preset prova que o nome foi
+  resolvido no caminho real.
+
+**Nao feita -- depende de olhar humano:**
+
+- A correcao de ordem de desenho desta fase nao tem prova automatica possivel: o
+  sintoma era visual ("o botao nao aparece mas da para clicar") e nenhum log
+  distingue "botao desenhado" de "botao tapado". A correcao esta no codigo e o
+  build esta verde; **quem confirma e a jogadora no proprio Minecraft**.
+- O mesmo vale para o risco por baixo da linha em edicao e para o botao `Use`
+  mandando o nome underscored.
 
 ## Limite conhecido
 
@@ -192,4 +210,5 @@ por isso. Se aparecer, o caminho e reduzir `MAX_ROWS`.
 
 ## Estado final
 
-Branch `main`, arvore limpa, `2405d75`. Nada pushado para `origin/main`.
+Branch `main`, arvore limpa, `c01f33b`. Nada pushado para `origin/main`.
+Artefato a testar: `build/libs/tabletop-rpg-1.0.0.jar` (658 KB, 02/10 00:45).
