@@ -12,7 +12,7 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
-import java.util.Map;
+import java.util.List;
 
 /**
  * Persiste os Presets de Rolagem no <b>NBT do proprio jogador</b>.
@@ -40,7 +40,7 @@ public abstract class PlayerRollPresetPersistenceMixin {
         if (!((Object) this instanceof ServerPlayer self)) {
             return;
         }
-        Map<String, RollPreset> snapshot = RollPresetStore.snapshot(self.getUUID());
+        List<RollPreset> snapshot = RollPresetStore.snapshot(self.getUUID());
         if (snapshot.isEmpty()) {
             // Jogador nunca criou preset (ou deletou todos): nao grava nada, o default
             // entra na proxima carga.

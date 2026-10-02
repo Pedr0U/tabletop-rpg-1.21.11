@@ -1,5 +1,6 @@
 package com.pedro.tabletoprpg;
 
+import com.mojang.serialization.Codec;
 import net.minecraft.nbt.NbtOps;
 import net.minecraft.nbt.Tag;
 import org.junit.jupiter.api.DisplayName;
@@ -135,18 +136,66 @@ class RollPresetTest {
     }
 
     @Test
-    @DisplayName("o mapa inteiro de presets sobrevive a ida e volta pelo NBT")
+    @DisplayName("a lista inteira de presets sobrevive a ida e volta, NA ordem")
     void storeCodecRoundTrip() {
-        Map<String, RollPreset> map = new HashMap<>();
-        map.put("ataque", new RollPreset("Ataque", "1d20+5", "red"));
-        map.put("defesa", new RollPreset("Defesa", "2d6", "blue"));
+        // A ordem e o que o store guarda agora (01/10/2026): e ela que a lista de
+        // preset da tela mostra e que as setas mexem. Um round-trip que devolvesse
+        // os mesmos elementos em outra ordem ja teria perdido o dado gravado.
+        List<RollPreset> list = List.of(
+                new RollPreset("Zeta", "1d20+5", "red"),
+                new RollPreset("Alfa", "2d6", "blue"),
+                new RollPreset("Meio", "d8", "lime"));
 
-        Tag tag = RollPresetStore.CODEC.encodeStart(NbtOps.INSTANCE, map).getOrThrow();
-        Map<String, RollPreset> back = RollPresetStore.CODEC.parse(NbtOps.INSTANCE, tag).getOrThrow();
+        Tag tag = RollPresetStore.CODEC.encodeStart(NbtOps.INSTANCE, list).getOrThrow();
+        List<RollPreset> back = RollPresetStore.CODEC.parse(NbtOps.INSTANCE, tag).getOrThrow();
 
-        assertEquals(2, back.size());
-        assertEquals("1d20+5", back.get("ataque").formula());
-        assertEquals("blue", back.get("defesa").colorId());
+        assertEquals(3, back.size());
+        assertEquals(List.of("Zeta", "Alfa", "Meio"),
+                back.stream().map(RollPreset::name).toList(),
+                "a ordem da jogadora nao sobreviveu ao NBT");
+        assertEquals("1d20+5", back.get(0).formula());
+        assertEquals("blue", back.get(1).colorId());
+    }
+
+    @Test
+    @DisplayName("NBT gravado no formato ANTIGO (mapa) ainda e lido, ordenado por nome")
+    void storeCodecReadsLegacyMap() throws Exception {
+        // Este e o teste da migracao: quem ja tinha preset salvo antes de 01/10/2026
+        // tem um compound no NBT, e nao pode perder nada ao entrar no mundo.
+        Map<String, RollPreset> legacy = new HashMap<>();
+        legacy.put("ataque", new RollPreset("Ataque", "1d20+5", "red"));
+        legacy.put("defesa", new RollPreset("Defesa", "2d6", "blue"));
+        // O codec antigo, para escrever exatamente o formato que estava em disco.
+        Tag tag = Codec.unboundedMap(Codec.STRING, RollPreset.CODEC)
+                .encodeStart(NbtOps.INSTANCE, legacy).getOrThrow();
+
+        List<RollPreset> back = RollPresetStore.CODEC.parse(NbtOps.INSTANCE, tag).getOrThrow();
+
+        assertEquals(2, back.size(), "o preset do formato antigo sumiu na migracao");
+        // A migracao ordena por nome, que e a ordem que a versao anterior exibia.
+        assertEquals(List.of("Ataque", "Defesa"),
+                back.stream().map(RollPreset::name).toList());
+        assertEquals("1d20+5", back.get(0).formula());
+        assertEquals("blue", back.get(1).colorId());
+    }
+
+    @Test
+    @DisplayName("o round-trip novo NAO volta pelo caminho do formato antigo")
+    void storeCodecRoundTripIsNotAmbiguous() {
+        // A lista e o mapa sao tags diferentes (lista contra compound). Se o novo
+        // codec voltasse pelo alternativo, um preset gravado hoje poderia reaparecer
+        // em outra ordem -- e a ordem gravada e o dado.
+        List<RollPreset> list = List.of(
+                new RollPreset("Zeta", "1d20", "red"),
+                new RollPreset("Alfa", "1d20", "red"));
+
+        Tag tag = RollPresetStore.CODEC.encodeStart(NbtOps.INSTANCE, list).getOrThrow();
+
+        // O que foi gravado e uma LISTA, nao um compound: e isso que garante que a
+        // leitura volte pelo codec principal e nao pela migracao.
+        assertTrue(tag.getClass().getSimpleName().contains("List")
+                        || tag.toString().startsWith("["),
+                "o preset novo foi gravado fora do formato de lista: " + tag);
     }
 
     @Test
@@ -192,8 +241,11 @@ class RollPresetTest {
     }
 
     @Test
-    @DisplayName("list sai em ordem de nome, sem depender da ordem do mapa")
-    void listIsSortedByName() throws Exception {
+    @DisplayName("list sai na ordem em que a jogadora gravou, NAO em ordem de nome")
+    void listKeepsInsertionOrder() throws Exception {
+        // Mudanca de 01/10/2026: a ordem deixou de ser o alfabeto e passou a ser a
+        // ordem da lista. Este e o teste que prende a mudanca -- e o que as setas da
+        // tela gravam.
         UUID uuid = UUID.randomUUID();
         RollPresetStore.forget(uuid);
         try {
@@ -201,8 +253,80 @@ class RollPresetTest {
             RollPresetStore.put(uuid, RollPreset.create("alfa", "1d20", "red"));
             RollPresetStore.put(uuid, RollPreset.create("Meio", "1d20", "red"));
 
+            // Zeta foi criado primeiro e continua primeiro, mesmo sendo o ultimo
+            // no alfabeto.
+            assertEquals(List.of("Zeta", "alfa", "Meio"),
+                    RollPresetStore.list(uuid).stream().map(RollPreset::name).toList());
+
+            // E as setas reordenam de verdade.
+            assertTrue(RollPresetStore.move(uuid, 0, 2));
             assertEquals(List.of("alfa", "Meio", "Zeta"),
                     RollPresetStore.list(uuid).stream().map(RollPreset::name).toList());
+
+            // indice fora da faixa nao troca nada: a GUI pode estar com lista velha.
+            assertFalse(RollPresetStore.move(uuid, 0, 9));
+            assertFalse(RollPresetStore.move(uuid, -1, 1));
+            assertEquals(List.of("alfa", "Meio", "Zeta"),
+                    RollPresetStore.list(uuid).stream().map(RollPreset::name).toList());
+        } finally {
+            RollPresetStore.forget(uuid);
+        }
+    }
+
+    @Test
+    @DisplayName("editar um preset nao muda a posicao dele na lista")
+    void editingKeepsPosition() throws Exception {
+        // Se editar devolvesse o preset para o fim, arrumar um erro de digitacao
+        // custaria a posicao na tela. O nome mudar e o unico caso que reordena.
+        UUID uuid = UUID.randomUUID();
+        RollPresetStore.forget(uuid);
+        try {
+            RollPresetStore.put(uuid, RollPreset.create("Ataque", "1d20", "red"));
+            RollPresetStore.put(uuid, RollPreset.create("Defesa", "2d6", "blue"));
+            RollPresetStore.put(uuid, RollPreset.create("Fuga", "d8", "lime"));
+
+            RollPresetStore.put(uuid, RollPreset.create("Ataque", "1d20+5", "red"));
+            assertEquals(List.of("Ataque", "Defesa", "Fuga"),
+                    RollPresetStore.list(uuid).stream().map(RollPreset::name).toList());
+            assertEquals("1d20+5", RollPresetStore.find(uuid, "ataque").orElseThrow().formula());
+        } finally {
+            RollPresetStore.forget(uuid);
+        }
+    }
+
+    @Test
+    @DisplayName("indexOf devolve a posicao na ordem da lista, e -1 quando nao existe")
+    void indexOfFollowsListOrder() throws Exception {
+        UUID uuid = UUID.randomUUID();
+        RollPresetStore.forget(uuid);
+        try {
+            RollPresetStore.put(uuid, RollPreset.create("Zeta", "1d20", "red"));
+            RollPresetStore.put(uuid, RollPreset.create("Alfa", "1d20", "red"));
+
+            assertEquals(0, RollPresetStore.indexOf(uuid, "zeta"));
+            assertEquals(1, RollPresetStore.indexOf(uuid, "ALFA"));
+            assertEquals(-1, RollPresetStore.indexOf(uuid, "Inexistente"));
+            assertEquals(-1, RollPresetStore.indexOf(null, "Zeta"));
+        } finally {
+            RollPresetStore.forget(uuid);
+        }
+    }
+
+    @Test
+    @DisplayName("a lista devolvida e uma copia: mexer nela nao muda o cache")
+    void listIsDefensiveCopy() throws Exception {
+        // A tela reordena a lista local antes de pedir ao servidor. Se a devolvida
+        // fosse a propria lista do cache, a ordem mudaria sem ninguem salvar e o
+        // preset voltaria diferente do que foi persistido.
+        UUID uuid = UUID.randomUUID();
+        RollPresetStore.forget(uuid);
+        try {
+            RollPresetStore.put(uuid, RollPreset.create("Ataque", "1d20", "red"));
+
+            RollPresetStore.list(uuid).clear();
+
+            assertEquals(1, RollPresetStore.count(uuid));
+            assertTrue(RollPresetStore.exists(uuid, "Ataque"));
         } finally {
             RollPresetStore.forget(uuid);
         }
