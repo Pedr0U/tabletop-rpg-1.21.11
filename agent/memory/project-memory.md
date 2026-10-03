@@ -3858,3 +3858,44 @@ nada em commentary de indentacao.
 O merge foi conferido comparando o conteudo de cada arquivo contra `stash@{0}`, ignorando
 indentacao, e contando **linhas do nosso lado que sumiram**: **zero**. Isso e o que prova que
 o merge nao perdeu nada - o `BUILD SUCCESSFUL` nao prova nada disso.
+
+## Licao I - sete rodadas de build verde e nenhum teste em jogo (03/10/2026)
+
+**FACT.** O Diario levou 7 rodadas de implementacao. Ao fim delas: `gradlew build` verde,
+**211 testes unitarios**, 0 falhas, jar conferido classe por classe, relatorio escrito. E
+**nenhuma tela de diario tinha sido aberta no jogo uma unica vez**.
+
+Quando a jogadora finalmente testou, apareceram em fila defeitos que **compilavam, passavam
+nos testes, e nao faziam a coisa pedida**:
+
+- breadcrumb inexistente na secao de raiz (`path.size() - 2` dava `-1`);
+- rascunho nunca gravado (uma guarda em `removed()` disparava sempre);
+- `[Reverter]` que nunca aparecia porque lia um campo do servidor que so enche no `[Salvar]`;
+- ponto do endereco apagado, porque lia a fonte de dado que a rodada 5b esvaziou.
+
+**Por que nenhum teste pegou.** Os 211 testes cobrem `DiaryStore`, `DiaryDrafts` e `DiaryUndo`
+- logica pura, em `src/client`, testavel. As **telas** nao tem teste nenhum: elas dependem de
+`Minecraft.setScreen`, do ciclo de quadro, de widget do vanilla e de clique. **E o defeito
+morava exatamente ai.** O que os testes provavam (a pilha de desfazer respeita a ordem) e o
+que ela reclamava (o botao aparece quando eu digito) sao coisas diferentes.
+
+**Licao 1 - o primeiro teste em jogo vem cedo, nao no fim.** Nao no fim da feature: ao fim da
+**primeira tela que abre**. Custa um launch do `runClient` e teria Transformado 7 rodadas de
+ida e volta em 2.
+
+**Licao 2 - teste unitario em tela e possivel para a LOGICA, e ai estao as armadilhas.** O
+`build.gradle` deste projeto poe `src/client` no classpath do teste justamente para isso. A
+divisao que funcionou: **o que decide alguma coisa mora em classe sem `Screen` e tem teste; o
+que so desenha e so responde a clique nao tem teste e precisa de jogo.** `DiaryUndo` (a regra
+que a jogadora ditou palavra por palavra) virou `DiaryUndoTest` com o cenario dela como caso
+central - e isso serviu. O que nao tem classe pura **precisa** de jogo.
+
+**Licao 3 - "211 testes, 0 falhas" e uma frase que esconde o que nao foi coberto.** Num relatorio,
+o numero de testes e o que o leitor ve primeiro. O honesto e escrever ao lado **o que eles nao
+tocam** (aqui: nenhuma tela), e escrever isso desde o primeiro relatorio, para nao descobrir na
+terceira entrega que o verde era sobre outra coisa.
+
+**Como isso se reflete no AGENTS.md.** A regra "um build verde nao prova runtime" ja existia e
+esta correta. O que faltava e a **corolaria de calendario**: build verde ao fim de 7 rodadas e
+nenhum launch e nao um descuido de validacao, e um **processo** - adiar o jogo e o que faz a
+validacao virar uma Shooting gallery de 7 feedbacks.

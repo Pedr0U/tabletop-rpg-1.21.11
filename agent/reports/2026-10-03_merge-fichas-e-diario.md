@@ -120,3 +120,41 @@ falha em runtime e nao no build. **E o primeiro lugar para olhar se algo parecer
 - O diff staged tem 6 arquivos rastreados; os 13 do diario seguem nao rastreados.
 - `stash@{0}` preservado como rede de seguranca — pode ser descartado depois do commit.
 - Ela pode testar as duas features juntas e entao commitar.
+
+---
+
+# Pos-jogo: commit `fa7523d`, push feito, e a validacao em jogo
+
+## FACT: as duas features funcionam juntas
+
+A jogadora testou em jogo e respondeu *"perfeito! ambos estao funcionando"*. Commit
+`fa7523d`, push para `origin/main` (`f246796..fa7523d`), arvore limpa, local e remoto
+identicos.
+
+**Este e o primeiro teste em runtime do Diario.** As rodadas 1 a 7 (e o merge) tinham sido
+validados por build + 211 testes unitarios + inspecao do jar — nunca pelo jogo. Todos os
+defeitos que ela reportou (breadcrumb ausente, rascunho que nao gravava, `[Reverter]` morto)
+eram de **runtime**: compilavam, os testes passavam, e a tela nao fez a coisa pedida.
+
+## O que o teste em jogo cobre, e o que nao cobre
+
+**Cobre:** as telas abrem e navegam; o texto novo aparece com o ponto amarelo no cartao e no
+endereco; `[Salvar]`, `Esc`, `[X]` e o `[Voltar]` da Tela 1 gravam; o `[Reverter]` desfaz na
+ordem; as fichas de ameaca do amigo funcionam junto.
+
+**NAO cobre, e continua aberto:** o **round-trip do NBT entre sessoes** — isto e, se o diario
+criado hoje volta depois de reconectar no servidor. "Funciona" enquanto a tela esta aberta nao
+fala da persistencia. Se ela nao reconectou desde que criou as anotacoes, esse item segue sem
+prova. E o **primeiro** lugar para olhar se algo aparecer vazio depois de um restart.
+
+## Estado final do repositorio
+
+    fa7523d Diario: arvore de anotacoes por jogador, com rascunho, [Salvar] e Reverter em ordem
+    f246796 Item de ficha: amarra pela mira e Atualizar repara o vinculo do mob
+    cc8936f Fichas de ameaca: item, editor, persistencia NBT e layout da ficha
+
+- 20 arquivos, **6449 insercoes, 1 delecao** — a delecao e a virgula que a entrada nova no
+  array do `mixins.json` exigiu. Nenhuma linha de codigo existente foi removida.
+- `stash@{0}` **foi preservado** propositalmente (rede de seguranca do pre-merge). Depois deste
+  commit ele pode ser descartado com `git stash drop`, quando ela quiser.
+- Memoria do projeto: 3860 linhas, com as licoes A-H.
