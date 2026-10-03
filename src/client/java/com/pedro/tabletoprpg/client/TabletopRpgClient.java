@@ -27,6 +27,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.List;
+import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
 
 import java.util.Set;
@@ -425,6 +426,34 @@ public class TabletopRpgClient implements ClientModInitializer {
                     com.pedro.tabletoprpg.ThreatSheet sheet = payload.sheet();
                     context.client().setScreen(new ThreatSheetScreen(
                             context.client().screen, sheet, sheet.identity().name(), true));
+                }));
+
+        // 02/10/2026: o Diario. Um unico pacote traz o diario inteiro, e o receptor decide
+        // o que fazer com ele antes de falar com a tela.
+        ClientPlayNetworking.registerGlobalReceiver(RpgNetworking.DiaryStatePayload.TYPE,
+                (payload, context) -> context.client().execute(() -> {
+                    LOGGER.info("[TabletopRPG] DiaryStatePayload recebido: {} anotação(ões), "
+                            + "reverter={} foco={} tela={}",
+                            payload.entries().size(), payload.canUndo(), payload.focusId(),
+                            context.client().screen);
+                    net.minecraft.client.Minecraft mc = context.client();
+                    if (payload.focusId() != 0) {
+                        // Uma subsecao acabou de nascer: a tela nova e a PAGINA dela, ja com o
+                        // titulo numerado e a descricao em branco (que e o que a jogadora
+                        // pediu para a Tela 3). Abrir a partir do `focusId` e o unico jeito
+                        // seguro: o id e do servidor, e a tela nao tem como deduzi-lo.
+                        //
+                        // O `parentScreen` vem da tela que estava ABERTA, e nao de um campo
+                        // guardado aqui: a Tela 3 nao tem como saber de onde o diario veio
+                        // sozinha, e sem repassar o menu o `Esc` dela jogava a jogadora no
+                        // jogo em vez de voltar ao menu. (02/10/2026)
+                        Screen origin = mc.screen instanceof DiaryScreenBase diary
+                                ? diary.originScreen()
+                                : null;
+                        mc.setScreen(new DiaryNodeScreen(payload.focusId(), payload.entries(), origin));
+                    } else if (mc.screen instanceof DiaryScreenBase diary) {
+                        diary.applyState(payload.entries(), payload.canUndo(), payload.pendingIds());
+                    }
                 }));
 
         ClientPlayNetworking.registerGlobalReceiver(RpgNetworking.PresetResultPayload.TYPE,

@@ -136,6 +136,15 @@ public class RpgMenuScreen extends Screen {
                 this.minecraft.setScreen(new DiceRollScreen(this));
             }
         });
+        // 02/10/2026: o botao do Diario. Fica no trecho COMUM, e nao dentro do `if isMaster`,
+        // porque a jogadora pediu o botao "tanto do player quanto do mestre": o diario e
+        // pessoal (cada um tem o seu, no NBT dele) e por isso nao faz sentido o mestre ter o
+        // dele escondido.
+        y = addButton("Diário", x, y, () -> {
+            if (this.minecraft != null) {
+                this.minecraft.setScreen(DiaryScreen.open(this));
+            }
+        });
         y = addButton("Settings", x, y, () -> {
             if (this.minecraft != null) {
                 this.minecraft.setScreen(new RpgSettingsScreen(this, isMaster));
