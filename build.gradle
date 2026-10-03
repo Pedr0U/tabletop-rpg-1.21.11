@@ -43,6 +43,17 @@ dependencies {
 
 test {
 	useJUnitPlatform()
+
+	// 03/10/2026: o cache de rascunhos do Diario (DiaryDrafts) mora em src/client, que
+	// nao estava no classpath do teste — e por isso a regra da marcacao amarela (que
+	// ancestral acende e qual irmao NAO acende) ficou sem cobertura, sendo exatamente a
+	// regra que a jogadora mais reclamou.
+	//
+	// So o `output` do client entra, e nenhuma dependencia: `DiaryDrafts` so usa
+	// `DiaryEntry` e `DiaryStore`, que vivem em src/main. As outras classes de
+	// src/client tocam no Minecraft e continuam fora do caminho do compilador de teste.
+	classpath += sourceSets.client.output
+
 	testLogging {
 		events "passed", "failed", "skipped"
 		showStandardStreams = false

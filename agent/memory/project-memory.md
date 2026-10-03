@@ -3250,3 +3250,611 @@ para comandos. O UUID e comprido; o Mestre decidiu por enquanto nao encurtar.
 FATO verificado. Amarrar ficha com nome de exibicao vazio deixava o monstro sem nome, e o unico
 sintoma era `@e[name="..."]` falhando longe do gesto que causou o problema. Agora a amarra e
 recusada com mensagem dizendo para preencher o nome e clicar em Atualizar.
+
+### Nao dar commit em tudo: quando checkpointar (FEEDBACK DA JOGADORA, 02/10/2026)
+17 commits numa sessao. A jogadora pediu para agrupar.
+
+**Regra:** durante a implementacao, acumular as mudancas e NAO commitar a cada passo.
+O checkpoint vem quando **as duas** coisas valerem: a jogadora pediu mexer em algo que
+**deu certo** (acabamento, visual, texto) e o que ela pede **nao e correcao** de algo
+quebrado. Ai e o momento: um commit agrupado e uma tag.
+
+Correcao de bug continua valendo commit separado quando o bug e um FATO verificado e o
+commit precisa contar a causa raiz para o proximo rodar nao reintroduzir. Mas nao e regra
+geral: nao commitar por medo.
+
+**Como distinguir os dois pedidos dela:**
+- "isso esta quebrado / em cima / nao funciona" = CORRECAO. Entrou na fase, ainda sem
+  checkpoint.
+- "perfeito, so mexer isso aqui" (sobre algo que ela ja testou e approveu) = MODIFICACAO.
+  E o gatilho do checkpoint.
+
+### Delecao em cascata: o proprio alvo tambem faz parte da subarvore (BUG, 02/10/2026)
+
+`DiaryStore.subtreeOf` montava a fila com os FILHOS do alvo e nunca colocava o alvo
+dentro da lista. Consequencia em jogo: apagar uma secao tirava as subsecoes e mantia a
+secao, e apagar um no sem filho nao tirava NADA -- o botao "Del?" pareceria nao fazer nada.
+
+**Como pegar:** o teste de cascata precisa de um caso de FOLHA (no sem filho). Um teste so
+com subarvore grande nao reprova: ele acusa, porque os filhos somem, e o developer ve o
+detalhe e acha que ja resolveu. Quem nao acusa e a folha, que e o caso que a jogadora mais
+usa na pratica -- apagar uma secao recem-criada e sem conteudo.
+
+**Licao:** "apagar X apega tudo dentro de X" tem duas metades, e a metade do proprio X e a
+que o algoritmo esquece, porque ela nao aparece em nenhuma lista de filhos.
+
+**Como lidar com teste vermelho depois do conserto (02/10/2026):** das 4 falhas do primeiro
+run, 1 era bug de codigo e 3 eram expectativa errada no proprio teste (uma aritmetica de
+niveis, e duas linhas cujo comentario dizia uma coisa e a assercao verificava outra). Ler
+`expected`/`but was` antes de mexer no codigo evita consertar a coisa errada: dois dos
+meus "bugs" eram o teste mentindo, e "consertar" o codigo para satisfazer o teste teria
+introduzido os dois defeitos de verdade.
+
+### Verificador de layout que acusa o jogo de quebrado e desligado (02/10/2026)
+
+O `check-diary-layout.ps1` acusou tres falhas que NAO existiam no codigo, e uma delas
+escondeu uma falha real. Calibracao, com os tres defeitos e a correcao de cada um:
+
+1. **`[int](1.5)` arredonda; divisao de inteiro em Java TRUNCA.** O script usava
+   `[int]($avail / $ROW_H)` e dava 2 linhas onde o jogo dava 1 (`30/20`). O painel saia
+   20 px mais alto que o do jogo e o verificador acusava "PAINEL estourou embaixo" em
+   427x240, onde o painel real de 212 px cabia em 240. Correcao: `[Math]::Floor`. Toda
+   divisao inteira espelhada de Java em PowerShell precisa de `Floor` explicito.
+
+2. **Uma tela, uma pilha vertical.** A primeira versao empilhava a Tela 1 para as DUAS
+   telas, mas a ordem e diferente: na Tela 1 o Titulo e a Descricao ficam ABAIXO da lista e
+   ha um campo de busca; na Tela 2/3 eles ficam ACIMA da lista e nao ha busca. Isso
+   inflava a Tela 2+ em 44 px e produzia paineis "maiores" que a reality. Correcao: duas
+   pilhas escritas separadas no script, uma por tela. Comparar `descBottom > legendY` so
+   faz sentido na Tela 2+; na Tela 1 a Descricao vem DEPOIS da lista por construcao e o
+   check acusava um problema inexistente.
+
+3. **Largura de glifo medida, nao chutada.** "7 px por caractere" dava 327 px de rodape
+   em 292 px uteis e acusava falha onde o jogo cabe. Os valores reais sao o grafico ASCII
+   do vanilla em px de AVANCO (glifo + 1 de espaco): maiuscula e minuscula 6, `i l . , :`
+   3, `m W M` 8, espaco 4. Com esses numeros o rodape de 4 botoes da 6 = 287 e cabe nos
+   292 px do menor painel possivel.
+
+E o piso honesto: **320x240 logicos**, nao 427x240. A escala automatica do vanilla escolhe
+o maior fator que ainda deixa a tela com pelo menos 320x240, entao 320x240 e o menor
+tamanho que o jogo produz sozinho. Declarar 427x240 esconderia telas reais (e o script da
+Presets usava 427, herdado de la). Abaixo do piso declarado o verificador marca `FORA`, e
+nao `FALHA`: um verificador que acusa o jogo de quebrado em tamanho que o jogo nunca
+entrega perde a credibilidade e ninguem roda.
+
+A regra que sobrou: **um verificador precisa ser calibrado contra o codigo que ele
+confere, e cada check tem de ter um defeito que ele poderia de fato pegar.** Um check que
+nunca falha tambem e ruido: vale remove-lo, como foi feito com o do caminho, que media um
+estouro imposible porque a truncagem e por LARGURA em pixels, nao por numero de fatias.
+
+### Uma falha real que so apareceu depois de calibrar o verificador (02/10/2026)
+
+Com o script corrigido, sobrou um FALHA verdadeiro: em 320x240 com o caminho presente o
+painel media 244 px numa tela de 240. A causa era um `GAP` a mais entre a legenda e a
+lista, em `DiaryScreen.init()` e `DiaryNodeScreen.init()`. Nenhum dos tres erros acima
+explicava este; ele estava escondido atras deles, porque o script acusava a tela errada
+com o numero errado. Sem calibrar o verificador primeiro, o conserto teria sido chutar.
+
+### Ler o sintoma agregado antes de contar bugs: quatro sintomas, uma causa (02/10/2026)
+
+A jogadora reportou em texto livre: rotulo de Descricao em cima do campo de Titulo, Titulo
+saindo para fora da tela, campo de Titulo pequeno, campo de Descricao invisivel. A leitura
+natural e "sao tres ou quatro bugs de layout". Era **um**.
+
+A causa era uma unica linha fora de ordem nos dois `init()`:
+
+```java
+int usable = panelWidth - 2 * PAD;   // lido ANTES
+...
+layoutPanel(chrome);                // e aqui que panelWidth e medido
+```
+
+`panelWidth` e `0` na primeira `init()` de uma tela nova. Com `usable = -12`, cada sintoma
+saia de uma conta diferente (piso de `Math.max(60, ...)`; `boxX` negativo; largura negativa no
+`MultiLineEditBox.build`), e por isso pareciam tres defeitos independentes.
+
+**A pista que amarrava tudo:** a jogadora disse que a caixa de Descricao aparecia
+"normalmente" *depois de Esc*. Nao era um segundo layout bom - era a **segunda `init()` da
+mesma instancia**, que ja tinha `panelWidth` preenchido. Um sintoma que so se manifesta na
+segunda visita a mesma tela quase sempre e estado inicializado tarde demais, nao um bug de
+posicao.
+
+**Regra:** em layout escrito a mao, derive **toda** dimensao de uma unica fonte (a saida de
+`layoutPanel`), e so *depois* dela. Se um `int` e lido antes de uma medicao que o preenche,
+todo sintoma derivado dele sai errado de um jeito diferente - e o numero de bugs reportados
+superestima muito o numero de bugs existentes.
+
+Corolario do mesmo caso: **contar bugs pelo codigo, nao pelo relato.** Tres dos quatro
+"bugs" de layout eram o mesmo; e o unico sintoma que tinha causa estrutural (o `Esc` indo
+para a pagina anterior, por causa do `parentScreen` repassando `this`) nao aparecia na lista
+de layout. Um relato em texto livre mistura quebras visuais com quebras de fluxo, e as duas
+familias precisam de diagnosticos diferentes.
+
+### Botao que so aparece no hover nao pode depender do quadro anterior (02/10/2026)
+
+Sintoma: "fixar uma secao alguns vai e outros nao, nao sei qual a condicao". Sem regra
+deduzivel pela jogadora - que e o formato exato de "o clique foi descartado sem efeito",
+nao de "a logica esta errada".
+
+**Mecanismo (FACT):** a visibilidade do pino e do `Del?` e escrita dentro de `render`, e o
+vanilla so entrega o clique a um widget com `visible == true`. Um clique que chega antes do
+proximo quadro - mouse acabou de entrar na linha, jogadora clicou - era descartado em
+silencio. Na regiao do pino invisivel nao ha outro widget, entao o clique sumia sem deixar
+rastro.
+
+**Regra:** se um widget so aparece no hover, a resolucao do hover tem de acontecer **no
+tratamento do clique**, antes do `super`, nao so no desenho:
+
+```java
+public boolean mouseClicked(MouseButtonEvent event, boolean doubleClick) {
+    updateCardHover((int) event.x(), (int) event.y());   // antes do super
+    return super.mouseClicked(event, doubleClick);
+}
+```
+
+Custo zero, e elimina a janela de um quadro inteiro. Vale para botao com hover em geral,
+nao so para o diary.
+
+Cuidado ao aplicar isso: **verificar se o `mouseClicked` da subclasse ja chama o do pai.**
+O `DiaryNodeScreen` sobrescreve `mouseClicked` para os crumbs e delegava para o `super` no
+fim - o que passou a ser a base com o hover resolvido. Se uma subclasse intercepta o clique
+e *nao* delega, ela precisa fazer a mesma coisa por conta propria.
+
+**O contra-tipo, que ainda nao foi provado:** fixar um card que **ja esta no topo** da lista
+nao muda nada de lugar, e a unica feedback e a cor do pino. Isso e comportamento, nao bug, e
+produz o mesmo sintoma. Nao afirmar um dos dois sem evidencia: a correcao do hover era um
+mecanismo real e provado, mas pode nao ser a causa que a jogadora viu. Ela foi perguntada.
+
+**Rascunho e pendencia: o espelho do aceito, e nao um flag por no** (02/10/2026, Diario)
+
+O pedido da jogadora foi "todos que vao ate o caminho do que foi alterado": editar a
+`Subsecao 1.2`, dentro da `Subsecao 1`, dentro da `Secao 1`, acende os tres, e a `Subsecao 2`
+(irma) nao. Um `flag dirty` por no **nao faz isso**: ele responde "o no 1.1 mudou", que e
+falso -- quem mudou foi a 1.1.2 -- e ele nao sobe por construcao. A pergunta certa e "ha algo
+pendente em qualquer descendente deste no?", e ela responde percorrendo a arvore para BAIXO a
+partir do no, o que acende o caminho e nao vaza para os irmaos por geometria, nao por caso
+especial. Isso vira uma funcao pura e testavel sem servidor: `hasPendingInSubtree(all, id,
+pendingIds)`.
+
+"Estar pendente" precisa de um **espelho do aceito** por id (texto), e nao de um booleano:
+um booleano nao sobrevive ao "criei um no, editei, desatei, editei de novo" sem uma regra
+por celula. E a foto tem de ser tirada na **primeira alteracao da sessao** (preguicosa),
+nao na carga do NBT -- recarregar o NBT sobrescreveria o rascunho de quem abriu o diario,
+alterou e saiu sem salvar. A regra que caiu sozinha do espelho:
+
+- `create` marca o no novo como aceito: uma secao que ela acabou de pedir **nao e rascunho**.
+- `save` com o mesmo texto nao faz nada (e o que o autosave dispara a cada troca de tela com
+  o campo intacto).
+- `delete` nao marca ninguem: o no sumiu, e nao ha cartao onde acender.
+- desfazer exclusao devolve a subarvore **com o texto que ela tinha**, e volta limpa se nao
+  tinha rascunho. Por isso o espelho **nao e apagado** junto com o no.
+- desfazer edicao volta ao aceito, entao a marca some sozinha. `modifiedAt` volta tambem,
+  senao o no ficaria no topo do "Ordenar: Modificado" com o texto antigo.
+
+**O erro que os testes pegaram:** `create` gravava o espelho do no novo e **criava o mapa**,
+e a inicializacao preguicosa so roda quando o mapa nao existe. Quem abria um diario com 5
+secoes e criava a 6a primeiro ficava com espelho so da 6a -- e nenhuma das outras 5 podia
+mais ser marcada, para sempre. **Nenhuma escrita pode criar o mapa de espelho por conta
+propria: ou ele ja existe (formado antes da escrita), ou a escrita nao o toca.** Sintoma
+seria "editei o titulo e nada acendeu", que e a marcacao inteira.
+
+Como a pilha de desfazer tambem e sessao (nao vai para o NBT), e o `Salvar` e o unico
+esvazia-la: desfazer uma edicao so faz sentido se a pilha for dela.
+
+Ver tambem: [[Um-ponto-de-hook-em-vez-de-um-em-cada-botao-de-navegacao]].
+
+**Marcacao que aparece: reserve a faixa, ou o texto salta** (02/10/2026, Diario)
+
+A jogadora pediu uma marca visual de "tem alteracao para salvar". A escolha obvia --desenhar
+o ponto so quando ha pendencia-- esta errada, e o erro aparece no pior momento: a marcacao
+nasce e morre varias vezes enquanto ela edita e confere, e **cada aparicao mudaria a largura
+util do titulo**, entao o texto do card saltaria exatamente quando ela esta lendo para
+conferir o que acabou de mudar.
+
+**Regra:** toda marca que pode aparecer e desaparecer fica com a faixa **sempre reservada**,
+presente ou nao. Aqui a reserva e `PENDING_DOT_W = 6` a direita do titulo, e o `fitTitle`
+corta 6 px antes, com ou sem pendencia. Custo: 6 px de texto em todos os cartoes. Beneficio:
+zero movimento.
+
+A segunda metade da regra e a **cor**. A marca reutilizou o amarelo `0xFFFFE24B` e o pino
+continua dourado (`0xFFE0C080`): se as duas usassem a mesma cor, "o que tem rascunho" e "o
+que esta fixado" seriam a mesma pista com dois SIGNIFICADOS, e a jogadora teria de testar
+para saber qual e qual. Marcas que coexistem no mesmo objeto precisam ser distinguiveis sem
+contexto.
+
+E a terceira: **marcacao de estado nao e condicional a hover**. Pino e `Del?` aparecem no
+hover e faz sentido -- sao acoes, e acao escondida economiza espaco. "Tem rascunho em outra
+secao" e informacao, e a unica pista de que existe. Esconder no mouse deixaria ela sem como
+saber o que ainda falta aplicar, e e a marca que mais importa quando ela esta longe da secao
+que mexeu.
+
+Ver tambem: [[Botao-que-so-aparece-no-hover-nao-pode-depender-do-quadro-anterior]].
+
+**Um ponto de hook vale mais que um em cada botao de navegacao** (02/10/2026, Diario)
+
+O pedido foi "salva o rascunho quando eu sai da tela". A leitura ingenua e por a chamada em
+cada botao: `Esc`, `X`, `Voltar`, clicar no card de outra secao, clicar no caminho,
+`Criar Subsecao`. Sao seis chamadas, e cada uma e um lugar onde a proxima navegacao pode
+esquecer a regra -- e as duas que mais faltam (`criar subsecao` e o caminho) mudam de tela
+por um caminho **que nao passa pelo `mouseClicked` desta tela**: o `Criar Subsecao` manda um
+pacote, o servidor responde com `focusId`, e o receptor troca a tela.
+
+**Um unico hook cobre todas por construcao:** `Screen.removed()`, que o `setScreen` chama na
+tela que esta SAINDO. Nao existe navegacao no diario que nao passe por ele. O preco e que
+ele tambem dispara em perda de foco e em pausa -- e, para um autosave, gravar nesses casos e
+o comportamento correto, nao um efeito colateral.
+
+**Regra geral:** quando uma regra precisa valer "em toda saida", procurar o hook de ciclo de
+vida antes de listar os casos. Lista de casos e uma enumeracao que envelhece; hook e um
+lugar. Se a regra for so para uma subclasse, o override fica so nela -- aqui a tela de no
+grava, e a Tela 1 nao, porque la os campos sao formulario de CRIAR e virar secao ao sair com
+o campo meio preenchido seria criar o que ela nao pediu.
+
+**O outro lado do mesmo principio:** a regra "nunca recarregar os campos em `applyState`"
+(every vez que estado chega, sem excecao) nao sobreviveu a um caso novo -- ela edita o titulo,
+aperta Reverter, o servidor devolve o texto antigo, e a caixa continua mostrando o rascunho
+que ela acabou de cancelar. A excecao segura e estreita: **recarregar quando o texto DESTE
+id no servidor difere do que a tela sabia que ele era.** E exatamente a condicao para a caixa
+estar mentindo, e nenhum dos casos que a regra original protege (fixar vizinho, criar, apagar
+outro ramo) dispara nele. Invariante do tipo "nunca" precisa de uma condicao de escape
+escrita, e ela precisa caber numa frase.
+
+**Divisao de inteiro em Java trunca em direcao a zero -- e isso ja achou bug de verdade** (02/10/2026)
+
+O verificador de geometria do `DiaryScreenBase.layoutPanel` usa `[Math]::Floor` onde o Java
+usa divisao de inteiro. Para numero positivo os dois batem. Para **negativo**, `Floor` da
+`-1` e o Java da `0`.
+
+O caso negativo aqui nao e exotico: `spare` (a sobra depois de fechar uma linha de lista) e
+**negativo exatamente no tamanho minimo que o jogo produz**, 320x240, onde uma unica linha
+nao cabe em sobra nenhuma. O script tirava a unica linha da lista e acusava um layout que o
+jogo tem -- mas o mesmo `-1` chegava no segundo passo do `layoutPanel` do **Java**, que nao
+tinha o piso de 1 linha, e podia zerar a lista de verdade.
+
+Ou seja: **o verificador acusou defeito, e desta vez era um defeito real do codigo, nao um
+falso positivo.** Vale a pena ter isso registrado porque a leitura natural depois de uma
+divergencia entre script e codigo e "o script esta errado", e a segunda leitura -- "qual dos
+dois esta imitando o Java?" -- e a que achou o bug.
+
+**Calibracao, para nao repetir:** `[int](1.5)` arredonda para 2 em PowerShell e trunca para
+1 em Java; `[Math]::Floor` e `[Math]::Truncate` so divergem no negativo; e divisao de inteiro
+em Java trunca **para zero nos dois sinais**, nao "para baixo". Ao espelhar uma conta de
+layout em PowerShell, escolher `Truncate` desde o comeco -- e confirmar com um caso negativo
+de proposito, porque so o negativo separa as tres opcoes.
+
+**E o contra-tipo, que tambem e regra:** nao escolher `[int]` nem `Floor` "porque da o mesmo
+resultado no caso que eu testei". O verificador que concorda com o codigo so no caso que
+voce verificou e um verificador que da para desligar sem voce perceber.
+
+Ver tambem: [[Verificador-que-acusa-o-jogo-de-quebrado-e-ignorado]].
+
+**`Get-Content` sem `-Encoding` destroi os acentos de um arquivo UTF-8** (02/10/2026)
+
+Usei `Get-Content -Raw` seguido de `-replace` e `Set-Content -Encoding utf8` para trocar um
+identificador em `DiaryStoreTest`. O `Get-Content` sem `-Encoding` leu o UTF-8 como CP1252 e o
+`Set-Content` regravou em UTF-8: os **96 acentos** do arquivo viraram mojibake de uma vez
+(cada caractere de 2 bytes virou 2 caracteres). Alem disso o `Set-Content` colocou **BOM** e
+** apagou a quebra final de linha**.
+
+O sintoma visivel foi enganoso: dois testes comecaram a falhar, e a falha parecia ser do
+cambio das palavras acentuadas dentro do codigo -- ou seja, acusava o `DiaryStore` de um bug
+que nao existia. Sem isso o diagnostico teria ido para o lugar errado.
+
+Reparo: identificar os **4 pares** corrompidos por inspecao (contagem de cada um), converter
+por codepoint (nunca escrevendo o par corrompido a mao no script, que e uma chance a mais
+de errar o
+proprio conserto), conferir `mojibake == 0` e `acentos == 96` antes e depois, e validar a
+contagem de bytes. **Sem conversao global de encoding** -- conversao global em arquivo com
+acento legitimo destroi o que era bom.
+
+**Regra que evita tudo isso:** para arquivo do repositorio, usar a ferramenta de edicao. Ela
+nao tem codificacao de entrada para errar. `Set-Content` em arquivo do repositorio e o que
+produziu dano; o lado bom foi que `scanEncoding` (0 mojibake, 0 U+FFFD) e os testes
+existentes existiram e denunciaram antes do commit.
+
+Complemento util: **um verificador que acusa o jogo de quebrado precisa calibrar os
+operadores que ele usa.** `[Math]::Floor` e `[int]` divergem de Java; ver a licao da divisao
+de inteiro.
+
+**Numero de outro contexto nao e medida do seu contexto** (02/10/2026, Diario rod. 3)
+
+Contei a jogadora que o `[Salvar]` **nao cabia** no rodape da Tela 1, e que por isso nao o
+tinha implementado. O numero que eu tinha em maos, 287 px, vinha do verificador de layout --
+que media o pior caso das **duas** telas (o rodape mais apertado, com `Criar Subsecao` em
+quatro botoes) e eu li como se fosse o da Tela 1. O da Tela 1 e **269 px de 292 uteis a
+320x240**: cabe, com folga. Conclusao errada, tirada de um numero que eu mesmo tinha gerado,
+e que eu nao conferi porque "confiava no script".
+
+A correcao foi de duas ordens: implementar o botao, e fazer o verificador medir **o rotulo
+que cada tela mostra de verdade** (`Criar Subsecao` na tela de no, `Criar Secao` na raiz). Um
+verificador que usa o pior caso de todas as telas e conservative e honesto -- mas e um
+pior caso *de todas*, e usa-lo como se fosse o de uma delas produz conclusao falsa com
+aparencia de medida.
+
+**Regra:** antes de afirmar "nao cabe", confirmar que o numero e do **elemento que esta em
+questao**, e nao do pior caso de um conjunto. E quando o script e meu e o erro e meu, a
+pergunta nao e "o script esta certo" (ele quase sempre esta) e "eu li o campo que eu
+precisava".
+
+Relacionado: [[Verificador-que-acusa-o-jogo-de-quebrado-e-ignorado]].
+
+Ver tambem: [[Divisao-de-inteiro-em-java-trunca-em-direcao-a-zero]].
+
+## Licao 03/10/2026 A: `removed()` roda ANTES de `this.screen` ser reatribuido
+
+**FACT (verificado em `DiaryNodeScreen.removed()`, 03/10/2026).**
+`Minecraft.setScreen(nova)` chama `novaTelaAtual.removed()` ANTES de reatribuir
+`this.screen`. Portanto, dentro de `removed()`:
+
+    this.minecraft.screen  ==  this   // a tela que esta SAINDO, nao a que vai entrar
+
+Consequencia direta: uma guarda escrita para distinguir navegacao interna de
+fechamento, com
+
+    Screen next = this.minecraft.screen;
+    if (next == this) { super.removed(); return; }
+
+**cai em TODA troca de tela, sem excecao.** No nosso caso ela impedia o
+`sendDraft()` de rodar uma unica vez em um dia de testes: o autosave estava morto e
+parecia "nao funciona as vezes" -- nao funcionava nunca. A jogadora reportou como
+"vc nn fez literalmente nada do q eu falei".
+
+**Por que custou caro:** o sintoma (nada acontece) e indistinguivel de "a copia do
+arquivo no `mods/` esta velha". Antes de procurar defeito no codigo, eu conferi o
+`.class` dentro do jar com `jar xf` + busca de simbolo no constant pool. O simbolo
+novo estava la. Sem essa verificacao eu teria reescrito o recurso inteiro procurando
+um problema de empacotamento que nao existia.
+
+**Regra que sobra:**
+- Nao tentar descobrir "para onde vai a tela" dentro de `removed()`. Nao ha informacao.
+- Se o comportamento depende do tipo de saida, os **pontos de saida** gravam
+  (`onClose`, cada botao), e o gancho automatico e descartado. O gancho roda em toda
+  troca de tela, inclusive a navegacao interna que nao deve salvar.
+- Antes de culpar o build/copia quando a jogadora diz "nao mudou nada": extraia a
+  classe do `.jar` e procure o simbolo novo. Custo: 10 segundos. Evidencia: definitiva.
+
+## Licao 03/10/2026 B: "gravar ao trocar de tela" e "gravar so ao sair" sao requisitos opostos
+
+A jogadora pediu, em horas distintas da mesma sessao:
+
+1. "eu altero o titulo e aperto Voltar e **perco a alteracao**" (quer preservar)
+2. "quando aperto para voltar **ele salva automaticamente**. So salva se eu **SAIR**
+   do diario" (quer nao gravar ao navegar)
+
+**INFERENCE:** as duas frases nao se contradizem -- sao duas metades de um requisito
+so. O texto tem de **existir** enquanto ela navega e **nao ser gravado** ate a saida.
+Com o texto morando so na caixa (`EditBox` / `MultiLineEditBox`), isso e impossivel:
+cada tela e um objeto novo e a troca destroi a caixa.
+
+**DECISAO (perguntada a ela antes de implementar, porque as duas interpretacoes
+levam a codigo diferente):** um cache estatico no cliente por id de anotacao. Ele e
+escrito **a cada quadro** dentro de `render` -- e nao em `charTyped`/`keyPressed`,
+porque colar com `Ctrl+V` e arrastar texto nao passam por nenhum dos dois eventos --
+e e lido em `init()` ANTES do servidor, para a caixa abrir com o que ela digitou.
+
+**Consequencias que precisam ser ditas a jogadora, nao escondidas:**
+
+- Fechar o jogo com o formulario aberto **perde** o rascunho. E o preco de "nao grava
+  ao navegar": o texto nao saiu do cliente. O aviso visual e a informacao que cobre
+  esse risco, e por isso ele precisa acender **antes** de qualquer gravacao.
+- Tudo que antes se derivava de "o servidor tem pendencia" passa a ter **duas
+  fontes** (servidor + rascunho local). Onde havia um `||`, vira `||` de verdade; onde
+  a regra era "o botao acende com rascunho", o predicado inteiro mudou. Revisar os
+  dois lados da mesma regra, e nao so o novo.
+- O `[Reverter]` do servidor deixa de ter o que desfazer para edicoes (a edicao so
+  vira pendencia no instante em que ja e aceita). **Isto e uma diferenca visivel em
+  relacao a um pedido anterior, e precisa ser dita a jogadora, nao descoberta em jogo.**
+
+**Regra que sobra:** quando dois pedidos da mesma pessoa parecem se contradizer,
+tratar o segundo como **refinamento** do primeiro e perguntar qual dos dois
+comportamentos ela quer antes de escolher. Perguntar custou uma rodada; escolher
+sozinho custaria duas.
+
+## Licao 03/10/2026 C: classe de logica pura em `src/client` pode ser testada
+
+`DiaryDrafts` mora em `src/client` (o cache e do cliente) mas **nao importa nada do
+Minecraft** -- so `DiaryEntry` e `DiaryStore`, que vivem em `src/main`. O source set
+de teste nao via `src/client`, entao a regra da marcacao amarela (ancestral acende,
+irma **nao** acende) ficava sem cobertura -- sendo exatamente a regra que a jogadora
+mais reclamou, e a que mais silentemente pode quebrar.
+
+Correcao em `build.gradle`:
+
+    test { classpath += sourceSets.client.output }
+
+So o `output` do client entra, e **nenhuma dependencia**: o compilador de teste
+resolve `DiaryDrafts` sem precisar das classes que tocam no Minecraft, porque so as
+referencias diretas sao resolvidas. Nao entra nada no jar entregue.
+
+**Antes de concluir que um arquivo "nao da para testar", veja o que ele importa.**
+O que impede o teste e a dependencia, nao o diretorio. Mover a classe para `src/main`
+resolveria tambem, e porem errado: estado de sessao do cliente nao deve entrar no
+classpath do servidor.
+
+## Licao 03/10/2026 D: cache de colecao derivada invalida na mutacao, nao na leitura
+
+A marcacao amarela e consultada **por cartao, por quadro**: com 10 cartoes a 60 fps
+sao 600 consultas por segundo. A primeira versao montava um `new HashSet<>(keySet())`
+em cada consulta -- 600 alocacoes por segundo na tela, dentro de um `render`.
+
+A versao validada mantem um campo `cachedIds`, invalidado (`= null`) **dentro de
+`put`/`clear`/`clearAll`**, reconstruido na leitura. O invalidador so roda quando o
+mapa muda de fato: `clear(id)` de um id inexistente nao invalida, senao todo
+`clear` reconstruiria o conjunto a toa.
+
+`clearAll` tambem so invalida se o mapa nao estava vazio, pelo mesmo motivo.
+
+**Regra que sobra:** antes de cachear, perguntar "quantas vezes isso roda por quadro".
+Um `new` dentro de `render` e um bug de desempenho mesmo compilando e passando em
+todos os testes -- e nenhum teste unitario de logica pura pegaria.
+
+## Licao 03/10/2026 E: perguntar antes quando o segundo pedido refina o primeiro
+
+Ja e licao da casa, mas o caso de hoje confirma o custo de errar:
+
+- Implementando o "nao grava ao navegar" sem perguntar, a alteracao da jogadora
+  seria perdida ao navegar -- o defeito que ela acabara de reportar.
+- Implementando o "preserva o texto" sem perguntar, ela teria um autosave que ela
+  acabou de pedir para remover.
+
+Os dois caminhos compilam, passam nos testes e falham em jogo, e cada um falha de um
+jeito diferente. **Uma pergunta de opcoes com as consequencias escritas (uma linha por
+opcao) resolve em um turno o que dois palpites nao resolvem em quatro.**
+
+## Licao 03/10/2026 F: "desfazer na ordem" e um indice, e o texto nao mora nele
+
+**O pedido (03/10/2026, palavra da jogadora):** "alterei a descricao da secao 1 e o titulo
+da subsecao 1 e deletei a secao 2 nessa ordem; um clique em reverter restaura a secao 2, o
+proximo volta o titulo da subsecao 1, o proximo volta a descricao da secao 1. em ordem".
+
+**O indice (`DiaryUndo`) guarda so o TIPO e o ID.** Nao o texto. Motivo: o texto de uma
+edicao esta no cache de rascunhos, o texto anterior de uma exclusao esta no servidor, e uma
+terceira copia envelheceria no instante em que qualquer um dos outros dois mudasse. **Se a
+pilha guarda dado, ela tem tres lugares verdadeiros para o mesmo dado** - e o primeiro
+desfazer devolve o valor velho.
+
+**Tres armadilhas concretas, todas encontradas antes de o jogador ver:**
+
+1. **Uma tecla e um passo.** O rascunho e reescrito a cada quadro enquanto se digita. Se cada
+   reescrita empilhasse, um titulo de tres segundos atrasaria o botao e o primeiro clique
+   desfaria **uma letra**, nao o que a pessoa fez. O passo e registrado **quando o no ganha
+   rascunho pela primeira vez** - e por isso que `put` passou a devolver `boolean`. O nome do
+   retorno (`novo`) e o contrato; um `void` ali esconde a regra.
+2. **Ordem por relogio nao funciona.** `currentTimeMillis()` nao ordena dois passos no mesmo
+   milissegundo, e apagar + editar no mesmo clique e normal. Contador monotonico, e ele comeca
+   em 1 porque "ordem 0" parece valor ausente.
+3. **Caixa reescrita por quadro desfaz o desfazer.** A tela de edicao reescreve o rascunho a
+   cada quadro comparando com o espelho do servidor. Se o `Reverter` limpar so o rascunho, o
+   quadro seguinte recria ele e **o clique nao tem efeito nenhum**. O passo e um gancho que
+   tambem devolve o texto a caixa. Regra: *quando um valor e reidratado continuamente a
+   partir de uma fonte, desfaze-lo exige reidratar a fonte tambem.*
+
+**Duas pilhas, uma ordem.** A exclusao real so e desfeita pelo servidor. A ordem das duas
+pilha concorda porque so o servidor recebe exclusoes e so na ordem dos cliques. **Ao misturar
+origens de estado num comando, verificar que as duas pilhas concordam na ordem relativa** -
+e o que concorda hoje pode deixar de concordar quando uma delas ganhar um tipo novo.
+
+**Flag do servidor que virou inutil: dar a ela um resto, ou apagar o parametro.** O `canUndo`
+veio do protocolo e so enxergava exclusoes, entao esconderia o botao quando so havia texto.
+Nao dava para deixar o campo morto nem para manter a condicao antiga. Ele virou **uma
+reconciliacao**: quando o servidor diz que nao tem nada na pilha dele, remove da pilha do
+cliente os passos que so o servidor poderia cumprir, preservando os que nao dependem dele.
+*Protocolo muda raramente; e o codigo que o le e que tem de arranjar um emprego honesto.*
+
+**Teste do cenario, palavra por palavra.** `DiaryUndoTest.cenarioDaJogadora` monta exatamente
+a frase acima e verifica os tres cliques. Um teste de "a pilha esta vazia / nao esta vazia"
+passaria com a ordem invertida - que e o defeito real. **Quando o requisito e uma ordem,
+o teste tem que ser uma ordem.**
+
+## Licao G - aviso que le uma fonte so, e a fonte muda de lado (03/10/2026)
+
+**FACT.** O ponto amarelo do endereco (breadcrumb) existia desde a rodada 3 e nunca acendeu
+na rodada 6. O cartao ao lado dele acendia. A causa nao era o desenho:
+
+    boolean pending = DiaryStore.hasPendingInSubtree(entries, crumb.id(), pendingIds);
+
+`pendingIds` e o que o SERVIDOR tem e ainda nao foi aceito. Na rodada 5b o texto novo passou
+a viver so no cliente (`DiaryDrafts`) e so vai para o servidor no `[Salvar]` ou na saida.
+Entre digitar e salvar, `pendingIds` esta vazio por construcao. A regra do endereco ficou
+ligada a uma fonte que, depois da migracao, so se altera no ultimo instante do fluxo.
+
+**A jogadora pediu "adicione uma bolinha amarela no endereco em cima" achando que era
+recurso novo. Era defeito antigo, do mesmo tipo do round 5.**
+
+**Como isso se repete.** Sempre que um dado muda de dono (cliente -> servidor, servidor ->
+cliente, banco -> cache), TODO consumidor antigo daquele dado vira consumidor obsoleto, e ele
+nao avisa: continua compilando, continua desenhando, e simplesmente mente. O sintoma e
+"funciona ate o passo X", onde X e a proxima coisa depois da migracao.
+
+**O que fazer, na ordem.**
+
+1. Quando um dado muda de dono, **listar quem o le** e passar cada um pelo novo dono antes de
+   dar a mudanca por pronta. Neste caso os leitores eram tres: o cartao (`hasPending`), o
+   endereco (`hasPendingInSubtree` direto) e o `[Salvar]` (`canUndo` do servidor).
+2. **Um predicado por fato, com um nome, e todo mundo passa por ele.** Depois da correcao os
+   tres chamam `hasPending(entry)`. Um aviso que acende num lugar e nao no outro deixa de ser
+   possivel por construcao, em vez de depender de alguem lembrar de atualizar os tres sitios.
+3. **Funcao que consulta e desenha e duas funcoes.** `drawPendingDot` recebia o id e chamava
+   `hasPending(find(id))` internamente, enquanto o chamador ja tinha a resposta. Isso obriga
+   todo chamador a saber a ordem das duas coisas e abre caminho para os dois discordarem.
+   Agora quem chama calcula o booleano e passa so as coordenadas.
+
+**Corolario de marcacao visual.** Quando um aviso visual novo nasce, ele sai do predicado que
+ja existe, e nao de uma pergunta nova parecida. O caso inverso acontecera na mesma rodada: a
+jogadora pediu uma moldura amarela em volta do cartao (implementada, com `drawPendingBorder` e
+o helper `cardRight()`), abriu o jogo, e pediu para tirar - "fica melhor so com a bolinha
+mesmo". **Apagado, nao desabilitado:** os dois foram removidos do arquivo inteiro, e sobrou
+so um comentario em `drawListOverlay` registrando que a moldura existiu e saiu por pedido
+dela. Sem esse comentario, a proxima rodada a reintroduz como "melhoria que faltava" - e
+nao seria a primeira vez que alguem reassume uma decisao visual como se fosse ideia propria.
+
+## Licao H - ferramenta que reescreve texto falha em silencio; o diff e o unico detector
+
+**Contexto (03/10/2026).** Merge do codigo do amigo com o Diario. Build verde, 211 testes
+verdes, encoding limpo - e mesmo assim **cinco linhas do codigo dele estavam com a indentacao
+perdida**. Nenhuma delas quebrava nada: quatro eram comentario e uma era uma entrada de JSON.
+**Nenhum build do mundo pega indentacao de comentario.**
+
+### Defeito 1 - a ferramenta de edicao consome a indentacao da primeira linha
+
+Quando o `oldString` comeca num marcador de conflito (`<<<<<<< Updated upstream`) e o
+`newString` comeca no token seguinte, a busca por substring casa a partir do **meio** da linha
+anterior. O `oldString` seguinte era:
+
+    <<<<<<< Updated upstream
+        registerThreatSheetReceiver();
+
+E o `newString` era:
+
+    registerThreatSheetReceiver();
+
+O resultado compilava, funcionava, e tinha a linha na coluna 0. Aconteceu **5 vezes em um
+merge**.
+
+**Como pega:** `git diff -U0 | Select-String '^-[^-]'` - toda remocao que nao foi planejada
+aparece ali. E uma varredura de linhas em coluna 0 dentro do arquivo. **Nenhuma das duas e o
+build.**
+
+**Regra:** depois de resolver conflito, olhar o diff de remocoes, nao so o de adicoes. E
+conferir o arquivo do outro lado como ele esta no `HEAD`, para separar "eu quebrar" de "ele ja
+tinha".
+
+### Defeito 2 - no PowerShell, crase e o caractere de ESCAPE
+
+Texto com crases (`` `drawListOverlay` ``) escrito com **aspas duplas** perde a crase: o
+PowerShell le `` `d `` como escape e devolve so `d`. Nenhum aviso. Um bloco de licao na
+memoria ficou com tres crases comidas e com `alguem` virado `algueme`.
+
+**Regra:** crase dentro de PowerShell = **aspas simples** ou here-string `@'...'@`. E o bloco
+tem de passar pelo verificador de ASCII do anexador, que e onde isso apareceria antes de entrar
+no arquivo - se o bloco fosse puro ASCII com crases, o verificador nao pegaria, entao a defesa
+e nao escrever crase em script.
+
+### Defeito 3 - `String.Split(string)` divide por CARACTERE
+
+    $linha.Split("com drawPendingBorder e").Count - 1   # devolveu 76
+
+`Split` com argumento `string` no .NET trata o argumento como conjunto de caracteres a
+dividir, nao como delimitador. O guard "tem de bater exatamente 1 vez" acusou 76 e o script
+falhou - **por sorte**, porque era o guard. Se o guard estivesse errado em vez de apertado, teria
+reescrito 76 linhas.
+
+**Regra:** contar ocorrencia com `[regex]::Matches($s, [regex]::Escape($agulha)).Count`. E
+calibrar o guard num caso conhecido antes de confiar nele.
+
+### O que os tres tem em comum
+
+**Nenhum dos tres produz erro, excecao ou saida diferente da esperada.** Os tres produzem
+resultado plausivel e errado: indentacao perdida, crase sumida, contagem inflada. Por isso a
+defesa nao e "escrever o codigo certo" e **nao confiar em nenhuma verificacao que dependa de
+eu ter escrito o certo**. A verificacao boa e a que compara com uma **fonte externa**: o
+`stash`, o `HEAD`, o `git diff`. E a regra de nao confiar vale para o meu proprio texto: o
+`scanEncoding` do build checa mojibake e ideograma em `src/` e `agent/`, e por isso pegaria
+um fragmento de outro idioma - mas **nao pega crase faltando nem palavra colada**, e nao pegaria
+nada em commentary de indentacao.
+
+### Confirmacao que vale a pena
+
+O merge foi conferido comparando o conteudo de cada arquivo contra `stash@{0}`, ignorando
+indentacao, e contando **linhas do nosso lado que sumiram**: **zero**. Isso e o que prova que
+o merge nao perdeu nada - o `BUILD SUCCESSFUL` nao prova nada disso.

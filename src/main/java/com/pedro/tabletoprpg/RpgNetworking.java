@@ -1416,6 +1416,17 @@ public final class RpgNetworking {
                 ThreatSheetResultPayload.STREAM_CODEC);
         PayloadTypeRegistry.playS2C().register(ThreatSheetOpenPayload.TYPE,
                 ThreatSheetOpenPayload.STREAM_CODEC);
+        // 02/10/2026: o Diario (notas em arvore, uma por jogador).
+        PayloadTypeRegistry.playC2S().register(DiaryRequestPayload.TYPE, DiaryRequestPayload.STREAM_CODEC);
+        PayloadTypeRegistry.playS2C().register(DiaryStatePayload.TYPE, DiaryStatePayload.STREAM_CODEC);
+        PayloadTypeRegistry.playC2S().register(DiaryCreatePayload.TYPE, DiaryCreatePayload.STREAM_CODEC);
+        PayloadTypeRegistry.playC2S().register(DiaryCreateChildPayload.TYPE,
+                DiaryCreateChildPayload.STREAM_CODEC);
+        PayloadTypeRegistry.playC2S().register(DiarySavePayload.TYPE, DiarySavePayload.STREAM_CODEC);
+        PayloadTypeRegistry.playC2S().register(DiaryAcceptPayload.TYPE, DiaryAcceptPayload.STREAM_CODEC);
+        PayloadTypeRegistry.playC2S().register(DiaryDeletePayload.TYPE, DiaryDeletePayload.STREAM_CODEC);
+        PayloadTypeRegistry.playC2S().register(DiaryUndoPayload.TYPE, DiaryUndoPayload.STREAM_CODEC);
+        PayloadTypeRegistry.playC2S().register(DiaryPinPayload.TYPE, DiaryPinPayload.STREAM_CODEC);
         // 01/10/2026 (pagina 3 da ficha): a lista de magias.
         PayloadTypeRegistry.playC2S().register(SheetSpellPayload.TYPE, SheetSpellPayload.STREAM_CODEC);
         PayloadTypeRegistry.playS2C().register(DownedStatePayload.TYPE, DownedStatePayload.STREAM_CODEC);
@@ -1815,6 +1826,7 @@ public final class RpgNetworking {
         // Preset de rolagem criado pela tela de rolagem (01/10/2026).
         registerRollPresetReceiver();
         registerThreatSheetReceiver();
+        registerDiaryReceiver();
     }
 
     // ------------------------------------------------------------------
@@ -2263,6 +2275,411 @@ public final class RpgNetworking {
         boolean master = SessionManager.isMaster(player);
         List<ThreatSheet> sheets = master ? ThreatSheetStore.snapshot(player.getUUID()) : List.of();
         return new ThreatSheetResultPayload(false, message, sheets);
+    }
+
+    // =====================================================================
+    // Diario -- anotacoes em arvore, uma por jogador (02/10/2026)
+    // =====================================================================
+
+    /**
+     * Cliente -> Servidor: "me manda o diario". Disparado ao abrir a tela.
+     *
+     * <p>Nao transporta nada: o proprio tipo do pacote e a mensagem.
+     */
+    public record DiaryRequestPayload() implements CustomPacketPayload {
+        public static final Type<DiaryRequestPayload> TYPE = new Type<>(TabletopRpg.id("diary_request"));
+
+        public static final StreamCodec<FriendlyByteBuf, DiaryRequestPayload> STREAM_CODEC =
+                StreamCodec.unit(new DiaryRequestPayload());
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
+    /**
+     * Servidor -> Cliente: o diario inteiro, mais se ha algo para o botao Reverter.
+     *
+     * <p><b>Por que vai a lista inteira e nao so o nivel aberto:</b> o botao Reverter pode
+     * devolver uma subarvore que estava num nivel que a tela nem estava mostrando, e o pino
+     * de um card precisa saber o estado de um {@code pinSeq} que so existe no servidor. Enviar
+     * um no por vez obrigaria a tela a manter cache proprio e a reconciliar; com o teto de
+     * {@link DiaryStore#MAX_ENTRIES} o pacote continua pequeno (o pior caso e ~100 KB, e o
+     * limite do vanilla e 1 MB por pacote).
+     *
+     * <p><b>Por que o {@code canUndo} vem no estado e nao a tela deduz:</b> o apagado vive
+     * so na memoria do servidor. Se a tela deduzisse "deu para desfazer" por ter acabado de
+     * clicar em Del?, ela mostraria o botao num estado que o servidor nao concorda, e o
+     * clique seguinte seria um no-op silencioso.
+     *
+     * @param focusId id da anotacao que o servidor acabou de criar, ou 0 se nada foi criado.
+     *                E o que faz a tela abrir a pagina da subsecao recem-criada: o id e
+     *                do servidor, e a tela nao tem como deduzi-lo sem errar (o proximo id
+     *                livre e um contador global do jogador, nao "quantas subsecoes tem").
+     */
+    public record DiaryStatePayload(List<DiaryEntry> entries, boolean canUndo, int focusId,
+                                     List<Integer> pendingIds)
+            implements CustomPacketPayload {
+        public static final Type<DiaryStatePayload> TYPE = new Type<>(TabletopRpg.id("diary_state"));
+
+        /**
+         * Escrito a mao porque {@code composite} nao tem sobrecarga de lista, e um
+         * {@code VarInt} de contagem antes de cada entrada e o que faz o vanilla conseguir
+         * ler o pacote sem saber o tamanho de antemao.
+         *
+         * <p><b>A ordem de leitura tem de bater com a de escrita, campo a campo:</b> um
+         * {@code composite} trocaria {@code canUndo} por {@code pendingIds} em silencio, e o
+         * sintoma seria o botao [Reverter] acendendo e apagando sem ninguem mexer nele.
+         */
+        public static final StreamCodec<FriendlyByteBuf, DiaryStatePayload> STREAM_CODEC = new StreamCodec<>() {
+            @Override
+            public DiaryStatePayload decode(FriendlyByteBuf buf) {
+                // Teto na leitura: um `VarInt` de tamanho vem do outro lado, e alocar a lista
+                // pelo numero que chegou seria confiar em dado nao validado. Acima do teto do
+                // store e lixo; o que vier a mais e descartado, e o store ja recusaria criar.
+                int size = Math.min(buf.readVarInt(), DiaryStore.MAX_ENTRIES);
+                List<DiaryEntry> entries = new ArrayList<>(size);
+                for (int i = 0; i < size; i++) {
+                    entries.add(DiaryEntry.STREAM_CODEC.decode(buf));
+                }
+                boolean canUndo = buf.readBoolean();
+                int focus = buf.readVarInt();
+                // O teto aqui e o de entradas: nao ha como haver mais pendentes do que nos.
+                int pendingSize = Math.min(buf.readVarInt(), DiaryStore.MAX_ENTRIES);
+                List<Integer> pendingIds = new ArrayList<>(pendingSize);
+                for (int i = 0; i < pendingSize; i++) {
+                    pendingIds.add(buf.readVarInt());
+                }
+                return new DiaryStatePayload(entries, canUndo, focus, pendingIds);
+            }
+
+            @Override
+            public void encode(FriendlyByteBuf buf, DiaryStatePayload payload) {
+                buf.writeVarInt(payload.entries().size());
+                for (DiaryEntry entry : payload.entries()) {
+                    DiaryEntry.STREAM_CODEC.encode(buf, entry);
+                }
+                buf.writeBoolean(payload.canUndo());
+                buf.writeVarInt(payload.focusId());
+                buf.writeVarInt(payload.pendingIds().size());
+                for (Integer id : payload.pendingIds()) {
+                    buf.writeVarInt(id);
+                }
+            }
+        };
+
+        public DiaryStatePayload {
+            // `List.copyOf` trava a lista: o cliente guarda este payload em cache e nao
+            // pode ver a colecao mudar debaixo dele.
+            entries = entries == null ? List.of() : List.copyOf(entries);
+            pendingIds = pendingIds == null ? List.of() : List.copyOf(pendingIds);
+        }
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
+    /**
+     * Cliente -> Servidor: criar anotacao.
+     *
+     * <p>{@code parentId} {@link DiaryEntry#ROOT} cria uma secao de raiz.
+     *
+     * <p><b>Por que o titulo viaja com 64 e nao com 30:</b> o {@link ByteBufCodecs#stringUtf8}
+     * <b>lanca</b> ao decodificar uma string maior que o teto, e um cliente modificado
+     * derrubaria a conexao em vez de receber um recusa. Mandando 64, um titulo de 40 chega
+     * inteiro e o {@link DiaryStore#create} recusa com a contagem na mensagem -- o mesmo
+     * desenho do {@code PresetCreatePayload}, cujo teto de rede (64) tambem e maior que o
+     * {@link RollPreset#MAX_NAME} (32).
+     */
+    public record DiaryCreatePayload(int parentId, String title, String description)
+            implements CustomPacketPayload {
+        public static final Type<DiaryCreatePayload> TYPE = new Type<>(TabletopRpg.id("diary_create"));
+
+        public static final StreamCodec<FriendlyByteBuf, DiaryCreatePayload> STREAM_CODEC =
+                StreamCodec.composite(
+                        ByteBufCodecs.VAR_INT, DiaryCreatePayload::parentId,
+                        ByteBufCodecs.stringUtf8(64), DiaryCreatePayload::title,
+                        ByteBufCodecs.stringUtf8(DiaryEntry.MAX_DESCRIPTION), DiaryCreatePayload::description,
+                        DiaryCreatePayload::new
+                );
+
+        public DiaryCreatePayload {
+            title = clamp(title, 64);
+            description = clamp(description, DiaryEntry.MAX_DESCRIPTION);
+        }
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
+    /**
+     * Cliente -> Servidor: criar uma subsecao com o titulo automatico.
+     *
+     * <p><b>Por que um pacote so para isso, e nao {@code DiaryCreatePayload} com titulo
+     * vazio:</b> o titulo e obrigatorio, e o {@link DiaryStore#create} recusa titulo vazio
+     * justamente para a jogadora nao criar anotacao sem nome. O numero automatico
+     * ("Subseção 1", "Subseção 2") depende de quantas subsecoes o PAI ja tem, e essa contagem
+     * mora no servidor -- se o cliente mandasse o titulo, ele contaria sobre uma copia que
+     * pode estar velha e criaria dois "Subseção 1" no mesmo pai. Pedir o numero ao servidor
+     * elimina essa janela.
+     *
+     * <p>E o {@code focusId} da resposta e o que faz a tela abrir a pagina da subsecao
+     * recem-criada, ja com o titulo preenchido e a descricao em branco.
+     */
+    public record DiaryCreateChildPayload(int parentId) implements CustomPacketPayload {
+        public static final Type<DiaryCreateChildPayload> TYPE =
+                new Type<>(TabletopRpg.id("diary_create_child"));
+
+        public static final StreamCodec<FriendlyByteBuf, DiaryCreateChildPayload> STREAM_CODEC =
+                StreamCodec.composite(
+                        ByteBufCodecs.VAR_INT, DiaryCreateChildPayload::parentId,
+                        DiaryCreateChildPayload::new
+                );
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
+    /**
+     * Cliente -> Servidor: gravar o titulo e a descricao que a jogadora digitou.
+     *
+     * <p><b>Por que continua um pacote em vez de envio a cada tecla:</b> o campo e local da
+     * jogadora enquanto ela escreve; mandar a cada caractere seria um pacote por tecla e a
+     * escrita passaria a competir com a rede. E por isso que o salvamento e por tela, e nao
+     * por tecla: quando ela sai da tela o rascunho vai em UM pacote.
+     *
+     * <p><b>O que e o {@code accept}:</b> a jogadora pediu que o texto entre no diario
+     * sozinho ao trocar de tela, e que o [Salvar] seja o botao que "aplica os rascunhos".
+     * Sao dois momentos diferentes sobre o mesmo texto: gravar ja aconteceu, e aceitar e
+     * dizer "este e o bom, pode esquecer o rascunho". O {@code accept} e esse segundo
+     * momento, e e ele que esvazia o [Reverter].
+     */
+    public record DiarySavePayload(int id, String title, String description, boolean accept)
+            implements CustomPacketPayload {
+        public static final Type<DiarySavePayload> TYPE = new Type<>(TabletopRpg.id("diary_save"));
+
+        public static final StreamCodec<FriendlyByteBuf, DiarySavePayload> STREAM_CODEC =
+                StreamCodec.composite(
+                        ByteBufCodecs.VAR_INT, DiarySavePayload::id,
+                        ByteBufCodecs.stringUtf8(64), DiarySavePayload::title,
+                        ByteBufCodecs.stringUtf8(DiaryEntry.MAX_DESCRIPTION), DiarySavePayload::description,
+                        ByteBufCodecs.BOOL, DiarySavePayload::accept,
+                        DiarySavePayload::new
+                );
+
+        public DiarySavePayload {
+            title = clamp(title, 64);
+            description = clamp(description, DiaryEntry.MAX_DESCRIPTION);
+        }
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
+    /**
+     * Cliente -> Servidor: apagar a anotacao e tudo que estiver dentro dela.
+     *
+     * <p>A cascata e do {@link DiaryStore#delete}; o cliente nao manda a lista dos filhos
+     * porque ele nao e a fonte da verdade e a lista dele pode estar velha.
+     */
+    public record DiaryDeletePayload(int id) implements CustomPacketPayload {
+        public static final Type<DiaryDeletePayload> TYPE = new Type<>(TabletopRpg.id("diary_delete"));
+
+        public static final StreamCodec<FriendlyByteBuf, DiaryDeletePayload> STREAM_CODEC =
+                StreamCodec.composite(
+                        ByteBufCodecs.VAR_INT, DiaryDeletePayload::id,
+                        DiaryDeletePayload::new
+                );
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
+    /** Cliente -> Servidor: o botao Reverter. Sem argumento: so existe a ultima delecao. */
+    public record DiaryUndoPayload() implements CustomPacketPayload {
+        public static final Type<DiaryUndoPayload> TYPE = new Type<>(TabletopRpg.id("diary_undo"));
+
+        public static final StreamCodec<FriendlyByteBuf, DiaryUndoPayload> STREAM_CODEC =
+                StreamCodec.unit(new DiaryUndoPayload());
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
+    /** Cliente -> Servidor: fixa ou desfixa o pino de um card. */
+    public record DiaryPinPayload(int id, boolean pinned) implements CustomPacketPayload {
+        public static final Type<DiaryPinPayload> TYPE = new Type<>(TabletopRpg.id("diary_pin"));
+
+        public static final StreamCodec<FriendlyByteBuf, DiaryPinPayload> STREAM_CODEC =
+                StreamCodec.composite(
+                        ByteBufCodecs.VAR_INT, DiaryPinPayload::id,
+                        ByteBufCodecs.BOOL, DiaryPinPayload::pinned,
+                        DiaryPinPayload::new
+                );
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
+    /**
+     * Cliente -> Servidor: "os rascunhos que estao na tela valem". E o botao [Salvar] da Tela 1,
+     * onde nao ha texto para enviar -- os campos de la sao o formulario de CRIAR, e o que a
+     * jogadora editou ja foi gravado no salvamento automatico.
+     *
+     * <p><b>Por que um pacote em vez de reaproveitar o {@link DiarySavePayload} com um id
+     * qualquer:</b> aquele payload exige um id, um titulo e uma descricao, e aqui nenhum dos
+     * tres tem o que ser. Apontar para o primeiro no da lista e mandar o texto dele seria
+     * funcionar por acidente: o {@code save} nem alteraria nada porque o texto e o mesmo,
+     * e o efeito viria so do {@code accept} logo depois. Um pacote cujo campo principal e
+     * decorativo e um pacote que ninguem entende daqui a seis meses.
+     * <p><b>Por que nao ha espaco para o texto:</b> por construcao ele ja esta no diario.
+     * O que este botao muda e a linha de base do "aceito", e isso e do servidor.
+     */
+    public record DiaryAcceptPayload() implements CustomPacketPayload {
+        public static final Type<DiaryAcceptPayload> TYPE = new Type<>(TabletopRpg.id("diary_accept"));
+
+        public static final StreamCodec<FriendlyByteBuf, DiaryAcceptPayload> STREAM_CODEC =
+                StreamCodec.unit(new DiaryAcceptPayload());
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
+    /**
+     * Envia o estado inteiro do diario da jogadora.
+     *
+     * <p>Chamada depois de <b>toda</b> mutacao, aceita ou recusada. E o preco de nao ter
+     * estado parcial: um recusa de criacao (titulo vazio, diario cheio) volta como estado
+     * identico ao anterior, e a tela fica correta sem nenhum caminho de volta a desenhar.
+     */
+    public static void sendDiaryState(ServerPlayer player) {
+        sendDiaryState(player, 0);
+    }
+
+    /**
+     * O mesmo estado, dizendo qual anotacao acabou de nascer.
+     *
+     * @param focusId id criado agora, ou 0. Ver {@link DiaryStatePayload#focusId()}.
+     */
+    public static void sendDiaryState(ServerPlayer player, int focusId) {
+        if (player == null || player.connection == null) {
+            return;
+        }
+        ServerPlayNetworking.send(player, new DiaryStatePayload(
+                DiaryStore.entries(player.getUUID()),
+                DiaryStore.canUndo(player.getUUID()),
+                focusId,
+                DiaryStore.pendingIds(player.getUUID())));
+    }
+
+    /**
+     * Liga os receptores de cliente para servidor do Diario.
+     *
+     * <p><b>Por que todo handler termina em {@link #sendDiaryState}:</b> o servidor e a fonte
+     * da verdade, e a unica forma de a tela saber o resultado real e o {@code pinSeq} que o
+     * {@link DiaryStore} atribuiu. Devolver o objeto criado no proprio pacote ensinaria a
+     * tela a trabalhar com um estado que nunca existiu no servidor.
+     */
+    private static void registerDiaryReceiver() {
+        ServerPlayNetworking.registerGlobalReceiver(DiaryRequestPayload.TYPE, (payload, context) ->
+                sendDiaryState(context.player()));
+
+        ServerPlayNetworking.registerGlobalReceiver(DiaryCreatePayload.TYPE, (payload, context) -> {
+            ServerPlayer player = context.player();
+            try {
+                DiaryStore.create(player.getUUID(), payload.parentId(), payload.title(), payload.description());
+            } catch (DiaryStore.DiaryException erro) {
+                TabletopRpg.LOGGER.warn("[TabletopRPG] Diario: criação recusada para {}: {}",
+                        player.getName().getString(), erro.getMessage());
+            }
+            sendDiaryState(player);
+        });
+
+        ServerPlayNetworking.registerGlobalReceiver(DiaryCreateChildPayload.TYPE, (payload, context) -> {
+            ServerPlayer player = context.player();
+            int created = 0;
+            try {
+                // O numero sai do servidor porque a contagem de subsecoes do pai mora aqui.
+                // Ver `DiaryCreateChildPayload`.
+                DiaryEntry entry = DiaryStore.create(player.getUUID(), payload.parentId(),
+                        DiaryStore.defaultSubsectionTitle(player.getUUID(), payload.parentId()), "");
+                created = entry.id();
+            } catch (DiaryStore.DiaryException erro) {
+                TabletopRpg.LOGGER.warn("[TabletopRPG] Diario: criação de subseção recusada para {}: {}",
+                        player.getName().getString(), erro.getMessage());
+            }
+            sendDiaryState(player, created);
+        });
+
+        ServerPlayNetworking.registerGlobalReceiver(DiarySavePayload.TYPE, (payload, context) -> {
+            ServerPlayer player = context.player();
+            try {
+                DiaryStore.save(player.getUUID(), payload.id(), payload.title(), payload.description());
+            } catch (DiaryStore.DiaryException erro) {
+                TabletopRpg.LOGGER.warn("[TabletopRPG] Diario: gravação recusada para {}: {}",
+                        player.getName().getString(), erro.getMessage());
+            }
+            // O `accept` vem DEPOIS do `save`, e nao junto: se o `save` foi recusado (titulo
+            // vazio, por exemplo), aceitar em seguida esvaziaria a pilha de desfazer sem
+            // que nada novo tivesse entrado, e a jogadora perderia o [Reverter] sem motivo.
+            if (payload.accept()) {
+                DiaryStore.accept(player.getUUID());
+            }
+            sendDiaryState(player);
+        });
+
+        ServerPlayNetworking.registerGlobalReceiver(DiaryAcceptPayload.TYPE, (payload, context) -> {
+            // Sem `save` antes: nao ha texto vindo junto, entao nao ha o que gravar, e o
+            // `accept` sozinho ja faz a parte que importa -- recopia o espelho e esvazia a
+            // pilha de desfazer.
+            DiaryStore.accept(context.player().getUUID());
+            sendDiaryState(context.player());
+        });
+
+        ServerPlayNetworking.registerGlobalReceiver(DiaryDeletePayload.TYPE, (payload, context) -> {
+            ServerPlayer player = context.player();
+            // `false` = id nao existe. Nao e erro: a tela pode ter clicado num card que o
+            // servidor ja tinha apagado (desfazer chegou antes do delete, por exemplo).
+            if (!DiaryStore.delete(player.getUUID(), payload.id())) {
+                TabletopRpg.LOGGER.debug("[TabletopRPG] Diario: apagar id {} que não existe para {}",
+                        payload.id(), player.getName().getString());
+            }
+            sendDiaryState(player);
+        });
+
+        ServerPlayNetworking.registerGlobalReceiver(DiaryUndoPayload.TYPE, (payload, context) -> {
+            ServerPlayer player = context.player();
+            if (!DiaryStore.undo(player.getUUID())) {
+                // Mesma razao do id inexistente: um Reverter clicado duas vezes, ou um
+                // clique que chegou depois de outra delecao.
+                TabletopRpg.LOGGER.debug("[TabletopRPG] Diario: Reverter sem nada para desfazer para {}",
+                        player.getName().getString());
+            }
+            sendDiaryState(player);
+        });
+
+        ServerPlayNetworking.registerGlobalReceiver(DiaryPinPayload.TYPE, (payload, context) -> {
+            ServerPlayer player = context.player();
+            DiaryStore.setPinned(player.getUUID(), payload.id(), payload.pinned());
+            sendDiaryState(player);
+        });
     }
 
     /**
