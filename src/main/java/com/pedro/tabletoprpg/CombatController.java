@@ -422,7 +422,7 @@ public final class CombatController {
         double dz = target.z - pos.z;
         double horizontal = Math.sqrt(dx * dx + dz * dz);
         float yaw = (float) Math.toDegrees(Math.atan2(-dx, dz));
-        float pitch = (float) Math.toDegrees(Math.atan2(dy, horizontal));
+        float pitch = (float) Math.toDegrees(Math.atan2(-dy, horizontal));
         mob.setYRot(yaw);
         mob.setXRot(pitch);
         mob.setYHeadRot(yaw);
