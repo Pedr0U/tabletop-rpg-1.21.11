@@ -3,6 +3,7 @@ package com.pedro.tabletoprpg;
 import com.mojang.serialization.Codec;
 import com.mojang.serialization.codecs.RecordCodecBuilder;
 
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -292,6 +293,49 @@ public final class DiaryStore {
     }
 
     /**
+     * Teto do vanilla por pacote: <b>1.048.576 bytes</b>. E a constante de
+     * {@code net.minecraft.network.PacketDecoder}, confirmada no bytecode em 07/10/2026
+     * (nao e chute: nao havia como confiar no comentario antigo, que dizia "~100 KB" e
+     * era ~40x menor que o pior caso real de 2048 x 2040 caracteres).
+     */
+    public static final int MAX_PACKET_BYTES = 1_048_576;
+
+    /**
+     * Pior caso, por anotacao, de tudo que o {@code STREAM_CODEC} escreve ALEM do texto:
+     * id (varint ate 5) + pai (5) + varint do titulo (1) + varint da descricao (2) +
+     * modificado (varlong ate 10) + pinSeq (10). Os pendentes adicionam no maximo mais
+     * 5 por anotacao no pior caso. 38 cobre os dois e sobra.
+     */
+    private static final int WORST_OVERHEAD_BYTES_PER_ENTRY = 38;
+
+    /** Versao + count de entradas + canUndo + focus + count de pendentes, pior caso. */
+    private static final int PAYLOAD_HEADER_BYTES = 24;
+
+    /**
+     * Bytes que o diario inteiro ocuparia no pacote, contando o texto em UTF-8 (uma
+     * anotacao so de acentos pesa o dobro dos mesmos caracteres em ASCII) e o pior caso
+     * dos campos que nao sao texto.
+     *
+     * <p><b>Por que conservador para cima:</b> esta conta alimenta o aviso "a
+     * sincronizacao vai parar". Errar PARA BAIXO esconderia um diario que de fato nao
+     * sincroniza. Errar para cima faz o aviso aparecer um pouco antes do necessario --
+     * aceitavel, e so acontece perto do teto.
+     */
+    public static long estimatedPacketBytes(List<DiaryEntry> list) {
+        long texto = 0;
+        for (DiaryEntry entry : list) {
+            texto += entry.title().getBytes(StandardCharsets.UTF_8).length
+                    + entry.description().getBytes(StandardCharsets.UTF_8).length;
+        }
+        return PAYLOAD_HEADER_BYTES + texto + (long) list.size() * WORST_OVERHEAD_BYTES_PER_ENTRY;
+    }
+
+    /** O diario inteiro ainda cabe num pacote do vanilla? */
+    public static boolean overPayloadBudget(List<DiaryEntry> list) {
+        return estimatedPacketBytes(list) > MAX_PACKET_BYTES;
+    }
+
+    /**
      * A lista na ordem do criterio escolhido.
      *
      * <p><b>Por que dois grupos e nao um unico comparador:</b> a jogadora pediu que os
@@ -301,9 +345,39 @@ public final class DiaryStore {
      * fixagem devolve a anotacao "a ordenacao que estiver no momento", que e o segundo grupo.
      */
     public static List<DiaryEntry> sorted(List<DiaryEntry> list, SortMode mode) {
+        return sorted(list, list, mode);
+    }
+
+    /**
+     * Ordena um nivel ({@code shown}) considerando o <b>diario inteiro</b> ({@code all}).
+     *
+     * <p><b>Por que o contexto e obrigatorio no MODIFIED (07/10/2026, bug da
+     * jogadora):</b> o ordenador media o {@code modifiedAt} do proprio no. Uma edicao
+     * dentro de {@code CARACTERISTICAS} mexia so no timestamp dela, e a mae
+     * {@code NPC 1} continuava com o timestamp antigo -- entao nada la dentro fazia a
+     * secao subir na lista. Ela descreveu assim: "ao alterar algo na subsecao
+     * CARACTERISTICAS, a subsecao NPC 1 devia ficar em primeiro na ordenacao das
+     * subsecoes da sessao NPCs".
+     *
+     * <p>Por isso a ordem e uma funcao da <b>subarvore</b>, nao do no: o que vale e o
+     * {@code modifiedAt} mais novo de qualquer lugar dentro daquele no. Sem a lista
+     * completa nao ha como saber isso -- os dois chamadores passavam so os irmaos, e
+     * os descendentes nem chegam ao metodo.
+     *
+     * <p>A troca e so de leitura: nada e gravado, e o botao Reverter nao e afetado,
+     * porque o timestamp de cada no continua sendo o dele mesmo no armazenamento.
+     */
+    public static List<DiaryEntry> sorted(List<DiaryEntry> shown, List<DiaryEntry> all,
+                                          SortMode mode) {
+        // So o MODIFIED paga o custo. ALPHABETICAL nao olha timestamp nenhum, e o
+        // metodo roda dentro do render -- construir um mapa por frame sem precisar seria
+        // jogar memoria fora na tela de diario, que fica aberta o tempo todo.
+        Map<Integer, Long> effective = mode == SortMode.MODIFIED
+                ? effectiveModified(all)
+                : Map.of();
         List<DiaryEntry> pinned = new ArrayList<>();
         List<DiaryEntry> loose = new ArrayList<>();
-        for (DiaryEntry entry : list) {
+        for (DiaryEntry entry : shown) {
             if (entry.pinned()) {
                 pinned.add(entry);
             } else {
@@ -314,12 +388,51 @@ public final class DiaryStore {
         if (mode == SortMode.ALPHABETICAL) {
             loose.sort(Comparator.comparing(DiaryEntry::sortKey));
         } else {
-            loose.sort(Comparator.comparingLong(DiaryEntry::modifiedAt).reversed());
+            // `getOrDefault` na frente, nao `get`: se o mapa veio vazio (fora do modo
+            // MODIFIED), cada no volta para o proprio timestamp e o resultado e o de
+            // antes, sem NPE e sem comportamento novo por acidente.
+            loose.sort(Comparator.comparingLong(
+                    (DiaryEntry e) -> effective.getOrDefault(e.id(), e.modifiedAt())).reversed());
         }
         List<DiaryEntry> out = new ArrayList<>(pinned.size() + loose.size());
         out.addAll(pinned);
         out.addAll(loose);
         return out;
+    }
+
+    /**
+     * Para cada no, o <b>mais novo</b> {@code modifiedAt} da sua subarvore: dele e de
+     * todos os descendentes.
+     *
+     * <p>Sobe por propagacao em vez de descer por recursao: o {@link DiaryStore} nao
+     * tem teto de profundidade (o teste {@code profundidadeIlimitada} sobe 40 niveis),
+     * e recursao aqui estouraria a pilha num diario ja editado -- que e o caso normal,
+     * nao o caso exotico. A subida para quando o ancestral ja tem um timestamp
+     * igual ou maior, porque la em cima ja ha algo mais novo e a contribuicao deste no
+     * nao muda nada.
+     */
+    private static Map<Integer, Long> effectiveModified(List<DiaryEntry> list) {
+        Map<Integer, Long> novo = new HashMap<>();
+        Map<Integer, Integer> pai = new HashMap<>();
+        for (DiaryEntry entry : list) {
+            novo.put(entry.id(), entry.modifiedAt());
+            pai.put(entry.id(), entry.parentId());
+        }
+        for (DiaryEntry entry : list) {
+            long meu = entry.modifiedAt();
+            Integer atual = pai.get(entry.id());
+            // `atual == entry.id()` nao acontece (o construtor corta auto-pai, ver
+            // `anelNaoTrava`), mas um no em que o pai nao esta na lista encerra o laço
+            // por `containsKey`, nao por confiança.
+            while (atual != null && !atual.equals(entry.id()) && novo.containsKey(atual)) {
+                if (meu <= novo.get(atual)) {
+                    break;
+                }
+                novo.put(atual, meu);
+                atual = pai.get(atual);
+            }
+        }
+        return novo;
     }
 
     // --------------------------------------------------------------- escrita

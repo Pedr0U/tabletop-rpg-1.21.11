@@ -340,7 +340,7 @@ public class DiaryNodeScreen extends DiaryScreenBase {
 
     @Override
     protected List<DiaryEntry> visibleEntries() {
-        return DiaryStore.sorted(DiaryStore.childrenOf(entries, nodeId), sortMode);
+        return DiaryStore.sorted(DiaryStore.childrenOf(entries, nodeId), entries, sortMode);
     }
 
     @Override

@@ -4,8 +4,10 @@ import net.minecraft.server.level.ServerPlayer;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -107,6 +109,136 @@ public final class ThreatSheetStore {
     }
 
     /**
+     * Copias diretas desta ficha. Uma ficha original sem copia devolve lista vazia.
+     *
+     * <p>E a pergunta que a tela faz para montar a lista da direita: a lista mostra SO
+     * as copias, e a mae fica no topo (07/10/2026).
+     */
+    public static List<ThreatSheet> copiesOf(UUID uuid, String motherId) {
+        if (uuid == null || motherId == null || motherId.isBlank()) {
+            return List.of();
+        }
+        List<ThreatSheet> out = new ArrayList<>();
+        for (ThreatSheet sheet : snapshot(uuid)) {
+            if (motherId.equals(sheet.copyOf())) {
+                out.add(sheet);
+            }
+        }
+        return List.copyOf(out);
+    }
+
+    /** Copia a ficha da mae, do jeito que a jogadora pediu em 07/10/2026. */
+    public static SaveResult createCopy(ServerPlayer player, String motherId) {
+        if (player == null) {
+            return SaveResult.NOT_FOUND;
+        }
+        return createCopy(player.getUUID(), motherId);
+    }
+
+    /**
+     * Copia a ficha da mae.
+     *
+     * <p><b>O que a copia herda:</b> tudo (atributos, pericias, caracteristicas,
+     * passivas, ativas, vitais, descricao, identidade), menos o id e o nome. Depois
+     * disso ela e independente: editar a copia nao toca a mae.
+     *
+     * <p><b>Por que o nome e "mae (n)" com o MENOR n livre:</b> o auto-nome existe so
+     * para nao criar nome duplicado (regra da jogadora). Apagar a copia (1) e copiar
+     * de novo faz nascer (1) outra vez; renomear a mae so muda o nome de copias NOVAS.
+     *
+     * <p><b>Por que numero de copia nao existe na tela:</b> a jogadora nao quis um
+     * contador de copias no rodape. O nome ja diz o que ela precisa.
+     */
+    public static SaveResult createCopy(UUID uuid, String motherId) {
+        ThreatSheet mother = findById(uuid, motherId);
+        if (mother == null) {
+            return SaveResult.NOT_FOUND;
+        }
+        if (mother.isCopy()) {
+            // Copia de copia nao existe. O botao da tela nao aparece na copia, e o
+            // servidor recusa tambem: esconder botao no cliente nao e permissao.
+            return SaveResult.COPY_OF_COPY;
+        }
+        if (snapshot(uuid).size() >= MAX_SHEETS) {
+            return SaveResult.LIMIT_REACHED;
+        }
+        String base = copyBase(mother.identity().name());
+        for (int n = 1; n <= MAX_SHEETS; n++) {
+            ThreatSheet copy = mother.withId(ThreatSheet.newId())
+                    .withCopyOf(mother.id())
+                    .withName(base + " (" + n + ")");
+            SaveResult result = save(uuid, copy, "");
+            if (result != SaveResult.NAME_TAKEN) {
+                return result;
+            }
+        }
+        return SaveResult.NAME_TAKEN;
+    }
+
+    /**
+     * Cria uma ficha em branco ja com o nome padrao "Ficha N", o menor numero livre
+     * (07/10/2026). E o "Nova Ficha" do menu: a ficha nasce no servidor no clique, para
+     * a lista mostrar "Ficha 1" mesmo se o Mestre fechar o editor sem salvar.
+     *
+     * <p><b>Por que nao passa por {@link #save}:</b> save() recusa ficha de ND 0 e sem
+     * nome de exibicao por regra, e a ficha em branco tem exatamente os dois.
+     *
+     * @return a ficha criada, ou {@code null} se o limite de {@link #MAX_SHEETS} foi atingido
+     */
+    public static ThreatSheet createBlank(UUID uuid) {
+        if (uuid == null) {
+            return null;
+        }
+        List<ThreatSheet> current = new ArrayList<>(snapshot(uuid));
+        if (current.size() >= MAX_SHEETS) {
+            return null;
+        }
+        for (int n = 1; n <= MAX_SHEETS; n++) {
+            ThreatSheet blank = ThreatSheet.blank(SheetModelHolder.current())
+                    .withId(ThreatSheet.newId())
+                    .withName("Ficha " + n);
+            boolean taken = false;
+            for (ThreatSheet sheet : current) {
+                if (sheet.key().equals(blank.key())) {
+                    taken = true;
+                    break;
+                }
+            }
+            if (!taken) {
+                current.add(blank);
+                BY_PLAYER.put(uuid, Collections.unmodifiableList(current));
+                return blank;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Base para o nome de uma copia, cortada para o sufixo " (n)" caber no limite de
+     * {@link ThreatSheet#MAX_NAME}. O pior sufixo e "(200)" (seis caracteres), teto do
+     * proprio loop de {@link #createCopy}.
+     */
+    private static String copyBase(String motherName) {
+        String clean = motherName == null ? "" : motherName.trim();
+        int suffix = " (200)".length();
+        if (clean.length() > ThreatSheet.MAX_NAME - suffix) {
+            clean = clean.substring(0, ThreatSheet.MAX_NAME - suffix);
+        }
+        return clean;
+    }
+
+    /**
+     * Salva uma ficha, criando ou substituindo. Versao do jogador: extrai o UUID e
+     * delega, para os handlers de rede nao repetirem a extracao.
+     */
+    public static SaveResult save(ServerPlayer player, ThreatSheet sheet, String originalName) {
+        if (player == null) {
+            return SaveResult.EMPTY_NAME;
+        }
+        return save(player.getUUID(), sheet, originalName);
+    }
+
+    /**
      * Salva uma ficha, criando ou substituindo.
      *
      * <p><b>Por que o nome e a identidade:</b> a lista da tela e a unica coisa que
@@ -115,8 +247,8 @@ public final class ThreatSheetStore {
      *
      * @return o motivo da recusa, ou {@link SaveResult#OK}
      */
-    public static SaveResult save(ServerPlayer player, ThreatSheet sheet, String originalName) {
-        if (player == null || sheet == null) {
+    public static SaveResult save(UUID uuid, ThreatSheet sheet, String originalName) {
+        if (uuid == null || sheet == null) {
             return SaveResult.EMPTY_NAME;
         }
         String key = sheet.key();
@@ -136,7 +268,7 @@ public final class ThreatSheetStore {
             return SaveResult.EMPTY_LEVEL;
         }
 
-        List<ThreatSheet> current = new ArrayList<>(snapshot(player.getUUID()));
+        List<ThreatSheet> current = new ArrayList<>(snapshot(uuid));
         boolean isNew = originalName == null || originalName.isBlank();
         int index = -1;
         if (!isNew) {
@@ -170,44 +302,79 @@ public final class ThreatSheetStore {
             // ficha anterior deixa de existir na lista, e comparar a chave nova com ela
             // dava UPDATED em toda renomeacao, tornando SaveResult.RENAMED inalcancavel.
             String previousKey = current.get(index).key();
-            // O servidor manda no id: um save pelo item chega com id vazio (o cliente nao
-            // sorteia) e um save pela tela chega com o id que o servidor mandou. Reaproveitar
-            // o id ja guardado e o que mantem o vinculo do mob vivo apos renomear.
-            ThreatSheet stored = sheet.withId(current.get(index).id());
+            // O servidor manda no id E no copyOf: os dois sao vinculo (o id com o mob,
+            // o copyOf com a mae). Um save sem o campo (como o que vem pelo item) nao
+            // pode desancorar uma copia da mae nem ancorar uma ficha original.
+            ThreatSheet stored = sheet.withId(current.get(index).id())
+                    .withCopyOf(current.get(index).copyOf());
             if (!stored.hasId()) {
                 stored = stored.withId(ThreatSheet.newId());
             }
             current.set(index, stored);
-            BY_PLAYER.put(player.getUUID(), Collections.unmodifiableList(current));
+            BY_PLAYER.put(uuid, Collections.unmodifiableList(current));
             return previousKey.equals(key) ? SaveResult.UPDATED : SaveResult.RENAMED;
         }
         if (!sheet.hasId()) {
             sheet = sheet.withId(ThreatSheet.newId());
         }
         current.add(sheet);
-        BY_PLAYER.put(player.getUUID(), Collections.unmodifiableList(current));
+        BY_PLAYER.put(uuid, Collections.unmodifiableList(current));
         return SaveResult.CREATED;
     }
 
-    /** Apaga pela chave. Devolve a ficha removida, ou {@code null}. */
+    /**
+     * Apaga pela chave. Se a ficha for uma MAE, as copias caem junto: decisao da
+     * jogadora em 07/10/2026 ("apagar a mae apaga mae e copias juntas, na mesma
+     * confirmacao"). Devolve a ficha pedida, ou {@code null} se ela nao existe.
+     */
     public static ThreatSheet remove(UUID uuid, String key) {
         List<ThreatSheet> current = snapshot(uuid);
         if (current.isEmpty()) {
             return null;
         }
         String wanted = RollPreset.normalizeKey(key == null ? "" : key.trim());
-        List<ThreatSheet> out = new ArrayList<>();
         ThreatSheet removed = null;
         for (ThreatSheet sheet : current) {
             if (removed == null && sheet.key().equals(wanted)) {
                 removed = sheet;
-                continue;
+                break;
             }
-            out.add(sheet);
         }
         if (removed == null) {
             return null;
         }
+
+        // Cascata por id, em largura, para o caso de dados antigos terem copia de
+        // copia. `removed.hasId()` e obrigatorio: id vazio nunca acontece no cache
+        // (o replaceAll e o save sorteiam), mas se acontecesse, um set com "" casaria
+        // com o copyOf "" de TODA ficha original e apagaria o Mestre inteiro.
+        List<ThreatSheet> out = new ArrayList<>();
+        if (removed.hasId()) {
+            Set<String> doomed = new HashSet<>();
+            doomed.add(removed.id());
+            boolean grew;
+            do {
+                grew = false;
+                for (ThreatSheet sheet : current) {
+                    if (!doomed.contains(sheet.id()) && doomed.contains(sheet.copyOf())) {
+                        doomed.add(sheet.id());
+                        grew = true;
+                    }
+                }
+            } while (grew && doomed.size() < MAX_SHEETS);
+            for (ThreatSheet sheet : current) {
+                if (!doomed.contains(sheet.id())) {
+                    out.add(sheet);
+                }
+            }
+        } else {
+            for (ThreatSheet sheet : current) {
+                if (sheet != removed) {
+                    out.add(sheet);
+                }
+            }
+        }
+
         if (out.isEmpty()) {
             BY_PLAYER.remove(uuid);
         } else {
@@ -231,7 +398,8 @@ public final class ThreatSheetStore {
         EMPTY_LEVEL("O ND da ameaça é obrigatório."),
         NAME_TAKEN("Já existe uma ficha de ameaça com esse nome."),
         LIMIT_REACHED("Limite de fichas de ameaça atingido."),
-        NOT_FOUND("Essa ficha de ameaça não existe mais.");
+        NOT_FOUND("Essa ficha de ameaça não existe mais."),
+        COPY_OF_COPY("Copia de copia nao existe: a copia e a folha final.");
 
         private final String message;
 

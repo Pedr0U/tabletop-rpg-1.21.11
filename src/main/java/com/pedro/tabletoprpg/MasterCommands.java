@@ -30,6 +30,7 @@ import net.minecraft.world.entity.EntitySpawnReason;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.Mob;
 import net.minecraft.world.entity.MobCategory;
+import net.minecraft.world.item.ItemStack;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -131,15 +132,35 @@ public class MasterCommands {
                     .then(Commands.literal("camera")
                         .executes(MasterCommands::insertCamera)))
 
-                // /rpg mob <nome>  (só o mestre) -> aponta o monstro pelo NOME DE
-                // EXIBIÇÃO da ficha e o deixa selecionado, que é o que o /rpg remove
-                // enemy, o block_lock e o movimento usam. Existe porque não dá para
-                // citar um monstro por nome em comando do vanilla: /tp aceita seletor,
-                // e @e[name="..."] só acha quem já foi amarrado a uma ficha (02/10/2026).
+                // /rpg mob view <nome>  (só o mestre) -> ABRE A FICHA do monstro com aquele
+                // nome de exibição.
+                // /rpg mob give <nome>  (so o mestre) -> ENTREGA NO INVENTARIO o item da
+                // ficha do Mestre com aquele NOME DE FICHA (funciona mesmo sem mob no
+                // mundo, a qualquer hora -- feedback da jogadora em 07/10/2026).
+                //
+                // Em 05/10/2026 o comando era /rpg mob <nome> e abria a ficha. A jogadora
+                // pediu em 07/10/2026 que o formato SEM subcomando sumisse: /rpg mob so
+                // existe com view ou give, para o mestre não depender da ficha estar aberta
+                // para pegar o item dela.
+                //
+                // A consequência, registrada aqui de propósito: a seleção por NOME
+                // deixou de existir. Os consumidores dela — /rpg remove enemy, block_lock
+                // e o movimento — passam a depender só do clique direito no mob, que é a
+                // única porta de seleção que sobrou. Nenhum deles quebrou: o
+                // `removeEnemy` já respondia "Right-click an enemy first".
+                //
+                // Continua existindo porque não dá para citar um monstro por nome em
+                // comando do vanilla: /tp aceita seletor, e @e[name="..."] só acha quem
+                // já foi amarrado a uma ficha (02/10/2026).
                 .then(Commands.literal("mob")
-                    .then(Commands.argument("name", StringArgumentType.greedyString())
-                        .suggests(MasterCommands::suggestBoundMobs)
-                        .executes(MasterCommands::selectMobByName)))
+                    .then(Commands.literal("view")
+                        .then(Commands.argument("name", StringArgumentType.greedyString())
+                            .suggests(MasterCommands::suggestBoundMobs)
+                            .executes(MasterCommands::openMobSheetByName)))
+                    .then(Commands.literal("give")
+                        .then(Commands.argument("name", StringArgumentType.greedyString())
+                            .suggests(MasterCommands::suggestSheetNames)
+                            .executes(MasterCommands::giveMobSheetByName))))
 
                 // /rpg remove enemy  (só o mestre) -> remove o mob selecionado
                 // (clique direito nele primeiro). 1 mob por execução.
@@ -481,8 +502,14 @@ public class MasterCommands {
     }
 
     /**
-     * /rpg mob &lt;nome&gt;: aponta o monstro pelo nome de exibição da ficha e o deixa
-     * selecionado.
+     * /rpg mob &lt;nome&gt;: ABRE a ficha de ameaça amarrada ao mob com aquele nome de
+     * exibição.
+     *
+     * <p><b>Mudança de 05/10/2026, pedido da jogadora:</b> este comando antes
+     * SELECIONAVA o mob (congelava com {@code setNoAi} e armava o teletransporte do
+     * clique direito). Agora abre a ficha. Selecionar continua existindo, mas só pelo
+     * clique direito no mob, em {@code CombatController.toggleSelection}: a seleção por
+     * nome saiu de propósito, não por esquecimento.
      *
      * <p><b>Por que preciso deste comando:</b> o vanilla não cita criatura por nome em
      * comando nenhum. {@code /tp} aceita seletor, e o seletor {@code @e[name="..."]} só
@@ -490,54 +517,123 @@ public class MasterCommands {
  * * este comando, o caminho seria clicar com o botão direito, e isso não escala para
  * cima de uma mesa com dez ameaças (02/10/2026).
      */
-    private static int selectMobByName(CommandContext<CommandSourceStack> ctx) {
+    private static int openMobSheetByName(CommandContext<CommandSourceStack> ctx) {
         if (!verifyMasterPermission(ctx)) return 0;
         try {
             ServerPlayer master = ctx.getSource().getPlayerOrException();
-            String wanted = RollPreset.normalizeKey(StringArgumentType.getString(ctx, "name"));
+            String rawName = StringArgumentType.getString(ctx, "name");
+            String wanted = RollPreset.normalizeKey(rawName);
             if (wanted.isEmpty()) {
                 ctx.getSource().sendFailure(Component.literal("§c[RPG] Diga o nome de exibição da ameaça."));
                 return 0;
             }
-
-            List<Mob> hits = new ArrayList<>();
-            for (ServerLevel level : master.level().getServer().getAllLevels()) {
-                for (Entity entity : level.getAllEntities()) {
-                    if (!(entity instanceof Mob mob)) {
-                        continue;
-                    }
-                    // Só quem tem ficha vale: sem ficha o nome é o do vanilla e não
-                    // distingue duas criaturas iguais.
-                    if (ThreatSheetBinding.sheetOf(mob).isEmpty() || mob.getCustomName() == null) {
-                        continue;
-                    }
-                    if (RollPreset.normalizeKey(mob.getCustomName().getString()).equals(wanted)) {
-                        hits.add(mob);
-                    }
-                }
-            }
-
-            if (hits.isEmpty()) {
-                ctx.getSource().sendFailure(Component.literal("§c[RPG] Nenhuma ameaça amarrada com o nome \""
-                        + StringArgumentType.getString(ctx, "name") + "\"."));
+            Mob mob = findBoundMobByName(ctx, master, wanted, rawName);
+            if (mob == null) {
+                // O helper ja mandou a falha (sem achado ou nome ambiguo).
                 return 0;
             }
-            if (hits.size() > 1) {
-                // Duas criaturas com o mesmo nome dão um @e[name=...] ambíguo. Dizer isso
-                // é melhor do que escolher uma e o Mestre achar que escolheu.
-                ctx.getSource().sendFailure(Component.literal("§c[RPG] " + hits.size()
-                        + " ameaças usam esse nome. Deixe o nome de exibição delas diferente."));
+            // O id ja veio no filtro do helper (linha do `sheetOf`): o comando achava a
+            // ficha e jogava fora. E ela que o `sendThreatSheetOpen` precisa.
+            String sheetId = ThreatSheetBinding.sheetOf(mob);
+            ThreatSheet sheet = ThreatSheetStore.findById(master.getUUID(), sheetId);
+            if (sheet == null) {
+                // O mob tem a etiqueta de amarra mas a ficha nao esta no store. O
+                // `unbind` passa pelo `selfHeal`, entao isso nao acontece no caminho
+                // normal; se acontecer (store recarregado), avisar e recusar e melhor
+                // do que abrir uma tela vazia sem dizer por que ela esta vazia.
+                ctx.getSource().sendFailure(
+                        Component.literal("§c[RPG] The threat sheet bound to this mob is gone."));
                 return 0;
             }
-
-            Mob mob = hits.get(0);
-            CombatController.selectMob((ServerLevel) mob.level(), master, mob);
+            RpgNetworking.sendThreatSheetOpen(master, sheet);
+            TabletopRpg.LOGGER.info("[TabletopRPG] Ficha '{}' aberta por /rpg mob view.",
+                    sheet.identity().name());
             return 1;
         } catch (Exception e) {
-            TabletopRpg.LOGGER.error("[TabletopRPG] /rpg mob falhou: {}", e.getMessage());
-            ctx.getSource().sendFailure(Component.literal("§c[RPG] Failed to select the monster."));
+            TabletopRpg.LOGGER.error("[TabletopRPG] /rpg mob view falhou: {}", e.getMessage());
+            ctx.getSource().sendFailure(Component.literal("§c[RPG] Failed to open the threat sheet."));
             return 0;
         }
+    }
+
+    /**
+     * /rpg mob give <nome> (07/10/2026): entrega no inventario o ITEM da ficha do
+     * Mestre com aquele NOME DE FICHA (ameaca), esteja ela vinculada a um mob ou nao.
+     *
+     * <p><b>Por que por nome de ficha e nao por nome de mob:</b> feedback da jogadora
+     * em 07/10/2026 -- o give tem que funcionar a qualquer hora, e nao so quando a
+     * ficha esta amarrada a um mob do mundo. E a ficha nova, recem-criada (sem mob),
+     * a que o Mestre mais quer transformar em item para o inventario.
+     */
+    private static int giveMobSheetByName(CommandContext<CommandSourceStack> ctx) {
+        if (!verifyMasterPermission(ctx)) return 0;
+        try {
+            ServerPlayer master = ctx.getSource().getPlayerOrException();
+            String rawName = StringArgumentType.getString(ctx, "name");
+            String wanted = RollPreset.normalizeKey(rawName);
+            if (wanted.isEmpty()) {
+                ctx.getSource().sendFailure(Component.literal("§c[RPG] Diga o nome da ameaca."));
+                return 0;
+            }
+            ThreatSheet sheet = ThreatSheetStore.find(master.getUUID(), wanted);
+            if (sheet == null) {
+                ctx.getSource().sendFailure(Component.literal(
+                        "§c[RPG] Nenhuma ficha de ameaca com o nome \"" + rawName + "\"."));
+                return 0;
+            }
+            ItemStack stack = ModItems.giveThreatSheet(master, sheet);
+            if (stack == null) {
+                ctx.getSource().sendFailure(
+                        Component.literal("§c[RPG] Inventario cheio: a ficha nao coube no inventario."));
+                return 0;
+            }
+            TabletopRpg.LOGGER.info("[TabletopRPG] Item da ficha '{}' entregue por /rpg mob give.",
+                    sheet.identity().name());
+            return 1;
+        } catch (Exception e) {
+            TabletopRpg.LOGGER.error("[TabletopRPG] /rpg mob give falhou: {}", e.getMessage());
+            ctx.getSource().sendFailure(
+                    Component.literal("§c[RPG] Failed to give the threat sheet item."));
+            return 0;
+        }
+    }
+
+    /**
+     * O UNICO mob amarrado a uma ficha cujo nome de exibicao casa com {@code wanted}
+     * (normalizado), ou {@code null} com a falha ja enviada.
+     *
+     * <p><b>Por que so quem tem ficha conta:</b> sem ficha o nome e o do vanilla e nao
+     * distingue duas criaturas iguais. E <b>por que dois hits recusam:</b> duas
+     * criaturas com o mesmo nome dao um {@code @e[name=...]} ambiguo -- dizer isso e
+     * melhor do que escolher uma e o Mestre achar que escolheu.
+     */
+    private static Mob findBoundMobByName(CommandContext<CommandSourceStack> ctx,
+                                          ServerPlayer master, String wanted, String rawName) {
+        List<Mob> hits = new ArrayList<>();
+        for (ServerLevel level : master.level().getServer().getAllLevels()) {
+            for (Entity entity : level.getAllEntities()) {
+                if (!(entity instanceof Mob mob)) {
+                    continue;
+                }
+                if (ThreatSheetBinding.sheetOf(mob).isEmpty() || mob.getCustomName() == null) {
+                    continue;
+                }
+                if (RollPreset.normalizeKey(mob.getCustomName().getString()).equals(wanted)) {
+                    hits.add(mob);
+                }
+            }
+        }
+        if (hits.isEmpty()) {
+            ctx.getSource().sendFailure(Component.literal("§c[RPG] Nenhuma ameaça amarrada com o nome \""
+                    + rawName + "\"."));
+            return null;
+        }
+        if (hits.size() > 1) {
+            ctx.getSource().sendFailure(Component.literal("§c[RPG] " + hits.size()
+                    + " ameaças usam esse nome. Deixe o nome de exibição delas diferente."));
+            return null;
+        }
+        return hits.get(0);
     }
 
     /** Sugere os nomes de exibição das fichas do Mestre: é o que ele digitou ao amarrar. */
@@ -555,6 +651,27 @@ public class MasterCommands {
         } catch (Exception ignored) {
             // Sugestao nunca recusa o comando: se o jogador nao for um jogador, o
             // autocomplete fica vazio e o comando segue dando o erro dele mesmo.
+        }
+        return builder.buildFuture();
+    }
+
+    /**
+     * Sugere os nomes de FICHA do Mestre (nao de mob): e o que o give usa para achar
+     * a ficha e entregar o item, esteja ela vinculada a um mob ou nao.
+     */
+    private static CompletableFuture<Suggestions> suggestSheetNames(
+            CommandContext<CommandSourceStack> ctx, SuggestionsBuilder builder) {
+        String remaining = builder.getRemaining().toLowerCase(Locale.ROOT);
+        try {
+            ServerPlayer master = ctx.getSource().getPlayerOrException();
+            for (ThreatSheet sheet : ThreatSheetStore.snapshot(master.getUUID())) {
+                String name = sheet.identity().name();
+                if (!name.isEmpty() && name.toLowerCase(Locale.ROOT).startsWith(remaining)) {
+                    builder.suggest(name);
+                }
+            }
+        } catch (Exception ignored) {
+            // Sugestao nunca recusa o comando (mesma regra do suggestBoundMobs).
         }
         return builder.buildFuture();
     }

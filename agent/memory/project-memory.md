@@ -3899,3 +3899,28 @@ terceira entrega que o verde era sobre outra coisa.
 esta correta. O que faltava e a **corolaria de calendario**: build verde ao fim de 7 rodadas e
 nenhum launch e nao um descuido de validacao, e um **processo** - adiar o jogo e o que faz a
 validacao virar uma Shooting gallery de 7 feedbacks.
+
+## 07/10/2026 - Licoes do Bug C (fichas/copias)
+
+- **`git apply --check` no PowerShell precisa de `cmd /c`.** O pipeline nativo do PowerShell
+  (`& git apply ... 2>&1 | ...`) corrompe a chamada e o git responde "No valid patches in
+  input" (exit 128) para um patch valido. Provar reversao de checkpoint:
+  `cmd /c "git apply --check --reverse <patch>"` -> exit 0. (FATO, reproduzido na sessao.)
+- **`ThreatSheetStore.SaveResult` e usado qualificado em RpgNetworking** (ex. handler de save:
+  `ThreatSheetStore.SaveResult result = ...`). O pacote nao importa a classe; o nome curto
+  nao compila. Qualquer handler novo de ameaca deve seguir o qualificado. (FATO do compile.)
+- **Coluna lateral de listas no editor (padrao reutilizavel):** o `ThreatSheetScreen` lista
+  as copias com um `ListRegion` proprio (KIND_COPIES) adicionado a `regions()` quando a coluna
+  existe (`panelW >= 360`). Assim roda, barra de rolagem, clique e render de barra vêm de
+  graca do fluxo de regioes existente; so o cabecalho (titulo da mae / botao Copiar) e o
+  texto da linha aberta sao desenhados fora dele. Ficha aberta que e copia aparece como
+  linha MUTADA (texto apagado), nunca como botao - evita duplicar a linha em dois widgets.
+- **Overlay de widgets no 1.21.11 (FATO, conferido por javap no jar mapeado):**
+  `Button` e ABSTRATA e `AbstractButton.renderWidget` e FINAL - o ponto de
+  extensao e `renderContents`. Para pintar algo POR CIMA de um botao (bolinha
+  amarela, badge), use um widget `AbstractWidget` 3x3 adicionado com
+  `addRenderableOnly` (nao captura clique) DEPOIS do botao; `removeWidget`
+  remove do children E do renderables, entao rebuildar lista/coluna nao acumula.
+  `Screen.title` e final no 1.21.11: titulo dinamico precisa de metodo proprio
+  (ex. `currentTitle()` no ThreatSheetScreen). Padrao criado em 07/10/2026
+  (`DotWidget`).

@@ -7,6 +7,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -102,6 +103,92 @@ class FormulaResolverTest {
         // E o espaco no MEIO da formula nao pode entrar no nome. O espaco continua
         // na string: quem remove e o `RollPreset.create`, nao o `resolve`.
         assertEquals("2d6 + 4", FormulaResolver.resolve("2d6 + Strength", sheetWith("strength", 4), model));
+    }
+
+    @Test
+    @DisplayName("'4#2d6c4' da jogadora passa inteiro: nem o # nem o c viram nome")
+    void resolvesCriticalWithRepeatAsThePlayerWrote() throws Exception {
+        // BUG REPORTADO PELA JOGADORA EM 05/10/2026: "/rpg roll 4#2d6c4 (4 vezes a
+        // formula 2d6c4) nao funciona". Recusado com "unknown attribute 'c'".
+        //
+        // A causa NAO era o '#'. O '#' e reprocessado pelo DiceFormula e nunca chega
+        // ao scanner, porque o scanner so para em letra. Quem falhava era o 'c': o
+        // filtro de operador conhecia 'kh' e 'dl' e nao conhecia 'c', 'kl' nem 'dh',
+        // entao o 'c' do 'c4' caia no caminho de nome de atributo.
+        //
+        // Este teste e a prova de que a correcao nao e so para o '#': a formula
+        // devolvida tem de ser a MESMA que entrou, porque nao ha nenhum nome para
+        // trocar. E o `resolvedFormulaStillParses` abaixo ja cobre que ela rola.
+        SheetData sheet = sheetWith("strength", 2);
+        assertEquals("4#2d6c4", FormulaResolver.resolve("4#2d6c4", sheet, model));
+    }
+
+    @Test
+    @DisplayName("'2d6c4+Forca' atravessa o resolver e chega ao critico na rolagem")
+    void criticalSurvivesTheWholeRoll() throws Exception {
+        // O teste acima prova que o texto passa. Este prova o CAMINHO INTEIRO, que e o
+        // que a jogadora exercita: o `/rpg roll` chama o resolver e depois o
+        // DiceFormula. Um resolver que deixa passar e um parser que recusa continuam
+        // sendo "nao funciona" do ponto de vista dela.
+        SheetData sheet = sheetWith("strength", 2);
+        String resolved = FormulaResolver.resolve("2d6c4+Strength", sheet, model);
+        assertEquals("2d6c4+2", resolved);
+        // Face 3 no limiar 4: abaixo do limiar, o dado nao e critico e vale o valor.
+        // Sao DOIS dados: 3 + 3 + 2 de Forca = 8.
+        DiceFormula.Outcome below = DiceFormula.parse(resolved).evaluate(sides -> 3);
+        assertEquals(8, below.total(), "3 + 3 dos dois d6, mais 2 de Forca");
+        assertFalse(below.critical(), "face 3 esta abaixo do limiar 4");
+        // Face 6 no limiar 4: acima, o dado e marcado como critico. Este e o `c` que
+        // a jogadora escreveu.
+        DiceFormula.Outcome above = DiceFormula.parse(resolved).evaluate(sides -> 6);
+        assertTrue(above.critical(), "face 6 passa do limiar 4");
+    }
+
+    @Test
+    @DisplayName("os cinco operadores comecados em letra passam, com e sem numero")
+    void resolvesAllLetterOperators() throws Exception {
+        // A lista de operadores do scanner precisa fechar com a do DiceFormula:
+        // kh, kl, dh, dl e c. Faltando um, a jogadora recebe "unknown attribute" numa
+        // formula que ela escreveu certo -- e o `c` some justamente o limiar do
+        // critico, que ela usa todo turno.
+        SheetData sheet = sheetWith("strength", 2);
+        // Com numero.
+        assertEquals("4d6kh3", FormulaResolver.resolve("4d6kh3", sheet, model));
+        assertEquals("4d6kl1", FormulaResolver.resolve("4d6kl1", sheet, model));
+        assertEquals("4d6dh2", FormulaResolver.resolve("4d6dh2", sheet, model));
+        assertEquals("4d6dl1", FormulaResolver.resolve("4d6dl1", sheet, model));
+        assertEquals("4d6c5", FormulaResolver.resolve("4d6c5", sheet, model));
+        // O 'c' sem numero e legal no DiceFormula (critico na face maxima), entao o
+        // scanner tambem precisa deixar passar. Este e o caso que quebra se a guarda
+        // do 'c' exigir digito depois.
+        assertEquals("4d6c", FormulaResolver.resolve("4d6c", sheet, model));
+        // E o 'c' tem de ser reconhecido tambem no fim da formula e antes de um
+        // separador, que sao as duas formas que a formula real assume.
+        assertEquals("4d6c+2", FormulaResolver.resolve("4d6c+2", sheet, model));
+        assertEquals("(4d6c)", FormulaResolver.resolve("(4d6c)", sheet, model));
+    }
+
+    @Test
+    @DisplayName("operador novo nao engole atributo que comeca pela mesma letra")
+    void operatorDoesNotSwallowAttributeName() throws Exception {
+        // O risco de conhecer o 'c' como operador: um atributo chamado "Conhecimento"
+        // ou "Carisma" comeca com C. O criterio do scanner e "a proxima coisa nao e
+        // letra", e nao "a proxima coisa e digito", justamente para separar os dois
+        // casos. Este teste trava essa separacao -- se alguém trocar o criterio por
+        // "tem digito depois", este teste falha antes de uma jogadora escrever
+        // "+Carisma" num preset.
+        // "Carisma" e o NOME do atributo strength (id "strength", valor 2). Entra para
+        // provar que o 'c' de "Carisma" nao foi tratado como o 'c' do critico: se
+        // fosse, a jogadora receberia "unknown attribute 'Carisma'".
+        SheetModel modelC = model.withAttributeText("strength", "STR", "Carisma");
+        SheetData sheetC = sheetOf("strength", 2, "dexterity", 5);
+        assertEquals("2d6c+2", FormulaResolver.resolve("2d6c+Carisma", sheetC, modelC));
+        // E o mesmo atributo continua respondendo pelo id e pela label, que o
+        // `resolvesAttributeByIdLabelOrName` ja exige.
+        assertEquals("2d6c+2", FormulaResolver.resolve("2d6c+Strength", sheetC, modelC));
+        assertEquals("2d6c+2", FormulaResolver.resolve("2d6c+STR", sheetC, modelC));
+        // O dexterity nao foi renomeado e continua resolvendo pelo nome original.
+        assertEquals("2d6c+5", FormulaResolver.resolve("2d6c+Dexterity", sheetC, modelC));
     }
 
     // --- a pericia saiu do resolvido (02/10/2026) ---

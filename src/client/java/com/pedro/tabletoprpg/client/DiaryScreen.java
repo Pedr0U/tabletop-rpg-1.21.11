@@ -271,6 +271,7 @@ public class DiaryScreen extends DiaryScreenBase {
         String query = searchBox == null ? "" : searchBox.getValue();
         return DiaryStore.sorted(
                 DiaryStore.filtered(DiaryStore.childrenOf(entries, DiaryEntry.ROOT), query),
+                entries,
                 sortMode);
     }
 

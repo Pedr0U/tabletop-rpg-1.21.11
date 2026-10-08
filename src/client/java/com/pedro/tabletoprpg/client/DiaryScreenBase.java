@@ -176,6 +176,13 @@ public abstract class DiaryScreenBase extends Screen {
     protected List<DiaryEntry> entries = new ArrayList<>();
 
     /**
+     * O diario inteiro ainda cabe num pacote? Recarregado em {@link #applyState}, quando
+     * o estado do servidor chega. Alimenta a linha de aviso desenhada em {@link #render}
+     * quando o {@link DiaryStore#estimatedPacketBytes} passa do teto do vanilla.
+     */
+    protected boolean payloadOverBudget;
+
+    /**
      * Ha algo para o {@code [Reverter]} desfazer?
      *
      * <p><b>Por que a pilha do cliente e nao o {@code canUndo} do servidor:</b> desde que a
@@ -762,6 +769,16 @@ public abstract class DiaryScreenBase extends Screen {
         drawHeader(graphics);
         drawListOverlay(graphics);
         drawScrollbar(graphics);
+
+        if (payloadOverBudget) {
+            // 07/10/2026, aprovado pela jogadora: aviso SO quando o diario passa do teto,
+            // na linha entre o fim da lista e o rodape. Um texto permanente aqui seria
+            // mudanca visual sem uso: 1.048.576 bytes e muito diario, e so perto do teto
+            // que ele importa (o pacote do vanilla corta em 1 MB e a sincronizacao para).
+            graphics.drawCenteredString(this.font,
+                    "Diario passou do limite: a sincronizacao vai parar. Reduza o diario.",
+                    this.width / 2, footerY - STATUS_H - 2, 0xFFFF5555);
+        }
     }
 
     /** O que a tela escreve sobre a lista: caminho, legendas. Vazio na Tela 1 alem do campo. */
@@ -853,6 +870,7 @@ public abstract class DiaryScreenBase extends Screen {
     public void applyState(List<DiaryEntry> newEntries, boolean newCanUndo,
                             List<Integer> newPendingIds) {
         entries = newEntries == null ? new ArrayList<>() : newEntries;
+        payloadOverBudget = DiaryStore.overPayloadBudget(entries);
         if (!newCanUndo) {
             // O servidor diz que nao tem nada na pilha dele. As exclusoes do cliente so
             // existem para pedir um `DiaryUndoPayload`, e sem pilha la esse pedido nao

@@ -40,7 +40,8 @@ public record ThreatSheet(
         List<PericiaValue> pericias,
         List<String> features,
         List<Ability> passives,
-        List<Action> actions) {
+        List<Action> actions,
+        String copyOf) {
 
     // ------------------------------------------------------------------
     // LIMITES
@@ -370,7 +371,7 @@ public record ThreatSheet(
             ByteBufCodecs.collection(ArrayList::new, Action.STREAM_CODEC, MAX_ACTIONS);
 
     /**
-     * Na rede. Escrito a mao (encode/decode) em vez de {@code composite} porque sao 9
+     * Na rede. Escrito a mao (encode/decode) em vez de {@code composite} porque sao 10
      * campos e o composite comfortable ate 6 pares; a decomposicao em dois
      * {@code composite} de 4 seria legivel, mas escrever a ordem dos campos aqui deixa
      * a ordem do NBT e a da rede na mesma lista, o que e mais facil de conferir.
@@ -388,7 +389,8 @@ public record ThreatSheet(
                     List<String> feats = FEATURES_STREAM.decode(buf);
                     List<Ability> pass = PASSIVES_STREAM.decode(buf);
                     List<Action> acts = ACTIONS_STREAM.decode(buf);
-                    return new ThreatSheet(sheetId, id, vit, desc, attrs, per, feats, pass, acts);
+                    String copy = ByteBufCodecs.stringUtf8(MAX_ID).decode(buf);
+                    return new ThreatSheet(sheetId, id, vit, desc, attrs, per, feats, pass, acts, copy);
                 }
 
                 @Override
@@ -402,6 +404,7 @@ public record ThreatSheet(
                     FEATURES_STREAM.encode(buf, value.features());
                     PASSIVES_STREAM.encode(buf, value.passives());
                     ACTIONS_STREAM.encode(buf, value.actions());
+                    ByteBufCodecs.stringUtf8(MAX_ID).encode(buf, value.copyOf());
                 }
     };
 
@@ -415,7 +418,8 @@ public record ThreatSheet(
             PericiaValue.CODEC.listOf().fieldOf("pericias").forGetter(ThreatSheet::pericias),
             Codec.STRING.listOf().fieldOf("features").forGetter(ThreatSheet::features),
             Ability.CODEC.listOf().fieldOf("passives").forGetter(ThreatSheet::passives),
-            Action.CODEC.listOf().fieldOf("actions").forGetter(ThreatSheet::actions)
+            Action.CODEC.listOf().fieldOf("actions").forGetter(ThreatSheet::actions),
+            Codec.STRING.optionalFieldOf("copy_of", "").forGetter(ThreatSheet::copyOf)
     ).apply(i, ThreatSheet::new));
 
     // ------------------------------------------------------------------
@@ -441,6 +445,8 @@ public record ThreatSheet(
         features = capText(features, MAX_FEATURES, MAX_FEATURE);
         passives = cap(passives, MAX_ABILITIES);
         actions = cap(actions, MAX_ACTIONS);
+        // Vazio significa "ficha original". A mae e quem as copias apontam.
+        copyOf = text(copyOf, MAX_ID);
     }
 
     // ------------------------------------------------------------------
@@ -469,7 +475,8 @@ public record ThreatSheet(
                 defaultPericias(source),
                 List.of(),
                 List.of(),
-                List.of());
+                List.of(),
+                "");
     }
 
     /**
@@ -548,7 +555,53 @@ public record ThreatSheet(
             return this;
         }
         return new ThreatSheet(newId, identity, vitals, description, attributes, pericias,
-                features, passives, actions);
+                features, passives, actions, copyOf);
+    }
+
+    /**
+     * Devolve esta ficha como copia da mae indicada.
+     *
+     * <p><b>O que "copia" significa (07/10/2026):</b> a copia nasce com o MESMO
+     * conteudo da mae (atributos, pericias, caracteristicas, passivas e ativas) mas com
+     * {@code id} proprio. Depois de nascer, editar a copia nao toca a mae nem as outras
+     * copias. O {@code copyOf} nao muda com o nome da mae: Renomear a mae nao renomeia
+     * copias existentes, so o nome de copias NOVAS (a auto-numeracao existe so para nao
+     * criar nome duplicado).
+     */
+    public ThreatSheet withCopyOf(String motherId) {
+        String clean = motherId == null || motherId.isBlank() ? "" : motherId.trim();
+        if (clean.equals(copyOf)) {
+            return this;
+        }
+        return new ThreatSheet(id, identity, vitals, description, attributes, pericias,
+                features, passives, actions, clean);
+    }
+
+    /**
+     * Devolve esta ficha com outro nome de ameaca, mantendo o resto da identidade
+     * (ND, nome de exibicao, tipo, tamanho e deslocamento).
+     */
+    public ThreatSheet withName(String newName) {
+        String clean = text(newName, MAX_NAME);
+        if (clean.equals(identity.name())) {
+            return this;
+        }
+        return new ThreatSheet(id,
+                new Identity(clean, identity.level(), identity.displayName(),
+                        identity.showDisplayName(), identity.type(), identity.size(),
+                        identity.speed()),
+                vitals, description, attributes, pericias, features, passives, actions, copyOf);
+    }
+
+    /**
+     * Esta ficha e uma copia de outra?
+     *
+     * <p>O complemento {@code isMother} nao existe de proposito: ser mae nao e um
+     * atributo da ficha, e ter alguem {@link #copyOf()} apontando para ela. A pergunta
+     * so faz sentido olhando uma lista inteira ({@code ThreatSheetStore.copiesOf}).
+     */
+    public boolean isCopy() {
+        return !copyOf.isEmpty();
     }
 
     /** O nome que a lista de fichas mostra: nome + ND. */
@@ -591,7 +644,7 @@ public record ThreatSheet(
             return this;
         }
         return new ThreatSheet(id, identity, vitals, description, aligned, kept,
-                features, passives, actions);
+                features, passives, actions, copyOf);
     }
 
     private static String text(String value, int max) {

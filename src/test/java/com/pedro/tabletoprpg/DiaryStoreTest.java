@@ -354,6 +354,146 @@ class DiaryStoreTest {
         assertEquals(DiaryStore.SortMode.MODIFIED, DiaryStore.SortMode.ALPHABETICAL.next());
     }
 
+    @Test
+    @DisplayName("Modificado sobe: editar dentro de uma subsecao leva a mae para o topo")
+    void modificadoSobePelaSubarvore() {
+        // Relato da jogadora (07/10/2026): ao alterar algo na subsecao CARACTERISTICAS,
+        // a subsecao NPC 1 devia ficar em primeiro na ordenacao das subsecoes da sessao
+        // NPCs. Nao ficava, porque o ordenador media o timestamp do proprio no -- e uma
+        // edicao profunda so mexe no timestamp do no editado.
+        List<DiaryEntry> diario = List.of(
+                entrada(1, DiaryEntry.ROOT, "Sessao NPCs", 100L, 0L),
+                entrada(2, 1, "NPC 1", 150L, 0L),
+                entrada(3, 2, "CARACTERISTICAS", 900L, 0L),
+                entrada(4, 1, "NPC 2", 500L, 0L));
+
+        List<DiaryEntry> sessao = DiaryStore.childrenOf(diario, 1);
+
+        // O que falhava: o no editado e o neto, e quem aparece na lista da sessao e o
+        // filho. Sem o contexto completo da raiz (terceiro argumento) o resultado era
+        // "NPC 2" primeiro, porque 150 < 500.
+        assertEquals(List.of("NPC 1", "NPC 2"),
+                titulos(DiaryStore.sorted(sessao, diario, DiaryStore.SortMode.MODIFIED)));
+    }
+
+    @Test
+    @DisplayName("Modificado sobe niveis: um tataraneto leva o tio ao topo, mas nao o irmao")
+    void modificadoSobeQuatroNiveis() {
+        List<DiaryEntry> diario = List.of(
+                entrada(1, DiaryEntry.ROOT, "Sessao", 100L, 0L),
+                entrada(2, 1, "Irmao", 800L, 0L),
+                entrada(3, 1, "Alvo", 150L, 0L),
+                entrada(4, 3, "Folha", 140L, 0L),
+                entrada(5, 4, "Raiz profunda", 950L, 0L));
+
+        List<DiaryEntry> sessao = DiaryStore.childrenOf(diario, 1);
+
+        // O mais novo esta quatro niveis abaixo do nivel exibido, e ainda assim leva
+        // "Alvo" a frente de "Irmao" (950 > 800).
+        assertEquals(List.of("Alvo", "Irmao"),
+                titulos(DiaryStore.sorted(sessao, diario, DiaryStore.SortMode.MODIFIED)));
+
+        // O sobe-e-pare nao vaza: "Folha" e "Raiz profunda" continuam com o timestamp
+        // delas, porque nao estao no nivel que se esta ordenando.
+        assertEquals(140L, DiaryStore.childrenOf(diario, 3).get(0).modifiedAt());
+    }
+
+    @Test
+    @DisplayName("Modificado usa a subarvore do galho, nao o maximo do diario inteiro")
+    void modificadoNaoVazaParaOutroGalho() {
+        // "Sessao B" vem primeiro na lista e tem o proprio timestamp mais novo (900 >
+        // 300). Se o ordenador usasse o proprio no -- o bug -- B ficaria na frente. Se
+        // usasse o maximo global do diario (999), os dois empatariam e a ordem estavel
+        // manteria B na frente tambem. So o maximo da <b>propria subarvore</b> coloca A
+        // na frente, e e exatamente isso que a jogadora pediu.
+        List<DiaryEntry> diario = List.of(
+                entrada(1, DiaryEntry.ROOT, "Sessao B", 900L, 0L),
+                entrada(2, 1, "Filho B", 50L, 0L),
+                entrada(3, DiaryEntry.ROOT, "Sessao A", 300L, 0L),
+                entrada(4, 3, "Filho A", 999L, 0L));
+
+        // `sorted` ordena a lista que recebe, nao filtra por nivel -- nos chamadores de
+        // verdade (as telas) a lista ja chega sendo so os filhos do no aberto.
+        assertEquals(List.of("Sessao A", "Sessao B"),
+                titulos(DiaryStore.sorted(
+                        DiaryStore.childrenOf(diario, DiaryEntry.ROOT),
+                        diario,
+                        DiaryStore.SortMode.MODIFIED)));
+
+        // A subida e so de leitura: o timestamp gravado de "Sessao A" continua sendo o
+        // dele mesmo (300), nao o do galho (999). Nada foi regravado no diario, entao o
+        // botao Reverter nao recebe alteracao nenhuma por causa desta ordenacao.
+        assertEquals(300L, diario.get(2).modifiedAt());
+
+        // Alfabetico nao olha timestamp nenhum, entao o contexto a mais nao muda nada.
+        assertEquals(List.of("Sessao A", "Sessao B"),
+                titulos(DiaryStore.sorted(
+                        DiaryStore.childrenOf(diario, DiaryEntry.ROOT),
+                        diario,
+                        DiaryStore.SortMode.ALPHABETICAL)));
+    }
+
+    // ------------------------------------------------------------ carga do pacote
+
+    @Test
+    @DisplayName("a conta de bytes soma texto UTF-8 mais o pior caso dos outros campos")
+    void overheadContado() {
+        DiaryEntry e = new DiaryEntry(1, DiaryEntry.ROOT, "ab", "cd", 1L, 0L);
+        // 24 (cabecalho) + 2 + 2 (texto) + 38 (overhead da anotacao) = 66.
+        assertEquals(66L, DiaryStore.estimatedPacketBytes(List.of(e)));
+        assertFalse(DiaryStore.overPayloadBudget(List.of(e)));
+    }
+
+    @Test
+    @DisplayName("mil anotacoes de mil caracteres ainda cabem no pacote")
+    void milPorMilCabem() {
+        List<DiaryEntry> lista = new java.util.ArrayList<>();
+        for (int i = 1; i <= 1000; i++) {
+            lista.add(new DiaryEntry(i, DiaryEntry.ROOT, "", "a".repeat(1000), i, 0L));
+        }
+        // 24 + 1.000.000 + 38.000 = 1.038.024 <= 1.048.576.
+        assertEquals(1_038_024L, DiaryStore.estimatedPacketBytes(lista));
+        assertFalse(DiaryStore.overPayloadBudget(lista));
+    }
+
+    @Test
+    @DisplayName("a partir de um certo volume o diario passa do teto e o aviso dispara")
+    void milPorMilECemEstouram() {
+        List<DiaryEntry> lista = new java.util.ArrayList<>();
+        for (int i = 1; i <= 1000; i++) {
+            lista.add(new DiaryEntry(i, DiaryEntry.ROOT, "", "a".repeat(1100), i, 0L));
+        }
+        // 24 + 1.100.000 + 38.000 = 1.138.024 > 1.048.576.
+        assertEquals(1_138_024L, DiaryStore.estimatedPacketBytes(lista));
+        assertTrue(DiaryStore.overPayloadBudget(lista));
+    }
+
+    @Test
+    @DisplayName("acento pesa dois bytes em UTF-8, e a conta respeita isso")
+    void acentosContamDoisBytes() {
+        DiaryEntry soAcentos = new DiaryEntry(1, DiaryEntry.ROOT, "", "\u00e3".repeat(500), 1L, 0L);
+        DiaryEntry soAscii = new DiaryEntry(1, DiaryEntry.ROOT, "", "a".repeat(500), 1L, 0L);
+
+        // 500 acentos UTF-8 = 1000 bytes de texto.
+        assertEquals(24L + 1000 + 38, DiaryStore.estimatedPacketBytes(List.of(soAcentos)));
+        // 500 "a" = 500 bytes de texto.
+        assertEquals(24L + 500 + 38, DiaryStore.estimatedPacketBytes(List.of(soAscii)));
+        assertTrue(DiaryStore.estimatedPacketBytes(List.of(soAcentos))
+                > DiaryStore.estimatedPacketBytes(List.of(soAscii)));
+    }
+
+    @Test
+    @DisplayName("o teto inteiro de 2048 anotacoes no maximo estoura com folga")
+    void tetoGiganteEstoura() {
+        List<DiaryEntry> lista = new java.util.ArrayList<>();
+        for (int i = 1; i <= DiaryStore.MAX_ENTRIES; i++) {
+            lista.add(new DiaryEntry(i, DiaryEntry.ROOT, "x".repeat(DiaryEntry.MAX_TITLE),
+                    "y".repeat(DiaryEntry.MAX_DESCRIPTION), i, 0L));
+        }
+        // 24 + 2048 x 2040 + 2048 x 38 = ~4,17 MB, bem acima do teto de 1 MB.
+        assertTrue(DiaryStore.overPayloadBudget(lista));
+    }
+
     // -------------------------------------------------------------- busca
 
     @Test
