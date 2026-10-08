@@ -66,15 +66,33 @@ public final class ThreatSheetBinding {
         String previous = BY_MOB.get(mob.getUUID());
         if (previous != null && !previous.equals(sheet.id())) {
             mob.removeTag(tagOf(previous));
+            // Sobrescrever (regra do Mestre, 07/10/2026): a ficha antiga fica LIVRE,
+            // e o cache acompanha -- sem isso o mobOf da ficha antiga continuaria
+            // devolvendo este mob, como se ela ainda estivesse amarrada.
+            BY_SHEET.remove(previous, mob.getUUID());
         }
 
         // A ficha ja estava em outro mob? Ele solta a tag, para o nome nao apontar duas
         // criaturas ao mesmo tempo.
         UUID otherMob = BY_SHEET.get(sheet.id());
-        if (otherMob != null && !otherMob.equals(mob.getUUID()) && level != null) {
-            Entity previousMob = level.getEntity(otherMob);
-            if (previousMob != null) {
-                previousMob.removeTag(tagOf(sheet.id()));
+        if (otherMob != null && !otherMob.equals(mob.getUUID())) {
+            // Roubo (regra do Mestre, 07/10/2026): a ficha sai do mob antigo, que fica
+            // SEM ficha nenhuma. A tag sai e o cache acompanha -- senao o sheetOf do mob
+            // antigo continuaria devolvendo a ficha roubada.
+            BY_MOB.remove(otherMob);
+            BY_SHEET.remove(sheet.id(), otherMob);
+            if (level != null) {
+                Entity previousMob = level.getEntity(otherMob);
+                if (previousMob != null) {
+                    previousMob.removeTag(tagOf(sheet.id()));
+                    // Feedback da jogadora (07/10/2026): sem isto o mob antigo
+                    // CONTINUA com o nome de exibicao flutuando, e ficam dois mobs
+                    // com o mesmo nome. O nome customizado so existe por causa do
+                    // vinculo, entao o roubo o remove inteiro (o mob volta ao nome
+                    // do vanilla).
+                    previousMob.setCustomName(null);
+                    previousMob.setCustomNameVisible(false);
+                }
             }
         }
 

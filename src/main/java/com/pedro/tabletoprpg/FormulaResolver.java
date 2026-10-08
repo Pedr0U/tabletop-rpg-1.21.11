@@ -251,9 +251,10 @@ public final class FormulaResolver {
                 }
                 continue;
             }
-            // `kh3`/`dl1` sao OPERADOR de dado, pelo mesmo motivo do `d20` acima.
-            if (isKeepDropAt(formula, i)) {
-                i += 2;
+            // `kh3`/`dl1`/`c4` sao OPERADOR de dado, pelo mesmo motivo do `d20` acima.
+            int operator = operatorLength(formula, i);
+            if (operator > 0) {
+                i += operator;
                 while (i < n && Character.isDigit(formula.charAt(i))) {
                     i++;
                 }
@@ -311,7 +312,8 @@ public final class FormulaResolver {
     }
 
     /**
-     * O caractere na posicao {@code i} abre um {@code kh}/{@code dl} com numero?
+     * Quantas letras, contadas de {@code i}, formam um OPERADOR de dado do
+     * {@link DiceFormula}; {@code 0} se aqui comeca um nome de atributo.
      *
      * <p><b>Por que este metodo existe (02/10/2026):</b> preset com {@code 6#2d6dl1}
      * era recusado com {@code unknown attribute 'dl'}. O {@link #isDiceAt} andava ate o
@@ -322,20 +324,42 @@ public final class FormulaResolver {
      * {@code d6} e dado. O {@code isDiceAt} so olhava para o que vem DEPOIS do
      * {@code d}, e depois do dado vem o operador.
      *
-     * <p>O numero e obrigatorio porque {@code dl} sem dado antes nao tem o que
-     * descartar: o {@code DiceFormula} recusa assim mesmo. A guarda existe para o
-     * scanner nao acusar a jogadora de escrever um atributo chamado {@code dl}, e
-     * nao para aceitar a formula.
+     * <p><b>Por que os cinco e nao dois (05/10/2026):</b> a lista encolheu em dois e
+     * por isso {@code /rpg roll 4#2d6c4} era recusado com {@code unknown attribute
+     * 'c'} -- a formula do critico, justamente a que a jogadora usa todo turno. Sao
+     * cinco operadores comecados em letra, e a lista precisa fechar com o
+     * {@code DiceFormula}: {@code kh}/{@code kl}/{@code dh}/{@code dl} e {@code c}.
+     * Os demais ({@code !}, {@code >>}, {@code <<}, {@code ++}, {@code --}) nao
+     * comecam em letra e por isso nunca chegam aqui.
+     *
+     * <p>O numero apos {@code kh}/{@code kl}/{@code dh}/{@code dl} e obrigatorio
+     * porque esses operadores sem dado antes nao tem o que manter ou descartar: o
+     * {@code DiceFormula} recusa assim mesmo. A guarda existe para o scanner nao
+     * acusar a jogadora de escrever um atributo chamado {@code dl}, e nao para
+     * aceitar a formula.
+     *
+     * <p><b>Por que {@code c} e diferente:</b> no {@code DiceFormula} o limiar do
+     * critico e opcional ({@code 2d6c} usa a face maxima), entao o operador e a letra
+     * sozinha. O criterio aqui e "a proxima coisa <b>nao e letra</b>", e nao "a
+     * proxima coisa e digito": {@code 2d6c4} e {@code 2d6c} precisam passar, e
+     * {@code Conhecimento} precisa continuar sendo nome. Esse criterio separa os dois
+     * casos porque um nome de atributo so avanca por letra, enquanto depois de um
+     * operador pode vir digito, espaco, {@code +}, {@code )} ou o fim da formula.
      */
-    private static boolean isKeepDropAt(String formula, int i) {
-        if (i + 2 >= formula.length()) {
-            return false;
-        }
+    private static int operatorLength(String formula, int i) {
         char first = Character.toLowerCase(formula.charAt(i));
+        if (first == 'c') {
+            return (i + 1 >= formula.length() || !Character.isLetter(formula.charAt(i + 1)))
+                    ? 1
+                    : 0;
+        }
+        if (i + 2 >= formula.length()) {
+            return 0;
+        }
         char second = Character.toLowerCase(formula.charAt(i + 1));
-        boolean operator = (first == 'k' && second == 'h')
-                || (first == 'd' && second == 'l');
-        return operator && Character.isDigit(formula.charAt(i + 2));
+        boolean keepDrop = (first == 'k' && (second == 'h' || second == 'l'))
+                || (first == 'd' && (second == 'h' || second == 'l'));
+        return keepDrop && Character.isDigit(formula.charAt(i + 2)) ? 2 : 0;
     }
 
     /** Chave de comparacao dos nomes: sem acento, minuscula, sem espaco. */

@@ -248,8 +248,18 @@ public class TabletopRpgClient implements ClientModInitializer {
             // rotulos de A, e um Salvar gravaria o modelo de A no
             // SheetModelStore de B. O par e apagado junto, e junto com o holder.
             SheetEditorScreen.discardTransientState();
+            // Os rascunhos das fichas de ameaca tambem sao estado do mundo que esta
+            // saindo (07/10/2026): o rascunho de A nao pode marcar a lista de B.
+            ThreatSheetClientState.clearDrafts();
             SpectatorCameraController.reset();
         });
+
+        // Cair e voltar troca a entidade do cliente (e trocar de dimensão também). A câmera
+        // re-arma por conta própria: `SpectatorCameraController.tick` compara o id da
+        // entidade a cada quadro. NÃO registre aqui um evento para isso — a Fabric API
+        // 0.141.6 deste projeto não tem evento de "o jogador do cliente foi trocado"
+        // (só existe o `ServerEntityWorldChangeEvents`, que é server-side). Foi esse
+        // hook que faltava, e a ausência dele é a causa do bug de 05/10/2026.
     }
 
     @Override
@@ -411,9 +421,11 @@ public class TabletopRpgClient implements ClientModInitializer {
                     ThreatSheetClientState.setSheets(payload.sheets());
                     ThreatSheetClientState.setStatus(payload.message());
                     if (context.client().screen instanceof ThreatSheetsScreen list) {
-                        list.applyResult(payload.ok(), payload.message(), payload.sheets());
+                        list.applyResult(payload.ok(), payload.message(), payload.sheets(),
+                                payload.createdName());
                     } else if (context.client().screen instanceof ThreatSheetScreen sheet) {
-                        sheet.applyResult(payload.ok(), payload.message(), payload.sheets());
+                        sheet.applyResult(payload.ok(), payload.message(), payload.sheets(),
+                                payload.createdName());
                     }
                 }));
 
@@ -432,7 +444,27 @@ public class TabletopRpgClient implements ClientModInitializer {
         // o que fazer com ele antes de falar com a tela.
         ClientPlayNetworking.registerGlobalReceiver(RpgNetworking.DiaryStatePayload.TYPE,
                 (payload, context) -> context.client().execute(() -> {
-                    LOGGER.info("[TabletopRPG] DiaryStatePayload recebido: {} anotação(ões), "
+                    if (payload.version() != RpgNetworking.DiaryStatePayload.LAYOUT_VERSION) {
+                        // Layout de outra versao do mod (problema 3, autorizado 07/10/2026):
+                        // nao aplicar estado nenhum e avisar em vez de corromper o diario.
+                        LOGGER.error("[TabletopRPG] DiaryStatePayload em layout {} mas este "
+                                + "cliente entende o layout {}: servidor e cliente estao com "
+                                + "versoes diferentes do mod. O diario nao foi aplicado.",
+                                payload.version(),
+                                RpgNetworking.DiaryStatePayload.LAYOUT_VERSION);
+                        if (context.client().player != null) {
+                            context.client().player.displayClientMessage(Component.literal(
+                                    "§c[Diario] §eEste mod recebeu o diario no formato "
+                                            + payload.version()
+                                            + " e so conhece o formato "
+                                            + RpgNetworking.DiaryStatePayload.LAYOUT_VERSION
+                                            + ". Instale a mesma versao do mod no servidor e no "
+                                            + "cliente."),
+                                    false);
+                        }
+                        return;
+                    }
+                    LOGGER.info("[TabletopRPG] DiaryStatePayload recebido: {} anotacoes, "
                             + "reverter={} foco={} tela={}",
                             payload.entries().size(), payload.canUndo(), payload.focusId(),
                             context.client().screen);

@@ -1,6 +1,7 @@
 package com.pedro.tabletoprpg.client;
 
 import com.pedro.tabletoprpg.RpgNetworking;
+import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.minecraft.client.CameraType;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
@@ -88,6 +89,9 @@ public final class SpectatorCameraController {
      * continua liberada durante o próprio turno.
      */
     private static boolean wasLocked = false;
+
+    /** Id da entidade do jogador no ultimo tick; 0 = ainda nao se conectou. */
+    private static int lastPlayerEntityId = 0;
 
     /**
      * Modo da sessao visto no tick anterior, para saber se ele mudou.
@@ -219,6 +223,49 @@ public final class SpectatorCameraController {
         freeCamInitialized = false;
         thirdPersonLookInitialized = false;
         freeCamPos = null;
+        // Sem isto, o primeiro tick da sessao nova compararia o id novo com o id da
+        // sessao anterior e dispararia um re-arma que nao tem nada a re-armacar.
+        lastPlayerEntityId = 0;
+    }
+
+    /**
+ * Re-arma a câmera quando a <b>entidade do jogador é trocada</b>: cair e voltar, ou
+ * trocar de dimensão.
+ *
+ * <p><b>Por que isto existe (05/10/2026, bug da jogadora):</b> nada no cliente reagia
+ * à troca de entidade, e o servidor não empurra a lista de alvos nesse momento. O
+ * sintoma era: cair, voltar, e as câmeras dos mobs deixavam de ser espectáveis até a
+ * jogadora tirar o modo e colocar de novo — porque o toggle é o que fazia o servidor
+ * reenviar.
+ *
+ * <p><b>O que morre com a entidade antiga:</b> a lista de alvos (filtrada pelo id do
+ * jogador antigo), o índice do carrossel, a posição da câmera livre e os flags de
+ * inicialização. Todos guardam referência ao `LocalPlayer` que deixou de existir, e
+ * reaproveitá-los é pior do que recomeçar: o `getCurrentTarget` cairia no
+ * {@code return client.player} em silêncio, e a jogadora veria a própria câmera em vez
+ * de uma pista de erro.
+ *
+ * <p><b>O que sobrevive de propósito:</b> {@code mode} e {@code active}. A preferência
+ * de câmera é da <b>sessão</b>, não da entidade; soltar a câmera FREE no meio do turno
+ * seria mais invasivo do que recolocá-la. Se for preciso voltar ao normal, é uma tecla.
+ *
+ * <p>Ao fim, pede a lista nova ao servidor em vez de tentar consertar a velha: a lista
+ * antiga foi filtrada pelo id de quem não existe mais, e o servidor a reconstrói a
+ * partir do mundo atual.
+ */
+    public static void onPlayerEntityChanged() {
+        targets = List.of();
+        targetIndex = 0;
+        freeCamPos = null;
+        freeCamInitialized = false;
+        thirdPersonLookInitialized = false;
+        wasLocked = false;
+        lastGameModeOrdinal = -1;
+
+        Minecraft client = Minecraft.getInstance();
+        if (client.player != null) {
+            ClientPlayNetworking.send(new RpgNetworking.SpectatorTargetsRequestPayload());
+        }
     }
 
     public static boolean isActive() {
@@ -411,6 +458,20 @@ public final class SpectatorCameraController {
             deactivate(client);
             return;
         }
+
+        // A entidade do cliente foi trocada: cair e voltar, ou mudar de dimensão.
+        //
+        // <b>Por que comparar id e nao usar evento (05/10/2026):</b> a versão da
+        // Fabric API deste projeto (0.141.6) não tem evento de "o jogador do cliente
+        // foi trocado" — só existe o equivalente server-side, `ServerEntityWorldChangeEvents`,
+        // que não roda aqui. O `tick` já roda a cada quadro e o `id` da entidade do
+        // jogador muda justamente nos dois casos que importam, que é o mesmo fato que
+        // o `reset()` já usava para explicar por que o índice é zerado no logout.
+        int playerEntityId = client.player.getId();
+        if (lastPlayerEntityId != 0 && playerEntityId != lastPlayerEntityId) {
+            onPlayerEntityChanged();
+        }
+        lastPlayerEntityId = playerEntityId;
 
         // A camara de espectador liga em dois casos:
         //  1. o jogador esta travado (nao e o turno dele) -- cameras de

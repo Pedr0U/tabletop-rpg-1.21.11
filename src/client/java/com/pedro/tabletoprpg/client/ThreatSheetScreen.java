@@ -13,10 +13,13 @@ import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.components.MultiLineEditBox;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.input.MouseButtonEvent;
+import net.minecraft.client.gui.components.Tooltip;
 import net.minecraft.network.chat.Component;
 import net.minecraft.util.FormattedCharSequence;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -130,6 +133,7 @@ public class ThreatSheetScreen extends Screen {
     private static final int KIND_FEATURE = 2;
     private static final int KIND_PASSIVE = 3;
     private static final int KIND_ACTION = 4;
+    private static final int KIND_COPIES = 5;
 
     private static final int COL_SCREEN_BG = 0x99000000;
     private static final int COL_PANEL_BG = 0xFF202020;
@@ -191,15 +195,38 @@ public class ThreatSheetScreen extends Screen {
     private static final int STEP_GAP = 4;
     private static final int ATTR_VALUE_W = 48;
     private static final int BAR_W = 4;
+    /**
+     * Largura da coluna de copias (07/10/2026) dentro do editor.
+     *
+     * <p><b>Por que so entra acima de uma largura minima de painel:</b> a coluna
+     * come 132 px das duas colunas do formulario. Em painel estreito o formulario
+     * viraria duas frestas; abaixo de {@value #COPIES_MIN_PANEL_W} de painel a
+     * coluna some e o editor volta a ser como era antes.
+     */
+    // 132 -> 165 (+25%) e o minimo 360 -> 430 no feedback de 07/10/2026: o botao
+    // Copiar e a coluna eram estreitos demais. A largura do MENU nao mudou; quem
+    // cedeu foram as duas colunas do formulario (colW), e o minimo subiu junto
+    // para a coluna nao se espremer dentro do painel.
+    private static final int COPIES_W = 165;
+    private static final int COPIES_MIN_PANEL_W = 430;
     private static final int SMALL_BTN_H = 16;
-    private static final int MAX_PANEL_W = 600;
+    // 760 px: o relato de 07/10/2026 foi que a coluna de copias espremeu o titulo
+    // "Ataques e Habilidades Ativas" contra o "+ Habilidade". A tela ficou mais
+    // larga nessa rodada; o corte do titulo e a rede de segurança (ver
+    // `addTabsLabel(String, int, int, int)`).
+    private static final int MAX_PANEL_W = 760;
+    /** Teto de passos do Reverter: memorizar mais que isso e sobra de memoria. */
+    private static final int MAX_UNDO = 64;
     // Sem teto de altura: o painel ocupa a tela inteira, como a ficha do jogador,
     // que tambem deriva de `topY..bottomY`. Com teto, numa tela logica de 270 px
     // (1080p com GUI scale automatico) o painel ficava com 258 px e os atributos
     // nao cabiam.
 
     private final Screen parentScreen;
-    private final ThreatSheet sheet;
+    // Nao-final desde 07/10/2026: ao salvar com OUTRO nome a tela troca a ficha
+    // que esta editando pela gravada no servidor (mesmo id, nome novo), para o
+    // Copiar funcionar sem fechar e reabrir.
+    private ThreatSheet sheet;
 
     /**
      * O nome com que a ficha foi aberta, ou {@code ""} quando ela esta sendo criada.
@@ -241,6 +268,32 @@ public class ThreatSheetScreen extends Screen {
     private int activeTab;
     /** Quantos px da coluna esquerda estao rolados para cima. */
     private int colOffset;
+
+    /**
+     * Estado salvo (abertura ou ultimo save aceito): e contra ele que a bolinha
+     * amarela compara (07/10/2026).
+     */
+    private ThreatSheetDraft savedState;
+    /** O estado de antes dos inputs do quadro: e o que o Reverter restaura. */
+    private ThreatSheetDraft preFrame;
+    /** Passos do Reverter, um por sessao de edicao ou acao, teto de {@link #MAX_UNDO}. */
+    private final ArrayDeque<ThreatSheetDraft> undoStack = new ArrayDeque<>();
+    /** Cada box em sessao de digitacao (a primeira tecla empurra, as outras nao). */
+    private final Map<String, Boolean> typing = new HashMap<>();
+    /** O ultimo texto visto de cada box, para reconhecer a primeira tecla. */
+    private final Map<String, String> lastSeen = new HashMap<>();
+    /** O estado mandado no ultimo save; vira a base da bolinha se o servidor aceitar. */
+    private ThreatSheetDraft pendingSaved;
+    /** Ha edicao nao salva? E a bolinha amarela ao lado do Salvar. */
+    private boolean dirty;
+
+    private Button saveButton;
+    private Button reverterButton;
+    private Button copiarButton;
+    /** A linha de copia esperando o segundo clique do Del, ou -1. */
+    private int pendingCopyDelete = -1;
+    /** Largura do Del de uma linha de copia (igual aos outros menus). */
+    private static final int COPIES_DEL_W = 30;
 
     /**
      * Uma lista cujas entradas tem Del em dois cliques.
@@ -287,6 +340,12 @@ public class ThreatSheetScreen extends Screen {
     private int statusY;
 
     /** A ultima lista de fichas conhecida; serve so para saber quantas existem. */
+    private final ListRegion copiesRegion = new ListRegion(KIND_COPIES);
+    private final List<AbstractWidget> copiesWidgets = new ArrayList<>();
+    private boolean copiesVisible;
+    private int copiesX;
+    private int copiesRowsTop;
+
     private List<ThreatSheet> knownSheets = List.of();
     /**
      * O nome <b>exatamente como foi enviado</b> no ultimo save.
@@ -344,6 +403,29 @@ public class ThreatSheetScreen extends Screen {
                 values.put(attrKey(attribute.id()), Integer.toString(attribute.value()));
             }
         }
+
+        // Rascunho da sessao anterior (07/10/2026): se o Mestre fechou sem salvar,
+        // a edicao volta exatamente como estava e a lista mostra a bolinha ate salvar.
+        ThreatSheetDraft draft = sheet != null && sheet.hasId()
+                ? ThreatSheetClientState.draftOf(sheet.id()) : null;
+        if (draft != null) {
+            values.putAll(draft.values());
+            features.clear();
+            features.addAll(draft.features());
+            passives.clear();
+            passives.addAll(draft.passives());
+            actions.clear();
+            actions.addAll(draft.actions());
+            pericias.clear();
+            pericias.addAll(draft.pericias());
+            this.showDisplayName = draft.showDisplayName();
+            this.hp = draft.hp();
+        }
+        // A base da bolinha e o estado da ABERTURA (ou do ultimo save aceito).
+        // Precisou ser aqui e nao no init: o init roda a cada troca de aba e
+        // recriacao, e capturar ali apagaria a sujeira a cada rebuild.
+        this.savedState = capture();
+        this.preFrame = capture();
     }
 
     private static String attrKey(String id) {
@@ -392,7 +474,7 @@ public class ThreatSheetScreen extends Screen {
         descriptionBox = null;
 
         layout();
-        addTabs();
+        addArrows();
 
         if (activeTab == 0) {
             buildSheetTab();
@@ -400,20 +482,29 @@ public class ThreatSheetScreen extends Screen {
             buildAbilitiesTab();
         }
         rebuildFooter();
+        // A lista de copias da direita (07/10/2026): pede a lista fresca e monta a
+        // coluna; a resposta chega em `applyList` e a remonta.
+        requestList();
+        rebuildCopiesColumn();
+        // A sessao de digitacao comeca do zero a cada recriacao: a primeira tecla
+        // de cada box empurra o estado de AGORA, nao o de uma sessao morta.
+        rearmTyping();
     }
 
     /** Calcula o painel, as colunas e as faixas de onde as listas vao comer espaco. */
     private void layout() {
         panelW = Math.max(200, Math.min(this.width - 16, MAX_PANEL_W));
         panelX = (this.width - panelW) / 2;
-        int chrome = 2 * PAD + TITLE_H + GAP + TAB_H + GAP + FOOTER_H + STATUS_H + GAP;
+        // Sem as abas de cima (07/10/2026: viraram setas nos cantos da tela), a
+        // faixa do titulo respira mais: 18 px de TAB_H + folga voltaram para o conteudo.
+        int chrome = 2 * PAD + TITLE_H + GAP + FOOTER_H + STATUS_H + GAP;
         panelH = Math.max(120, this.height - 12);
         if (panelH < chrome + SECTION_H + ROW_H) {
             panelH = Math.min(this.height - 8, chrome + SECTION_H + ROW_H);
         }
         panelY = Math.max(PAD, (this.height - panelH) / 2);
 
-        contentTop = panelY + PAD + TITLE_H + GAP + TAB_H + GAP;
+        contentTop = panelY + PAD + TITLE_H + GAP;
         statusY = panelY + panelH - PAD - STATUS_H;
         footerY = statusY - GAP - FOOTER_H;
         contentBottom = footerY - GAP;
@@ -424,18 +515,40 @@ public class ThreatSheetScreen extends Screen {
         // `leftX - BAR_W`, DENTRO da margem do painel. Era isso que fazia a caixa da
         // esquerda parecer mais larga que a da direita. Agora a barra ocupa uma fatia
         // reservada entre as colunas e as duas caixas ficam com a mesma largura.
-        colW = (panelW - 2 * PAD - COL_GAP - BAR_W - 2) / 2;
+        // A coluna de copias (07/10/2026) fica na borda direita e COME o que ela mede
+        // das duas colunas do formulario: so entra quando ha espaco de sobra.
+        copiesVisible = panelW >= COPIES_MIN_PANEL_W;
+        if (copiesVisible) {
+            colW = (panelW - 2 * PAD - BAR_W - 2 - 2 * COL_GAP - COPIES_W) / 2;
+        } else {
+            colW = (panelW - 2 * PAD - COL_GAP - BAR_W - 2) / 2;
+        }
         leftX = panelX + PAD;
         rightX = leftX + colW + BAR_W + 2 + COL_GAP;
+        copiesX = rightX + colW + COL_GAP;
     }
 
-    private void addTabs() {
-        int btnW = Math.max(60, (panelW - 2 * PAD - GAP) / 2);
-        int y = panelY + PAD + TITLE_H + GAP;
-        addRenderableWidget(Button.builder(Component.literal("Principal - PG 1"), b -> setTab(0))
-                .bounds(panelX + PAD, y, btnW, TAB_H).build());
-        addRenderableWidget(Button.builder(Component.literal("Habilidades - PG 2"), b -> setTab(1))
-                .bounds(panelX + panelW - PAD - btnW, y, btnW, TAB_H).build());
+    /**
+     * As setinhas de trocar de pagina nos cantos inferiores da TELA (07/10/2026):
+     * a direita avanca para Habilidades, a esquerda volta para a ficha. Cada uma
+     * so existe na pagina em que faz sentido.
+     */
+    private void addArrows() {
+        // 07/10/2026: as setas ficavam nas extremidades da TELA e quase sumiam.
+        // Agora elas colam nos cantos de baixo do MENU.
+        int size = 18;
+        int y = panelY + panelH - size - 6;
+        if (activeTab == 0) {
+            addRenderableWidget(Button.builder(Component.literal("\u25B6"), b -> setTab(1))
+                    .bounds(panelX + panelW - size - 6, y, size, size)
+                    .tooltip(Tooltip.create(Component.literal("Ir para Habilidades")))
+                    .build());
+        } else {
+            addRenderableWidget(Button.builder(Component.literal("\u25C0"), b -> setTab(0))
+                    .bounds(panelX + 6, y, size, size)
+                    .tooltip(Tooltip.create(Component.literal("Voltar para a ficha")))
+                    .build());
+        }
     }
 
     private void setTab(int tab) {
@@ -450,6 +563,16 @@ public class ThreatSheetScreen extends Screen {
 
     private void addTabsLabel(String text, int x, int y) {
         labels.add(new Label(text, x, y, COL_SECTION));
+    }
+
+    /**
+     * Titulo de secao cortado para nunca invadir o botao da mesma linha: e a rede
+     * de seguranca do titulo "Ataques e Habilidades Ativas" contra o "+ Habilidade"
+     * quando o painel volta a ficar estreito (relato de 07/10/2026).
+     */
+    private void addTabsLabel(String text, int x, int y, int maxW) {
+        labels.add(new Label(this.font.plainSubstrByWidth(text, Math.max(10, maxW)),
+                x, y, COL_SECTION));
     }
 
     private EditBox textField(String key, String label, int x, int y, int w, int maxLength) {
@@ -597,7 +720,10 @@ public class ThreatSheetScreen extends Screen {
                     .pos(leftX + 2, y + LABEL_H + FIELD_H + 6)
                     .maxWidth(colW - 4)
                     .selected(showDisplayName)
-                    .onValueChange((cb, checked) -> showDisplayName = checked)
+                    .onValueChange((cb, checked) -> {
+                        pushUndo(); // um clique e um passo: o estado de antes vira o Reverter
+                        showDisplayName = checked;
+                    })
                     .build();
             checkbox.setSize(colW - 4, CHECKBOX_H);
             addColWidget(checkbox);
@@ -742,6 +868,7 @@ public class ThreatSheetScreen extends Screen {
 
     /** Um passo do HP, sem acelerar ao segurar (mesma regra do jogador). */
     private void stepHp(int delta) {
+        pushUndo(); // cada clique de HP e uma acao: um passo do Reverter
         hp = Math.max(ThreatSheet.MIN_RESOURCE,
                 Math.min(ThreatSheet.MAX_RESOURCE, hp + delta));
     }
@@ -752,7 +879,7 @@ public class ThreatSheetScreen extends Screen {
 
     private void buildAbilitiesTab() {
         int y = contentTop;
-        addTabsLabel("Habilidades Passivas", leftX, y);
+        addTabsLabel("Habilidades Passivas", leftX, y, colW - 105);
         addRenderableWidget(Button.builder(Component.literal("+ Habilidade"), b -> addPassive())
                 .bounds(leftX + colW - 100, y - 3, 100, SMALL_BTN_H).build());
         y += SECTION_H + SMALL_BTN_H + 4;
@@ -765,7 +892,7 @@ public class ThreatSheetScreen extends Screen {
         // a lista comeca na linha seguinte. Eles tinham ficado em linhas separadas
         // quando o painel era estreito; com o painel de 600 px os dois cabem lado a
         // lado sem se tocar.
-        addTabsLabel("Ataques e Habilidades Ativas", rightX, y2);
+        addTabsLabel("Ataques e Habilidades Ativas", rightX, y2, colW - 105);
         addRenderableWidget(Button.builder(Component.literal("+ Habilidade"), b -> addAction())
                 .bounds(rightX + colW - 100, y2 - 3, 100, SMALL_BTN_H).build());
         y2 += SECTION_H + SMALL_BTN_H + 4;
@@ -786,6 +913,10 @@ public class ThreatSheetScreen extends Screen {
      * para {@link #values}, o que o Mestre digitou sumiria na primeira rolagem.
      */
     private void rebuildRegion(ListRegion region) {
+        if (region.kind == KIND_COPIES) {
+            rebuildCopiesColumn();
+            return;
+        }
         syncFromWidgets();
         clearRegionWidgets(region);
         region.offset = Math.min(region.offset, region.maxOffset());
@@ -930,9 +1061,15 @@ public class ThreatSheetScreen extends Screen {
 
     /** Todas as listas visiveis da aba atual, na ordem em que o mouse as encontra. */
     private List<ListRegion> regions() {
-        return activeTab == 0
+        List<ListRegion> base = activeTab == 0
                 ? List.of(attrRegion, periciaRegion, featureRegion)
                 : List.of(passiveRegion, actionRegion);
+        if (!copiesVisible) {
+            return base;
+        }
+        List<ListRegion> all = new ArrayList<>(base);
+        all.add(copiesRegion);
+        return all;
     }
 
     /**
@@ -1081,6 +1218,7 @@ public class ThreatSheetScreen extends Screen {
     // ------------------------------------------------------------------
 
     private void editPericias() {
+        pushUndo(); // abrir a tela de pericias e um passo do Reverter
         syncFromWidgets();
         this.minecraft.setScreen(new ThreatPericiasScreen(this, List.copyOf(pericias), saved -> {
             pericias.clear();
@@ -1089,6 +1227,7 @@ public class ThreatSheetScreen extends Screen {
     }
 
     private void addFeature() {
+        pushUndo(); // criar uma entrada e um passo do Reverter
         syncFromWidgets();
         this.minecraft.setScreen(new ThreatEntryFormScreen(this, "Nova Característica",
                 List.of(new ThreatEntryFormScreen.Field("text", "Característica",
@@ -1100,6 +1239,7 @@ public class ThreatSheetScreen extends Screen {
         if (index < 0 || index >= features.size()) {
             return;
         }
+        pushUndo(); // editar uma entrada existente: um passo do Reverter
         syncFromWidgets();
         this.minecraft.setScreen(new ThreatEntryFormScreen(this, "Editar Característica",
                 List.of(new ThreatEntryFormScreen.Field("text", "Característica",
@@ -1109,6 +1249,7 @@ public class ThreatSheetScreen extends Screen {
     }
 
     private void addPassive() {
+        pushUndo(); // criar uma entrada e um passo do Reverter
         syncFromWidgets();
         this.minecraft.setScreen(new ThreatEntryFormScreen(this, "Nova Habilidade Passiva",
                 passiveFields(), Map.of(), map -> passives.add(new ThreatSheet.Ability(
@@ -1119,6 +1260,7 @@ public class ThreatSheetScreen extends Screen {
         if (index < 0 || index >= passives.size()) {
             return;
         }
+        pushUndo(); // editar uma entrada existente: um passo do Reverter
         syncFromWidgets();
         ThreatSheet.Ability current = passives.get(index);
         this.minecraft.setScreen(new ThreatEntryFormScreen(this, "Editar Habilidade Passiva",
@@ -1129,6 +1271,7 @@ public class ThreatSheetScreen extends Screen {
     }
 
     private void addAction() {
+        pushUndo(); // criar uma entrada e um passo do Reverter
         syncFromWidgets();
         this.minecraft.setScreen(new ThreatEntryFormScreen(this, "Nova Habilidade Ativa",
                 actionFields(), Map.of(), map -> actions.add(new ThreatSheet.Action(
@@ -1140,6 +1283,7 @@ public class ThreatSheetScreen extends Screen {
         if (index < 0 || index >= actions.size()) {
             return;
         }
+        pushUndo(); // editar uma entrada existente: um passo do Reverter
         syncFromWidgets();
         ThreatSheet.Action current = actions.get(index);
         this.minecraft.setScreen(new ThreatEntryFormScreen(this, "Editar Habilidade Ativa",
@@ -1175,13 +1319,26 @@ public class ThreatSheetScreen extends Screen {
     // SALVAR
     // ------------------------------------------------------------------
 
+    /**
+     * Rodape com tres botoes (07/10/2026): Reverter, Salvar/Atualizar e Voltar,
+     * dividindo a largura em tres. O Reverter desfaz a ultima sessao, como o diario.
+     */
     private void rebuildFooter() {
-        int btnW = Math.max(50, (panelW - 2 * PAD - GAP) / 2);
-        addRenderableWidget(Button.builder(
+        int btnW = Math.max(50, (panelW - 2 * PAD - 2 * GAP) / 3);
+        reverterButton = Button.builder(Component.literal("Reverter"), b -> undo())
+                .bounds(panelX + PAD, footerY, btnW, FOOTER_H).build();
+        addRenderableWidget(reverterButton);
+        saveButton = Button.builder(
                         Component.literal(updateMode ? "Atualizar" : "Salvar"), b -> save())
-                .bounds(panelX + panelW - PAD - btnW, footerY, btnW, FOOTER_H).build());
+                .bounds(panelX + PAD + btnW + GAP, footerY, btnW, FOOTER_H).build();
+        addRenderableWidget(saveButton);
+        // 07/10/2026: a bolinha do "nao salvo" fica DENTRO do botao, no canto
+        // direito, atualizada a cada quadro (o desenho da tela acontece antes dos
+        // widgets, e uma bolinha pintada ali sumiria atras do botao).
+        addRenderableOnly(new DotWidget(saveButton.getX() + btnW - 8,
+                saveButton.getY() + FOOTER_H / 2 - 2, () -> dirty));
         addRenderableWidget(Button.builder(Component.literal("< Voltar"), b -> onClose())
-                .bounds(panelX + PAD, footerY, btnW, FOOTER_H).build());
+                .bounds(panelX + panelW - PAD - btnW, footerY, btnW, FOOTER_H).build());
     }
 
     /** Copia o que esta nas caixas para {@link #values}. */
@@ -1192,6 +1349,146 @@ public class ThreatSheetScreen extends Screen {
         if (descriptionBox != null) {
             values.put("description", descriptionBox.getValue());
         }
+    }
+
+    /**
+     * Fotografa o formulario inteiro em um {@link ThreatSheetDraft}: e o que o
+     * Reverter compara e o que a bolinha amarela compara com o ultimo save.
+     */
+    private ThreatSheetDraft capture() {
+        syncFromWidgets();
+        return new ThreatSheetDraft(values, features, passives, actions, pericias,
+                showDisplayName, hp);
+    }
+
+    /**
+     * Empurra para a pilha do Reverter o estado de ANTES do input deste quadro.
+     *
+     * <p><b>Por que nao empurra toda tecla:</b> o diario desfaz em sessoes (a edicao
+     * inteira de um campo e um passo, nao uma tecla). Aqui a sessao e reconhecida na
+     * primeira tecla de cada box com foco (ver {@link #sweepBox}); os botoes de acao
+     * (HP, checkbox e listas) empurram no proprio clique.
+     */
+    private void pushUndo() {
+        if (preFrame == null) {
+            return;
+        }
+        if (preFrame.equals(capture())) {
+            return; // o input nao mudou nada (clique de lugar neutro): sem passo
+        }
+        if (!undoStack.isEmpty() && undoStack.peekFirst().equals(preFrame)) {
+            return; // o mesmo estado ja esta no topo: passos iguais seguidos sao inuteis
+        }
+        undoStack.addFirst(preFrame);
+        while (undoStack.size() > MAX_UNDO) {
+            undoStack.removeLast();
+        }
+    }
+
+    /** O botao Reverter: desfaz a ultima sessao de edicao ou acao (07/10/2026). */
+    private void undo() {
+        ThreatSheetDraft step = undoStack.pollFirst();
+        if (step == null) {
+            return;
+        }
+        // Antes de recriar os widgets o init sincroniza caixas -> values; entao as
+        // caixas precisam ja refletir o estado restaurado, senao o sync engoliria o
+        // undo e os campos renasceriam com o texto antigo (07/10/2026).
+        values.clear();
+        values.putAll(step.values());
+        features.clear();
+        features.addAll(step.features());
+        passives.clear();
+        passives.addAll(step.passives());
+        actions.clear();
+        actions.addAll(step.actions());
+        pericias.clear();
+        pericias.addAll(step.pericias());
+        this.showDisplayName = step.showDisplayName();
+        this.hp = step.hp();
+        for (String key : values.keySet()) {
+            EditBox box = boxes.get(key);
+            if (box != null) {
+                box.setValue(values.getOrDefault(key, ""));
+            }
+        }
+        if (descriptionBox != null) {
+            descriptionBox.setValue(values.getOrDefault("description", ""));
+        }
+        typing.clear();
+        lastSeen.clear();
+        rebuildWidgets();
+        status = "Desfeita a ultima alteracao.";
+        statusColor = ThreatSheetsScreen.statusColorFor(true, status);
+    }
+
+    /** A sessao de digitacao recomeca: a primeira tecla de cada box empurra de novo. */
+    private void rearmTyping() {
+        typing.clear();
+        lastSeen.clear();
+        for (Map.Entry<String, EditBox> entry : boxes.entrySet()) {
+            typing.put(entry.getKey(), false);
+            lastSeen.put(entry.getKey(), entry.getValue().getValue());
+        }
+        if (descriptionBox != null) {
+            typing.put("description", false);
+            lastSeen.put("description", descriptionBox.getValue());
+        }
+    }
+
+    /** Procura no quadro as caixas que comecaram (ou morreram) uma sessao de edicao. */
+    private void sweepTyping() {
+        for (Map.Entry<String, EditBox> entry : boxes.entrySet()) {
+            sweepBox(entry.getKey(), entry.getValue().getValue(), entry.getValue().isFocused());
+        }
+        if (descriptionBox != null) {
+            sweepBox("description", descriptionBox.getValue(), descriptionBox.isFocused());
+        }
+    }
+
+    private void sweepBox(String key, String text, boolean focused) {
+        String seen = lastSeen.get(key);
+        Boolean active = typing.get(key);
+        if (!text.equals(seen)) {
+            // Digitou: a PRIMEIRA tecla da sessao empurra o estado anterior; o resto
+            // da sessao ja e parte do mesmo passo ate a sessao morrer (foco caiu).
+            if (active == null || !active) {
+                pushUndo();
+                typing.put(key, true);
+            }
+            lastSeen.put(key, text);
+        } else if (active != null && active && !focused) {
+            // Perdeu o foco sem digitar nada novo: a sessao morre.
+            typing.put(key, false);
+        }
+    }
+
+    /**
+     * O fim do quadro: sessao de digitacao, bolinha amarela da edicao nao salva e o
+     * estado de antes do proximo input. A bolinha de mudanca nao salva e o
+     * DotWidget do botao Salvar que a desenha, DENTRO do botao (07/10/2026).
+     */
+    private void finishFrame(GuiGraphics graphics) {
+        ThreatSheetDraft current = capture();
+        sweepTyping();
+        dirty = (sheet != null && sheet.hasId() && ThreatSheetClientState.hasDraft(sheet.id()))
+                || !current.equals(savedState);
+        if (sheet != null && sheet.hasId()) {
+            if (dirty) {
+                ThreatSheetClientState.putDraft(sheet.id(), current);
+            } else {
+                ThreatSheetClientState.removeDraft(sheet.id());
+            }
+        }
+        if (reverterButton != null) {
+            reverterButton.active = !undoStack.isEmpty();
+        }
+        if (copiarButton != null) {
+            copiarButton.active = !dirty && sheet != null && !sheet.isCopy() && sheet.hasId();
+        }
+        // A bolinha do "nao salvo" eh o DotWidget do rodape que a pinta, dentro do
+        // botao Salvar, no canto interno direito, a cada quadro (07/10/2026).
+        preFrame = current;
     }
 
     /** O botao Salvar: monta a ficha inteira e entrega ao servidor. */
@@ -1261,7 +1558,10 @@ String name = values.getOrDefault("name", "");
                 pericias,
                 features,
                 passives,
-                actions);
+                actions,
+                // O copyOf e vinculo com a mae, como o id e com o mob: o servidor e dono,
+                // e o cliente devolve o que recebeu para nao desancorar a copia num save.
+                sheet == null ? "" : sheet.copyOf());
 
         if (this.minecraft == null || this.minecraft.getConnection() == null) {
             return;
@@ -1270,6 +1570,9 @@ String name = values.getOrDefault("name", "");
         // o servidor vai gravar. Se o save for recusado, o campo fica como estava e
         // o proximo envio volta a ser uma criacao -- que e o que o Mestre quer.
         pendingSaveName = name;
+        // O que foi enviado vira a base da bolinha se o servidor aceitar: o que o
+        // Mestre digitar DURANTE a espera continua sujo (07/10/2026).
+        pendingSaved = capture();
         ClientPlayNetworking.send(new RpgNetworking.ThreatSheetSavePayload(
                 built, originalName, !updateMode));
         status = "Enviando a ficha...";
@@ -1295,17 +1598,43 @@ String name = values.getOrDefault("name", "");
      * continua sendo o anterior, e trocar o campo ali faria o proximo Salvar procurar
      * uma ficha que nunca existiu.
      */
-    public void applyResult(boolean ok, String message, List<ThreatSheet> sheets) {
+    public void applyResult(boolean ok, String message, List<ThreatSheet> sheets,
+                            String createdName) {
+        ThreatSheetDraft sent = pendingSaved;
+        pendingSaved = null;
         if (ok && !pendingSaveName.isEmpty()) {
             // A partir daqui esta ficha existe com esse nome, entao e ele que o
             // proximo save vai carregar como "a que estou editando".
             originalName = pendingSaveName;
+        }
+        if (ok && sent != null && sheet != null && sheet.hasId()) {
+            // Save aceito: o estado enviado e a nova base da bolinha, o rascunho
+            // some e os passos do Reverter da sessao anterior morrem junto (nao ha
+            // mais o que desfazer daquela sessao).
+            savedState = sent;
+            ThreatSheetClientState.removeDraft(sheet.id());
+            undoStack.clear();
+            rearmTyping();
+            // Salvou com OUTRO nome: esta tela passa a editar a ficha que o
+            // servidor gravou (mesmo id, nome novo). Sem isso o Copiar mandava o
+            // nome antigo e o servidor respondia "nao existe" (relato 07/10/2026).
+            if (sheets != null) {
+                for (ThreatSheet stored : sheets) {
+                    if (stored.hasId() && stored.id().equals(sheet.id())) {
+                        this.sheet = stored;
+                        break;
+                    }
+                }
+            }
         }
         if (sheets != null) {
             knownSheets = sheets;
         }
         status = message == null ? "" : message;
         statusColor = ThreatSheetsScreen.statusColorFor(ok, status);
+        // Copiar uma ficha responde aqui com a lista nova: a coluna da direita
+        // remonta para mostrar a copia que acabou de nascer.
+        rebuildCopiesColumn();
     }
 
     /**
@@ -1318,6 +1647,211 @@ String name = values.getOrDefault("name", "");
     public void applyList(List<ThreatSheet> sheets) {
         if (sheets != null) {
             knownSheets = sheets;
+        }
+        // A lista chegou (pedido desta tela ou resposta de criar/apagar): a coluna
+        // de copias pode ter mudado de ordem, ganho ou perdido linhas.
+        rebuildCopiesColumn();
+    }
+
+    // ------------------------------------------------------------------
+    // COLUNA DE COPIAS (07/10/2026): a lista da direita no editor.
+    // ------------------------------------------------------------------
+
+    /** "Me manda a lista": o pedido e a propria tela, e nao so a lista de fichas. */
+    private void requestList() {
+        if (this.minecraft == null || this.minecraft.getConnection() == null) {
+            return;
+        }
+        ClientPlayNetworking.send(new RpgNetworking.ThreatSheetListRequestPayload());
+    }
+
+    /**
+     * A mae da ficha aberta, ou a propria ficha quando ela E a mae, ou {@code null}
+     * quando nao ha id (ficha nova, ainda nao salva) ou a mae nao esta na lista.
+     */
+    private ThreatSheet copiesMother() {
+        if (sheet == null) {
+            return null;
+        }
+        if (sheet.isCopy()) {
+            for (ThreatSheet s : knownSheets) {
+                if (s.hasId() && s.id().equals(sheet.copyOf())) {
+                    return s;
+                }
+            }
+            return null;
+        }
+        return sheet.hasId() ? sheet : null;
+    }
+
+    /** As copias da mae (as irmas da ficha aberta, quando ela e copia), na ordem da lista. */
+    private List<ThreatSheet> copiesList() {
+        ThreatSheet mother = copiesMother();
+        if (mother == null) {
+            return List.of();
+        }
+        List<ThreatSheet> out = new ArrayList<>();
+        for (ThreatSheet s : knownSheets) {
+            if (s.hasId() && mother.id().equals(s.copyOf())) {
+                out.add(s);
+            }
+        }
+        return out;
+    }
+
+    /**
+     * Monta a coluna da direita: cabecalho (o titulo da MAE, clicavel, quando a
+     * ficha aberta e uma copia; "Copias" + botao Copiar quando ela e a mae) e as
+     * linhas das copias com a rolagem propria do projeto (a roda e a barra).
+     */
+    private void rebuildCopiesColumn() {
+        for (AbstractWidget widget : copiesWidgets) {
+            removeWidget(widget);
+        }
+        copiesWidgets.clear();
+        copiarButton = null; // a coluna remonta e redecide: so a mae salva tem o botao
+        if (!copiesVisible || sheet == null) {
+            return;
+        }
+
+        ThreatSheet mother = copiesMother();
+        List<ThreatSheet> copies = copiesList();
+        int headerH = GAP;
+        if (sheet.isCopy()) {
+            if (mother != null) {
+                headerH = ROW_H + GAP;
+                Button titulo = Button.builder(
+                                Component.literal(font.plainSubstrByWidth(
+                                        mother.identity().name(), COPIES_W - 6)),
+                                b -> openSheet(mother))
+                        .bounds(copiesX, contentTop, COPIES_W - BAR_W - 3, ROW_H).build();
+                copiesWidgets.add(titulo);
+                addRenderableWidget(titulo);
+            }
+        } else if (sheet.hasId()) {
+            headerH = ROW_H + GAP;
+            this.copiarButton = Button.builder(Component.literal("Copiar"), b -> copyThis())
+                    .bounds(copiesX + COPIES_W - BAR_W - 3 - 48, contentTop, 48, ROW_H).build();
+            copiesWidgets.add(copiarButton);
+            addRenderableWidget(copiarButton);
+        }
+        copiesRowsTop = contentTop + headerH;
+
+        int rowsH = contentBottom - copiesRowsTop;
+        copiesRegion.set(copiesX, copiesRowsTop, COPIES_W, rowsH, ROW_H, copies.size());
+        copiesRegion.offset = Math.max(0, Math.min(copiesRegion.maxOffset(), copiesRegion.offset));
+        if (pendingCopyDelete != -1
+                && (pendingCopyDelete < copiesRegion.offset
+                || pendingCopyDelete >= copiesRegion.lastIndex())) {
+            pendingCopyDelete = -1; // saiu da janela: desarma o "Del?", como na lista do menu
+        }
+        for (int i = copiesRegion.offset; i < copiesRegion.lastIndex() && i < copies.size(); i++) {
+            ThreatSheet copia = copies.get(i);
+            int y = copiesRegion.rowY(i);
+            int rowW = COPIES_W - BAR_W - 3;
+            if (copia.hasId() && copia.id().equals(sheet.id())) {
+                // A ficha aberta: o nome sai apagado do render e a linha so tem o
+                // Del -- nunca um botao que reabriria a ficha sobre ela mesma.
+                Button del = copyDelButton(i, y, rowW);
+                copiesWidgets.add(del);
+                addRenderableWidget(del);
+                continue;
+            }
+            Button linha = Button.builder(
+                            Component.literal(font.plainSubstrByWidth(
+                                    copia.identity().name(), rowW - COPIES_DEL_W - 4)),
+                            b -> openSheet(copia))
+                    .bounds(copiesX, y, rowW - COPIES_DEL_W - 2, ROW_H).build();
+            copiesWidgets.add(linha);
+            addRenderableWidget(linha);
+            Button del = copyDelButton(i, y, rowW);
+            copiesWidgets.add(del);
+            addRenderableWidget(del);
+            // 07/10/2026: a bolinha amarela de "copia com edicao nao salva" fica
+            // DENTRO do botao do nome, e aparece quando o Mestre sai da ficha da
+            // copia e volta para a coluna (o rascunho sobrevive ao Voltar).
+            DotWidget dot = new DotWidget(copiesX + rowW - COPIES_DEL_W - 2 - 8,
+                    y + ROW_H / 2 - 2,
+                    () -> ThreatSheetClientState.hasDraft(copia.id()));
+            copiesWidgets.add(dot);
+            addRenderableOnly(dot);
+        }
+    }
+
+    /** O Del de uma linha de copia: primeiro clique arma "Del?", segundo apaga. */
+    private Button copyDelButton(int index, int y, int rowW) {
+        boolean pending = pendingCopyDelete == index;
+        return Button.builder(Component.literal(pending ? "Del?" : "Del"),
+                        b -> onCopyDelete(index))
+                .bounds(copiesX + rowW - COPIES_DEL_W, y, COPIES_DEL_W, ROW_H).build();
+    }
+
+    /**
+     * Del em dois cliques da coluna de copias, igual aos outros menus (07/10/2026).
+     * Nao entra no Reverter: apagou no servidor, e o undo deste editor so cobre o
+     * que ainda nao foi salvo.
+     */
+    private void onCopyDelete(int index) {
+        List<ThreatSheet> copies = copiesList();
+        if (index < 0 || index >= copies.size()) {
+            pendingCopyDelete = -1;
+            rebuildCopiesColumn();
+            return;
+        }
+        if (pendingCopyDelete != index) {
+            pendingCopyDelete = index;
+            rebuildCopiesColumn();
+            return;
+        }
+        pendingCopyDelete = -1;
+        ThreatSheet copia = copies.get(index);
+        if (this.minecraft == null || this.minecraft.getConnection() == null) {
+            return;
+        }
+        ClientPlayNetworking.send(new RpgNetworking.ThreatSheetDeletePayload(
+                copia.identity().name()));
+    }
+
+    /** Abre outra ficha da coluna, com esta tela como pai (o Voltar volta para ca). */
+    private void openSheet(ThreatSheet target) {
+        if (target == null || this.minecraft == null) {
+            return;
+        }
+        this.minecraft.setScreen(new ThreatSheetScreen(this, target, target.identity().name()));
+    }
+
+    /** Pede ao servidor uma copia da ficha aberta (so maes com id, salvas, tem o botao). */
+    private void copyThis() {
+        if (sheet == null || sheet.isCopy() || !sheet.hasId() || dirty) {
+            return; // edicao nao salva: o button Copiar ja desliga, isto e a segunda guarda
+        }
+        if (this.minecraft == null || this.minecraft.getConnection() == null) {
+            return;
+        }
+        ClientPlayNetworking.send(new RpgNetworking.ThreatSheetCopyPayload(sheet.identity().name()));
+        status = "Copiando...";
+        statusColor = COL_MUTED;
+    }
+
+    /**
+     * Textos da coluna que nao sao widgets: o rotulo "Copias" sobre o botao Copiar,
+     * e a FICHA ABERTA (quando ela e copia) como linha apagada na lista.
+     */
+    private void drawCopiesColumnTexts(GuiGraphics graphics) {
+        if (!copiesVisible || sheet == null) {
+            return;
+        }
+        if (!sheet.isCopy() && sheet.hasId()) {
+            graphics.drawString(this.font, "Copias", copiesX + 2, contentTop + 4, COL_SECTION, false);
+        }
+        List<ThreatSheet> copies = copiesList();
+        for (int i = copiesRegion.offset; i < copiesRegion.lastIndex() && i < copies.size(); i++) {
+            ThreatSheet copia = copies.get(i);
+            if (copia.hasId() && copia.id().equals(sheet.id())) {
+                graphics.drawString(this.font,
+                        this.font.plainSubstrByWidth(copia.identity().name(), COPIES_W - COPIES_DEL_W - 9),
+                        copiesX + 3, copiesRegion.rowY(i) + 5, COL_MUTED, false);
+            }
         }
     }
 
@@ -1335,6 +1869,21 @@ String name = values.getOrDefault("name", "");
             graphics.fill(region.x - 2, region.y,
                     region.x + region.w - BAR_W - 2, region.y + region.h, COL_LIST_BG);
         }
+        if (copiesVisible) {
+            // A area do cabecalho (titulo da mae / botao Copiar) fica ACIMA da
+            // regiao de linhas; a regiao so pinta o fundo das linhas.
+            graphics.fill(copiesX - 2, contentTop,
+                    copiesX + COPIES_W - BAR_W - 2, copiesRowsTop, COL_LIST_BG);
+        }
+    }
+
+    /** Titulo da tela: acompanha o nome GRAVADO da ficha -- apos salvar com outro
+     *  nome o {@link #sheet} e trocado e o titulo muda junto (07/10/2026). */
+    private Component currentTitle() {
+        if (sheet != null && !sheet.identity().name().isEmpty()) {
+            return Component.literal(sheet.listLabel());
+        }
+        return this.title;
     }
 
     @Override
@@ -1348,7 +1897,7 @@ String name = values.getOrDefault("name", "");
         // nao cria widget nem recria coluna no meio do desenho.
         syncFromWidgets();
 
-        graphics.drawCenteredString(this.font, this.title,
+        graphics.drawCenteredString(this.font, currentTitle(),
                 panelX + panelW / 2, panelY + PAD, COL_TITLE);
 
         for (Label label : labels) {
@@ -1382,10 +1931,16 @@ String name = values.getOrDefault("name", "");
             graphics.fill(x, colThumbY(), x + 3, colThumbY() + colThumbH(), 0xFF6B4A2A);
         }
 
+        drawCopiesColumnTexts(graphics);
+
         if (!status.isEmpty()) {
             graphics.drawCenteredString(this.font, this.font.plainSubstrByWidth(status,
                     panelW - 2 * PAD), panelX + panelW / 2, statusY, statusColor);
         }
+
+        // Cauda do quadro: sessao de digitacao, bolinha, estado dos botoes e o
+        // "antes" que o proximo input usa (07/10/2026).
+        finishFrame(graphics);
     }
 
     private void drawSheetTab(GuiGraphics graphics) {
@@ -1591,6 +2146,33 @@ String name = values.getOrDefault("name", "");
 
     @Override
     public void onClose() {
-        this.minecraft.setScreen(parentScreen);
+        if (this.minecraft == null) {
+            return;
+        }
+        if (this.sheet != null && this.sheet.isCopy()) {
+            // 07/10/2026: Voltar de UMA COPIA abre a MAE (parente certo = a lista),
+            // e nao a pilha de telas -- o Voltar e de um nivel so.
+            ThreatSheet mother = copiesMother();
+            if (mother != null) {
+                this.minecraft.setScreen(new ThreatSheetScreen(backParent(), mother,
+                        mother.identity().name(), this.updateMode));
+                return;
+            }
+        }
+        // Ficha mae: volta para a lista. O backParent pula telas de ficha na
+        // cadeia, entao editor aberto por editor nao vira degrau do Voltar.
+        this.minecraft.setScreen(backParent());
+    }
+
+    /**
+     * O pai certo do Voltar: o primeiro pai da cadeia que NAO e um editor de
+     * ficha. A cadeia editor -&gt; editor -&gt; ... termina na lista (07/10/2026).
+     */
+    private Screen backParent() {
+        Screen p = this.parentScreen;
+        while (p instanceof ThreatSheetScreen editor) {
+            p = editor.parentScreen;
+        }
+        return p;
     }
 }

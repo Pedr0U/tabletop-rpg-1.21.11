@@ -512,6 +512,31 @@ public final class RpgNetworking {
      * Todos os jogadores conectados + mobs invocados com câmera (cam_perm=true).
      * O cliente adiciona a si mesmo como alvo inicial (índice 0).
      */
+    /**
+     * C2S: o cliente pede a lista de alvos do carrossel de espectador.
+     *
+     * <p><b>Por que este pacote existe (05/10/2026, bug da jogadora):</b> a lista era
+     * empurrada pelo servidor em sete gatilhos, e RESPAWN nao era um deles. Ao cair e
+     * voltar, o cliente ficava com a lista antiga e a camera pointed at nada, e a unica
+     * forma de recuperar era tirar o modo e colocar de novo. Este pacote deixa o cliente
+     * perguntar, e e ele que some com o contorno.
+     *
+     * <p>Nao ha estado de servidor para repetir aqui: a lista e sempre reconstruida na
+     * hora por {@link #getSpectatorTargets}.
+     */
+    public record SpectatorTargetsRequestPayload() implements CustomPacketPayload {
+        public static final Type<SpectatorTargetsRequestPayload> TYPE =
+                new Type<>(TabletopRpg.id("spectator_targets_request"));
+        public static final StreamCodec<FriendlyByteBuf, SpectatorTargetsRequestPayload> STREAM_CODEC =
+                StreamCodec.unit(new SpectatorTargetsRequestPayload());
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
+    /** Alvos do carrossel vindos do servidor. */
     public record SpectatorTargetsPayload(List<TargetData> targets) implements CustomPacketPayload {
         public static final Type<SpectatorTargetsPayload> TYPE = new Type<>(TabletopRpg.id("spectator_targets"));
         public static final StreamCodec<FriendlyByteBuf, SpectatorTargetsPayload> STREAM_CODEC = StreamCodec.composite(
@@ -1189,6 +1214,23 @@ public final class RpgNetworking {
     }
 
     /**
+     * Cliente -&gt; Servidor: "cria uma ficha de ameaça em branco com nome padrao",
+     * disparado pelo botao "Nova Ficha" (07/10/2026). So o Mestre pede.
+     */
+    public record ThreatSheetNewPayload() implements CustomPacketPayload {
+        public static final Type<ThreatSheetNewPayload> TYPE =
+                new Type<>(TabletopRpg.id("threat_sheet_new"));
+        /** Nao transporta nada; o proprio tipo do pacote e a mensagem. */
+        public static final StreamCodec<FriendlyByteBuf, ThreatSheetNewPayload> STREAM_CODEC =
+                StreamCodec.unit(new ThreatSheetNewPayload());
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
+    /**
      * Servidor -&gt; Cliente: a lista de fichas do Mestre, na ordem em que ele salvou.
      *
      * <p><b>Por que a ficha inteira viaja e nao so o nome:</b> a lista e pequena e a
@@ -1306,6 +1348,27 @@ public final class RpgNetworking {
         }
     }
 
+    /** Cliente -&gt; Servidor: copiar uma ficha (07/10/2026). A copia nasce do MODELO. */
+    public record ThreatSheetCopyPayload(String motherName) implements CustomPacketPayload {
+        public static final Type<ThreatSheetCopyPayload> TYPE =
+                new Type<>(TabletopRpg.id("threat_sheet_copy"));
+        public static final StreamCodec<FriendlyByteBuf, ThreatSheetCopyPayload> STREAM_CODEC =
+                StreamCodec.composite(
+                        ByteBufCodecs.stringUtf8(ThreatSheet.MAX_NAME),
+                        ThreatSheetCopyPayload::motherName,
+                        ThreatSheetCopyPayload::new
+                );
+
+        public ThreatSheetCopyPayload {
+            motherName = clamp(motherName == null ? "" : motherName.trim(), ThreatSheet.MAX_NAME);
+        }
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
     /**
      * Servidor -&gt; Cliente: resposta de save/apag, sempre com a lista nova.
      *
@@ -1313,7 +1376,8 @@ public final class RpgNetworking {
      * mostrar o estado real sem um segundo pedido -- e o mesmo motivo do
      * {@link PresetResultPayload}.
      */
-    public record ThreatSheetResultPayload(boolean ok, String message, List<ThreatSheet> sheets)
+    public record ThreatSheetResultPayload(boolean ok, String message, List<ThreatSheet> sheets,
+                                           String createdName)
             implements CustomPacketPayload {
         public static final Type<ThreatSheetResultPayload> TYPE =
                 new Type<>(TabletopRpg.id("threat_sheet_result"));
@@ -1323,18 +1387,20 @@ public final class RpgNetworking {
                     public ThreatSheetResultPayload decode(FriendlyByteBuf buf) {
                         boolean ok = buf.readBoolean();
                         String message = ByteBufCodecs.stringUtf8(512).decode(buf);
+                        String createdName = ByteBufCodecs.stringUtf8(100).decode(buf);
                         int size = buf.readVarInt();
                         List<ThreatSheet> sheets = new ArrayList<>();
                         for (int i = 0; i < size; i++) {
                             sheets.add(ThreatSheet.STREAM_CODEC.decode(buf));
                         }
-                        return new ThreatSheetResultPayload(ok, message, sheets);
+                        return new ThreatSheetResultPayload(ok, message, sheets, createdName);
                     }
 
                     @Override
                     public void encode(FriendlyByteBuf buf, ThreatSheetResultPayload payload) {
                         buf.writeBoolean(payload.ok());
                         ByteBufCodecs.stringUtf8(512).encode(buf, payload.message());
+                        ByteBufCodecs.stringUtf8(100).encode(buf, payload.createdName());
                         List<ThreatSheet> sheets = payload.sheets();
                         buf.writeVarInt(sheets.size());
                         for (ThreatSheet sheet : sheets) {
@@ -1346,6 +1412,7 @@ public final class RpgNetworking {
         public ThreatSheetResultPayload {
             message = clamp(message, 512);
             sheets = sheets == null ? List.of() : List.copyOf(sheets);
+            createdName = createdName == null ? "" : clamp(createdName, 100);
         }
 
         @Override
@@ -1367,6 +1434,7 @@ public final class RpgNetworking {
         PayloadTypeRegistry.playS2C().register(BlockLocksPayload.TYPE, BlockLocksPayload.STREAM_CODEC);
         PayloadTypeRegistry.playC2S().register(TimeSetPayload.TYPE, TimeSetPayload.STREAM_CODEC);
         PayloadTypeRegistry.playC2S().register(DayNightCycleSetPayload.TYPE, DayNightCycleSetPayload.STREAM_CODEC);
+        PayloadTypeRegistry.playC2S().register(SpectatorTargetsRequestPayload.TYPE, SpectatorTargetsRequestPayload.STREAM_CODEC);
         PayloadTypeRegistry.playC2S().register(DayNightCycleQueryPayload.TYPE, DayNightCycleQueryPayload.STREAM_CODEC);
         PayloadTypeRegistry.playS2C().register(DayNightCycleStatePayload.TYPE, DayNightCycleStatePayload.STREAM_CODEC);
         PayloadTypeRegistry.playS2C().register(AuraStatePayload.TYPE, AuraStatePayload.STREAM_CODEC);
@@ -1412,6 +1480,10 @@ public final class RpgNetworking {
                 ThreatSheetSavePayload.STREAM_CODEC);
         PayloadTypeRegistry.playC2S().register(ThreatSheetDeletePayload.TYPE,
                 ThreatSheetDeletePayload.STREAM_CODEC);
+        PayloadTypeRegistry.playC2S().register(ThreatSheetCopyPayload.TYPE,
+                ThreatSheetCopyPayload.STREAM_CODEC);
+        PayloadTypeRegistry.playC2S().register(ThreatSheetNewPayload.TYPE,
+                ThreatSheetNewPayload.STREAM_CODEC);
         PayloadTypeRegistry.playS2C().register(ThreatSheetResultPayload.TYPE,
                 ThreatSheetResultPayload.STREAM_CODEC);
         PayloadTypeRegistry.playS2C().register(ThreatSheetOpenPayload.TYPE,
@@ -1541,6 +1613,14 @@ public final class RpgNetworking {
         });
 
         // Cliente pede o estado atual do ciclo dia/noite (ao abrir as Settings).
+        ServerPlayNetworking.registerGlobalReceiver(SpectatorTargetsRequestPayload.TYPE, (payload, context) -> {
+            // O cliente pediu a lista (05/10/2026). Caiu e voltou, ou trocou de dimensao:
+            // a entidade do jogador mudou e a lista antiga nao serve mais. Reconstruir
+            // sempre, sem cache, porque nao ha o que reaproveitar -- a lista sai do
+            // mundo atual, e o mundo atual e o unico lugar valido.
+            sendSpectatorTargetsToPlayer(context.player());
+        });
+
         ServerPlayNetworking.registerGlobalReceiver(DayNightCycleQueryPayload.TYPE, (payload, context) -> {
             ServerPlayer player = context.player();
             ServerLevel level = (ServerLevel) player.level();
@@ -2157,6 +2237,14 @@ public final class RpgNetworking {
         ServerPlayNetworking.registerGlobalReceiver(ThreatSheetDeletePayload.TYPE, (payload, context) ->
                 ServerPlayNetworking.send(context.player(),
                         deleteThreatSheetFromScreen(context.player(), payload)));
+
+        ServerPlayNetworking.registerGlobalReceiver(ThreatSheetCopyPayload.TYPE, (payload, context) ->
+                ServerPlayNetworking.send(context.player(),
+                        copyThreatSheetFromScreen(context.player(), payload)));
+
+        ServerPlayNetworking.registerGlobalReceiver(ThreatSheetNewPayload.TYPE, (payload, context) ->
+                ServerPlayNetworking.send(context.player(),
+                        newThreatSheetFromScreen(context.player(), payload)));
     }
 
     /**
@@ -2227,14 +2315,14 @@ public final class RpgNetworking {
             // "Atualizar", aberta pelo item: grava por cima e NAO entrega item, senao
             // cada edicao multiplicaria o stack na mochila (decisao do Mestre em 02/10/2026).
             return new ThreatSheetResultPayload(true, result.message(),
-                    ThreatSheetStore.snapshot(player.getUUID()));
+                    ThreatSheetStore.snapshot(player.getUUID()), "");
         }
         ItemStack delivered = ModItems.giveThreatSheet(player, saved);
         String suffix = delivered == null
                 ? " (inventário cheio: a ficha foi salva, mas o item não coube)"
                 : "";
         return new ThreatSheetResultPayload(true, result.message() + suffix,
-                ThreatSheetStore.snapshot(player.getUUID()));
+                ThreatSheetStore.snapshot(player.getUUID()), "");
     }
 
     /**
@@ -2267,14 +2355,55 @@ public final class RpgNetworking {
             return threatSheetRefuse(player, "Essa ficha de ameaça não existe mais.");
         }
         return new ThreatSheetResultPayload(true, "Ficha de ameaça apagada.",
-                ThreatSheetStore.snapshot(player.getUUID()));
+                ThreatSheetStore.snapshot(player.getUUID()), "");
+    }
+
+    /**
+     * Copia a ficha pedida pela tela (07/10/2026): a copia nasce do modelo, sem
+     * vinculo, e as copias antigas nao mudam.
+     */
+    private static ThreatSheetResultPayload copyThreatSheetFromScreen(ServerPlayer player,
+                                                                      ThreatSheetCopyPayload payload) {
+        if (!SessionManager.isMaster(player)) {
+            return threatSheetRefuse(player, "So o mestre pode copiar fichas de ameaca.");
+        }
+        ThreatSheet mother = ThreatSheetStore.find(player.getUUID(), payload.motherName());
+        if (mother == null) {
+            return threatSheetRefuse(player, "Essa ficha de ameaca nao existe mais.");
+        }
+        ThreatSheetStore.SaveResult result = ThreatSheetStore.createCopy(player.getUUID(), mother.id());
+        String message = result.ok()
+                ? "Copia criada: " + mother.identity().name()
+                : result.message();
+        return new ThreatSheetResultPayload(result.ok(), message,
+                ThreatSheetStore.snapshot(player.getUUID()), "");
+    }
+
+    /**
+     * Cria uma ficha em branco chamada "Ficha N" (07/10/2026): e o "Nova Ficha" do
+     * menu. O nome nasce aqui para a lista mostrar a ficha mesmo quando o Mestre fecha
+     * o editor sem salvar -- e o motivo do {@code createdName} no resultado.
+     */
+    private static ThreatSheetResultPayload newThreatSheetFromScreen(ServerPlayer player,
+                                                                     ThreatSheetNewPayload payload) {
+        if (!SessionManager.isMaster(player)) {
+            return threatSheetRefuse(player, "So o mestre pode criar fichas de ameaca.");
+        }
+        ThreatSheet created = ThreatSheetStore.createBlank(player.getUUID());
+        if (created == null) {
+            return threatSheetRefuse(player, ThreatSheetStore.SaveResult.LIMIT_REACHED.message());
+        }
+        return new ThreatSheetResultPayload(true,
+                "Ficha criada: " + created.identity().name(),
+                ThreatSheetStore.snapshot(player.getUUID()),
+                created.identity().name());
     }
 
     /** Recusa com a lista vazia: quem nao e Mestre nao recebe nem a lista nem o motivo. */
     private static ThreatSheetResultPayload threatSheetRefuse(ServerPlayer player, String message) {
         boolean master = SessionManager.isMaster(player);
         List<ThreatSheet> sheets = master ? ThreatSheetStore.snapshot(player.getUUID()) : List.of();
-        return new ThreatSheetResultPayload(false, message, sheets);
+        return new ThreatSheetResultPayload(false, message, sheets, "");
     }
 
     // =====================================================================
@@ -2305,8 +2434,11 @@ public final class RpgNetworking {
      * devolver uma subarvore que estava num nivel que a tela nem estava mostrando, e o pino
      * de um card precisa saber o estado de um {@code pinSeq} que so existe no servidor. Enviar
      * um no por vez obrigaria a tela a manter cache proprio e a reconciliar; com o teto de
-     * {@link DiaryStore#MAX_ENTRIES} o pacote continua pequeno (o pior caso e ~100 KB, e o
-     * limite do vanilla e 1 MB por pacote).
+     * {@link DiaryStore#MAX_ENTRIES} o pior caso e 2048 x (40 + 2000) = ~4,18 MB, e o limite
+     * do vanilla e exatamente 1.048.576 bytes por pacote (confirmado na constante de
+     * {@code net.minecraft.network.PacketDecoder}) -- entao estourar pede ~500 entradas no
+     * tamanho maximo, o que na pratica nao acontece, mas o aviso de carga existe por isso.
+     * (07/10/2026: o comentario antigo dizia "~100 KB" e estava errado por ~40x.)
      *
      * <p><b>Por que o {@code canUndo} vem no estado e nao a tela deduz:</b> o apagado vive
      * so na memoria do servidor. Se a tela deduzisse "deu para desfazer" por ter acabado de
@@ -2318,10 +2450,22 @@ public final class RpgNetworking {
      *                do servidor, e a tela nao tem como deduzi-lo sem errar (o proximo id
      *                livre e um contador global do jogador, nao "quantas subsecoes tem").
      */
-    public record DiaryStatePayload(List<DiaryEntry> entries, boolean canUndo, int focusId,
-                                     List<Integer> pendingIds)
+    public record DiaryStatePayload(int version, List<DiaryEntry> entries, boolean canUndo,
+                                     int focusId, List<Integer> pendingIds)
             implements CustomPacketPayload {
         public static final Type<DiaryStatePayload> TYPE = new Type<>(TabletopRpg.id("diary_state"));
+
+        /**
+         * Layout do conteudo depois do numero de versao. Foi 1 quando a versao entrou.
+         *
+         * <p><b>Por que existe (07/10/2026, problema 3 autorizado pela jogadora):</b> a
+         * ordem dos campos e escrita a mao, e antes nao havia como saber se o outro lado
+         * le a mesma ordem. Cliente e servidor com versoes diferentes do mod liam os
+         * quatro campos em ordens diferentes: o {@code canUndo}, um sim/nao, virava lista
+         * -- estado lixo ou queda do servidor, sem explicacao. Com o numero na frente, o
+         * lado novo reconhece o layout velho e avisa "atualize o mod" em vez de ler lixo.
+         */
+        public static final int LAYOUT_VERSION = 1;
 
         /**
          * Escrito a mao porque {@code composite} nao tem sobrecarga de lista, e um
@@ -2335,6 +2479,15 @@ public final class RpgNetworking {
         public static final StreamCodec<FriendlyByteBuf, DiaryStatePayload> STREAM_CODEC = new StreamCodec<>() {
             @Override
             public DiaryStatePayload decode(FriendlyByteBuf buf) {
+                int version = buf.readVarInt();
+                if (version != LAYOUT_VERSION) {
+                    // Layout desconhecido: o resto do buffer pode ter qualquer forma (ate um
+                    // layout que nem tem o numero de versao). Ler alem disso e ler lixo.
+                    // Pular o que sobrar e nao aplicar estado nenhum e a resposta segura: o
+                    // receptor mostra o erro claro, e a sessao nao cai nem corrompe o diario.
+                    buf.skipBytes(buf.readableBytes());
+                    return new DiaryStatePayload(version, List.of(), false, 0, List.of());
+                }
                 // Teto na leitura: um `VarInt` de tamanho vem do outro lado, e alocar a lista
                 // pelo numero que chegou seria confiar em dado nao validado. Acima do teto do
                 // store e lixo; o que vier a mais e descartado, e o store ja recusaria criar.
@@ -2351,11 +2504,12 @@ public final class RpgNetworking {
                 for (int i = 0; i < pendingSize; i++) {
                     pendingIds.add(buf.readVarInt());
                 }
-                return new DiaryStatePayload(entries, canUndo, focus, pendingIds);
+                return new DiaryStatePayload(LAYOUT_VERSION, entries, canUndo, focus, pendingIds);
             }
 
             @Override
             public void encode(FriendlyByteBuf buf, DiaryStatePayload payload) {
+                buf.writeVarInt(payload.version());
                 buf.writeVarInt(payload.entries().size());
                 for (DiaryEntry entry : payload.entries()) {
                     DiaryEntry.STREAM_CODEC.encode(buf, entry);
@@ -2583,6 +2737,7 @@ public final class RpgNetworking {
             return;
         }
         ServerPlayNetworking.send(player, new DiaryStatePayload(
+                DiaryStatePayload.LAYOUT_VERSION,
                 DiaryStore.entries(player.getUUID()),
                 DiaryStore.canUndo(player.getUUID()),
                 focusId,

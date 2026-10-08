@@ -123,7 +123,7 @@ public class ThreatSheetsScreen extends Screen {
     }
 
     private int maxScroll() {
-        return Math.max(0, sheets().size() - visibleRows);
+        return Math.max(0, mothers().size() - visibleRows);
     }
 
     /** "Me manda a lista": o pedido e a propria tela, e nao o menu. */
@@ -142,13 +142,28 @@ public class ThreatSheetsScreen extends Screen {
                 .bounds(panelX + panelW - PAD - btnW, footerY, btnW, FOOTER_H).build());
     }
 
+    /** So as fichas MAES: as copias aparecem na coluna do editor, nao na lista
+     *  principal (07/10/2026). A lista de baixo e a rolagem usam esta contagem. */
+    private List<ThreatSheet> mothers() {
+        List<ThreatSheet> out = new ArrayList<>();
+        for (ThreatSheet sheet : sheets()) {
+            if (!sheet.isCopy()) {
+                out.add(sheet);
+            }
+        }
+        return out;
+    }
+
     private void rebuildList() {
         for (AbstractWidget old : listWidgets) {
             removeWidget(old);
         }
         listWidgets.clear();
 
-        List<ThreatSheet> sheets = sheets();
+        // As linhas sao so maes; a bolinha amarela agora vive DENTRO do botao do
+        // nome (o widget DotWidget), entao os 6 px que sobravam antes do Del
+        // voltaram para o nome.
+        List<ThreatSheet> sheets = mothers();
         int nameW = Math.max(40,
                 panelW - 2 * PAD - ROW_BTN_W - GAP - BAR_W);
         int to = Math.min(sheets.size(), listScroll + visibleRows);
@@ -182,6 +197,15 @@ public class ThreatSheetsScreen extends Screen {
                     .build();
             listWidgets.add(del);
             addRenderableWidget(del);
+
+            // Bolinha amarela de "edicao nao salva" DENTRO do botao do nome,
+            // pintada POR CIMA dele (o desenho da tela acontece antes dos widgets).
+            // O rascunho e guardado por id: a bolinha volta quando o Mestre sai da
+            // ficha sem salvar (07/10/2026).
+            DotWidget dot = new DotWidget(panelX + PAD + nameW - 8, y + ROW_H / 2 - 2,
+                    () -> ThreatSheetClientState.hasDraft(sheet.id()));
+            listWidgets.add(dot);
+            addRenderableOnly(dot);
         }
     }
 
@@ -205,15 +229,24 @@ public class ThreatSheetsScreen extends Screen {
         this.minecraft.setScreen(new ThreatSheetScreen(this, sheet, sheet.identity().name()));
     }
 
+    /**
+     * "Nova Ficha" (07/10/2026): o servidor cria a ficha em branco "Ficha N" no
+     * clique. O nome nasce no servidor para a lista mostrar a ficha mesmo quando o
+     * Mestre fecha o editor sem salvar; a resposta abre o editor na ficha criada.
+     */
     private void createNew() {
         deletePending = -1;
-        this.minecraft.setScreen(new ThreatSheetScreen(
-                this, ThreatSheet.blank(SheetModelHolder.current()), ""));
+        if (this.minecraft == null || this.minecraft.getConnection() == null) {
+            return;
+        }
+        status = "Criando ficha...";
+        statusColor = COL_MUTED;
+        ClientPlayNetworking.send(new RpgNetworking.ThreatSheetNewPayload());
     }
 
     /** O primeiro clique marca, o segundo na mesma linha apaga. */
     private void onDelete(int index) {
-        List<ThreatSheet> sheets = sheets();
+        List<ThreatSheet> sheets = mothers();
         if (index < 0 || index >= sheets.size()) {
             deletePending = -1;
             rebuildList();
@@ -230,7 +263,7 @@ public class ThreatSheetsScreen extends Screen {
     }
 
     private int thumbHeight() {
-        int total = sheets().size();
+        int total = mothers().size();
         if (total <= visibleRows) {
             return listBottom - listTop;
         }
@@ -313,11 +346,25 @@ public class ThreatSheetsScreen extends Screen {
         rebuildList();
     }
 
-    /** O save ou o apag respondeu: a mensagem vai para o rodape. */
-    public void applyResult(boolean ok, String message, List<ThreatSheet> sheets) {
+    /**
+     * O save, o apag ou o "Nova Ficha" respondeu.
+     *
+     * <p><b>O que o {@code createdName} faz:</b> quando o "Nova Ficha" cria a ficha
+     * "Ficha N" no servidor, o nome criado volta aqui e a tela abre o editor nela.
+     */
+    public void applyResult(boolean ok, String message, List<ThreatSheet> sheets,
+                            String createdName) {
         status = message == null ? "" : message;
         statusColor = statusColorFor(ok, status);
         deletePending = -1;
+        if (ok && createdName != null && !createdName.isBlank()) {
+            for (ThreatSheet sheet : sheets) {
+                if (createdName.equals(sheet.identity().name())) {
+                    open(sheet);
+                    return;
+                }
+            }
+        }
         rebuildList();
     }
 
@@ -358,7 +405,7 @@ public class ThreatSheetsScreen extends Screen {
         graphics.drawCenteredString(this.font, this.title,
                 panelX + panelW / 2, panelY + PAD, COL_TITLE);
 
-        if (sheets().isEmpty()) {
+        if (mothers().isEmpty()) {
             graphics.drawCenteredString(this.font, "Nenhuma ficha ainda.",
                     panelX + panelW / 2, listTop + 6, COL_MUTED);
         }

@@ -206,8 +206,12 @@ public final class CombatController {
     }
 
     /**
-     * Seleciona um monstro. Caminho compartilhado pelo clique e pelo {@code /rpg mob}
-     * (02/10/2026): os dois precisam produzir exatamente o mesmo estado.
+     * Seleciona um monstro. Caminho do clique direito (02/10/2026).
+     *
+     * <p><b>05/10/2026:</b> este metodo deixou de ser caminho compartilhado. O
+     * {@code /rpg mob <nome>} tambem chamava aqui, e a jogadora pediu que aquele comando
+     * abrisse a ficha em vez de selecionar. A unica porta de entrada da selecao e o
+     * clique direito, em {@code toggleSelection} acima.
      */
     public static void selectMob(ServerLevel level, ServerPlayer master, Mob mob) {
         UUID mobUuid = mob.getUUID();
@@ -318,14 +322,33 @@ public final class CombatController {
         // movimento é recusado, para o destino continuar sendo o que ele
         // clicou em vez de um lugar acima que ninguém pediu.
         //
-        // Testa a AABB que o mob teria no destino, e não só a coluna 1x1 acima
-        // do bloco: assim folha, slab, cerca, bau e placa bloqueiam, e um mob
-        // largo (ravager, ghast) tambem e recusado. `noCollision` tambem
-        // respeita a borda do mundo.
+        // Testa a AABB que o mob teria no destino, mas recortada na COLUNA do bloco
+        // clicado. A parte vertical continua valendo inteira: teto, folha, cerca, bau e
+        // placa no PRÓPRIO bloco ainda recusam, que é o que esta função protege.
+        //
+        // <b>Mudança de 05/10/2026, pedido da jogadora:</b> antes testava a AABB
+        // inteira, e um mob com mais de dois blocos de largura era recusado sempre que
+        // havia um bloco, slab ou carpete na célula vizinha -- porque a AABB dele invade
+        // as vizinhas por construção. O destino continua sendo o bloco clicado; o que
+        // deixou de contar foram as células ao lado. A jogadora aceitou o preço disso
+        // explicitamente ("o mob pode encostar/sobrepor"), então um mob largo pode
+        // terminar parcialmente dentro de um bloco vizinho. `noCollision` continua
+        // sendo quem respeita a borda do mundo.
         double dx = dest.getX() + 0.5 - mob.getX();
         double dy = groundY - mob.getY();
         double dz = dest.getZ() + 0.5 - mob.getZ();
-        if (!level.noCollision(mob, mob.getBoundingBox().move(dx, dy, dz))) {
+        AABB alvo = mob.getBoundingBox().move(dx, dy, dz);
+        // A intersecao e calculada em double antes de virar AABB, e nao depois: um
+        // recorte degenerado (pegada que nem toca a coluna) sairia com min maior que
+        // max, e a checagem tem de decidir por ela mesma, sem depender do que o
+        // `AABB` faz com caixa invertida.
+        double x0 = Math.max(alvo.minX, dest.getX());
+        double x1 = Math.min(alvo.maxX, dest.getX() + 1.0);
+        double z0 = Math.max(alvo.minZ, dest.getZ());
+        double z1 = Math.min(alvo.maxZ, dest.getZ() + 1.0);
+        boolean cobreColuna = x1 > x0 && z1 > z0;
+        if (cobreColuna
+                && !level.noCollision(mob, new AABB(x0, alvo.minY, z0, x1, alvo.maxY, z1))) {
             master.sendSystemMessage(Component.literal(
                     "§c[RPG] No room above that block to place the entity."));
             return;
