@@ -201,6 +201,9 @@ public final class SpectatorCameraController {
     /** Índice do alvo atual: 0 = si mesmo, 1+ = targets.get(index - 1). */
     private static int targetIndex = 0;
 
+    /** Contador do heartbeat diagnostico do carrossel (08/10/2026). */
+    private static int heartbeatTicks = 0;
+
     private SpectatorCameraController() {
     }
 
@@ -223,8 +226,11 @@ public final class SpectatorCameraController {
         freeCamInitialized = false;
         thirdPersonLookInitialized = false;
         freeCamPos = null;
-        // Sem isto, o primeiro tick da sessao nova compararia o id novo com o id da
-        // sessao anterior e dispararia um re-arma que nao tem nada a re-armacar.
+        // O id zerado e proposital (08/10/2026): o tick trata "0 -> id novo" como
+        // troca de entidade e re-pede a lista de alvos ao servidor no primeiro tick da
+        // sessao nova. Sem este re-arma, quem saia no meio de um modo e voltava ficava
+        // com o carrossel da sessao anterior -- mobs com camera sumiam (feedback da
+        // jogadora em 08/10/2026).
         lastPlayerEntityId = 0;
     }
 
@@ -264,6 +270,10 @@ public final class SpectatorCameraController {
 
         Minecraft client = Minecraft.getInstance();
         if (client.player != null) {
+            // Log diagnostico (08/10/2026): marca no log do cliente que o re-pedido
+            // da lista aconteceu, para o repro separar "pediu" de "recebeu".
+            TabletopRpgClient.LOGGER.info(
+                    "[TabletopRPG-Client] Entidade do jogador trocada -> pedindo lista de alvos ao servidor.");
             ClientPlayNetworking.send(new RpgNetworking.SpectatorTargetsRequestPayload());
         }
     }
@@ -424,9 +434,13 @@ public final class SpectatorCameraController {
     public static void cycleNext() {
         int size = targets.size() + 1;
         if (size <= 1) {
+            // Log diagnostico (08/10/2026): prova que o clique chegou e a lista
+            // estava vazia -- o sintoma "nao consigo trocar a camera" da jogadora.
+            TabletopRpgClient.LOGGER.info("[TabletopRPG-Client] CycleNext ignorado: carrossel sem alvos.");
             return;
         }
         targetIndex = (targetIndex + 1) % size;
+        logCycle("next");
         onTargetChanged();
     }
 
@@ -434,10 +448,48 @@ public final class SpectatorCameraController {
     public static void cyclePrev() {
         int size = targets.size() + 1;
         if (size <= 1) {
+            TabletopRpgClient.LOGGER.info("[TabletopRPG-Client] CyclePrev ignorado: carrossel sem alvos.");
             return;
         }
         targetIndex = (targetIndex - 1 + size) % size;
+        logCycle("prev");
         onTargetChanged();
+    }
+
+    /**
+     * Log diagnostico (08/10/2026): registra TODO clique do carrossel (mesmo o
+     * bem-sucedido, que antes era silencioso) e se o alvo escolhido resolve em
+     * uma entidade real no cliente. `resolvido=NULO` prova que a lista esta
+     * certa mas a entidade nao existe no cliente; `indice 0` prova que o clique
+     * avancou so ate o proprio jogador.
+     */
+    private static void logCycle(String direcao) {
+        Minecraft client = Minecraft.getInstance();
+        if (targetIndex == 0) {
+            TabletopRpgClient.LOGGER.info(
+                    "[TabletopRPG-Client] Clique carrossel ({}): indice 0 = jogador proprio.", direcao);
+            return;
+        }
+        int idx = targetIndex - 1;
+        if (client.level == null || idx < 0 || idx >= targets.size()) {
+            TabletopRpgClient.LOGGER.info(
+                    "[TabletopRPG-Client] Clique carrossel ({}): indice {} fora da lista (size={}).",
+                    direcao, targetIndex, targets.size());
+            return;
+        }
+        RpgNetworking.SpectatorTargetsPayload.TargetData t = targets.get(idx);
+        Entity entity = client.level.getEntity(t.entityId());
+        if (entity != null) {
+            TabletopRpgClient.LOGGER.info(
+                    "[TabletopRPG-Client] Clique carrossel ({}): indice {}/{} alvoId={} resolvido={} pos=({}).",
+                    direcao, targetIndex, targets.size() + 1, t.entityId(),
+                    entity.getType().getDescriptionId(),
+                    String.format("%.1f, %.1f, %.1f", entity.getX(), entity.getY(), entity.getZ()));
+        } else {
+            TabletopRpgClient.LOGGER.info(
+                    "[TabletopRPG-Client] Clique carrossel ({}): indice {}/{} alvoId={} NULO (entidade nao existe no cliente).",
+                    direcao, targetIndex, targets.size() + 1, t.entityId());
+        }
     }
 
     /** Chamado a cada tick do cliente. Liga/desliga a câmera de espectador. */
@@ -459,19 +511,49 @@ public final class SpectatorCameraController {
             return;
         }
 
-        // A entidade do cliente foi trocada: cair e voltar, ou mudar de dimensão.
+        // A entidade do cliente foi trocada: cair e voltar, mudar de dimensao, ou uma
+        // sessao nova depois do `reset()` da desconexao (08/10/2026).
         //
-        // <b>Por que comparar id e nao usar evento (05/10/2026):</b> a versão da
-        // Fabric API deste projeto (0.141.6) não tem evento de "o jogador do cliente
-        // foi trocado" — só existe o equivalente server-side, `ServerEntityWorldChangeEvents`,
-        // que não roda aqui. O `tick` já roda a cada quadro e o `id` da entidade do
-        // jogador muda justamente nos dois casos que importam, que é o mesmo fato que
-        // o `reset()` já usava para explicar por que o índice é zerado no logout.
+        // <b>Por que comparar id e nao usar evento (05/10/2026):</b> a versao da
+        // Fabric API deste projeto (0.141.6) nao tem evento de "o jogador do cliente
+        // foi trocado" -- so existe o equivalente server-side, `ServerEntityWorldChangeEvents`,
+        // que nao roda aqui. O `tick` ja roda a cada quadro e o `id` da entidade do
+        // jogador muda justamente nos dois casos que importam.
+        //
+        // <b>O caso da reconexao (08/10/2026, feedback da jogadora):</b> sair no meio
+        // de um modo (investigacao/combate) e voltar NAO muda o id de uma vez so: o
+        // `reset()` zera `lastPlayerEntityId` na desconexao, e com a guarda antiga o
+        // tick nunca pedia a lista de novo -- o carrossel ficava com a lista velha
+        // (alvos que nao existem mais) e o mob com camera sumia. Tratar "0 -> id novo"
+        // como a mesma troca de entidade re-arma a camera no primeiro tick da sessao
+        // nova (limpa a lista velha + pede a lista atual ao servidor). O push do JOIN
+        // pode chegar duplicado e e inofensivo: `setServerTargets` so substitui.
         int playerEntityId = client.player.getId();
-        if (lastPlayerEntityId != 0 && playerEntityId != lastPlayerEntityId) {
+        if (lastPlayerEntityId == 0 || playerEntityId != lastPlayerEntityId) {
             onPlayerEntityChanged();
         }
         lastPlayerEntityId = playerEntityId;
+
+        // Heartbeat diagnostico (08/10/2026): a cada 5s, mostra quantos alvos do
+        // carrossel resolvem em entidades REAIS no cliente. `resolviveis=0` com a
+        // lista certa prova que as entidades nao chegam ao cliente; `5/5` prova
+        // que o problema nao e de entidade (e sim da camera/visualizacao).
+        heartbeatTicks++;
+        if (heartbeatTicks >= 100) {
+            heartbeatTicks = 0;
+            if (client.level != null) {
+                int resolviveis = 0;
+                for (RpgNetworking.SpectatorTargetsPayload.TargetData t : targets) {
+                    if (client.level.getEntity(t.entityId()) != null) {
+                        resolviveis++;
+                    }
+                }
+                TabletopRpgClient.LOGGER.info(
+                        "[TabletopRPG-Client] Carrossel heartbeat: idx={}/{} alvos resolviveis={}/{} locked={} active={} modo={}",
+                        targetIndex, targets.size() + 1, resolviveis, targets.size(),
+                        locked, active, mode);
+            }
+        }
 
         // A camara de espectador liga em dois casos:
         //  1. o jogador esta travado (nao e o turno dele) -- cameras de
@@ -512,6 +594,11 @@ public final class SpectatorCameraController {
             freeCamInitialized = false;
             thirdPersonLookInitialized = false;
             client.setCameraEntity(client.player);
+            // Log diagnostico (08/10/2026): em que estado a camera ligou apos o
+            // rejoin (indice do carrossel e modo de camera).
+            TabletopRpgClient.LOGGER.info(
+                    "[TabletopRPG-Client] Camera de espectador ativada: modo={} idx={}/{}",
+                    mode, targetIndex, targets.size() + 1);
         }
 
         switch (mode) {

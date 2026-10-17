@@ -4,6 +4,7 @@ import com.mojang.blaze3d.platform.InputConstants;
 import com.pedro.tabletoprpg.RpgNetworking;
 import com.pedro.tabletoprpg.SheetModel;
 import com.pedro.tabletoprpg.SheetModelHolder;
+import com.pedro.tabletoprpg.item.ModItems;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
@@ -192,6 +193,34 @@ public class TabletopRpgClient implements ClientModInitializer {
     }
 
     /**
+     * Ids de entidade que devem aparecer com contorno para ESTE jogador por
+     * causa de uma Ficha de Ameaca na mao (subtask do Bug C). Preenchido pelo
+     * servidor via {@link RpgNetworking.SheetHighlightPayload}; consultado no
+     * render pelo {@code EntityRendererMixin}.
+     *
+     * <p>Vazio = nada destacado, que e o estado normal (e o que o servidor manda
+     * quando a ficha e guardada).
+     */
+    public static volatile Set<Integer> sheetHighlightIds = Set.of();
+
+    /** Esta entidade deve aparecer com contorno por causa de uma ficha na mao? */
+    public static boolean isSheetHighlighted(int entityId) {
+        return sheetHighlightIds.contains(entityId);
+    }
+
+    /**
+     * O jogador local esta segurando uma Ficha de Ameaca em alguma das maos?
+     *
+     * <p>Com a ficha na mao o contorno de mira (hover) e suspenso: quem manda no
+     * destaque passa a ser o mob vinculado a ficha, e nao o que a mira aponta.
+     */
+    public static boolean holdsThreatSheet(Player player) {
+        return player != null
+                && (ModItems.isThreatSheet(player.getMainHandItem())
+                        || ModItems.isThreatSheet(player.getOffhandItem()));
+    }
+
+    /**
      * Distância máxima (em blocos) do highlight para este jogador. O mestre
      * recebe um valor alto (ilimitado na prática); os demais recebem a
      * distância configurada pelo mestre (/rpg hoverdistance). Atualizado via
@@ -226,6 +255,10 @@ public class TabletopRpgClient implements ClientModInitializer {
             auras = List.of();
             lastHoveredId = -1;
             hoverMaxDistance = 32;
+            // O destaque de ficha e estado do mundo que esta saindo: no mundo novo
+            // os ids de entidade sao outros, e manter a lista antiga destacaria a
+            // entidade errada ate o servidor mandar a nova.
+            sheetHighlightIds = Set.of();
             dayNightCycleEnabled = true;
             playersCanBreakBlocks = false;
             playersCanPlaceBlocks = false;
@@ -540,6 +573,9 @@ public class TabletopRpgClient implements ClientModInitializer {
                 // fica travado, entao e' o fallback que menos prende o jogador.
                 int ordinal = payload.modeOrdinal();
                 gameModeOrdinal = (ordinal >= 0 && ordinal <= 2) ? ordinal : 0;
+                // Log diagnostico (08/10/2026): o repro do carrossel precisa mostrar
+                // em que estado (travado/modo) o cliente ficou ao voltar ao servidor.
+                LOGGER.info("[TabletopRPG-Client] Lock recebido: locked={} modo={}.", locked, gameModeOrdinal);
             });
         });
 
@@ -610,8 +646,24 @@ public class TabletopRpgClient implements ClientModInitializer {
         ClientPlayNetworking.registerGlobalReceiver(RpgNetworking.SpectatorTargetsPayload.TYPE, (payload, context) -> {
             context.client().execute(() -> {
                 if (context.client().player != null) {
+                    // Log diagnostico (08/10/2026): tamanho bruto recebido do servidor.
+                    LOGGER.info("[TabletopRPG-Client] SpectatorTargets recebidos: {} alvos (brutos).",
+                            payload.targets().size());
                     SpectatorCameraController.setServerTargets(payload.targets(), context.client().player.getId());
+                } else {
+                    LOGGER.warn("[TabletopRPG-Client] SpectatorTargets descartado: jogador ainda nulo ({} alvos).",
+                            payload.targets().size());
                 }
+            });
+        });
+
+        // Ficha na mao -> contorno dos mobs vinculados (subtask do Bug C). O
+        // servidor manda a lista (vazia = limpa tudo) so para quem tem a ficha.
+        ClientPlayNetworking.registerGlobalReceiver(RpgNetworking.SheetHighlightPayload.TYPE, (payload, context) -> {
+            context.client().execute(() -> {
+                sheetHighlightIds = Set.copyOf(payload.entityIds());
+                LOGGER.info("[TabletopRPG-Client] SheetHighlight recebido: {} entidade(s) -> {}",
+                        payload.entityIds().size(), payload.entityIds());
             });
         });
 
@@ -691,6 +743,16 @@ public class TabletopRpgClient implements ClientModInitializer {
         // No modo espectador o highlight (Glowing) é desnecessário: limpa o
         // hover anterior (envia -1) e não envia novos (feedback do usuário).
         if (SpectatorCameraController.isActive()) {
+            if (lastHoveredId != -1) {
+                lastHoveredId = -1;
+                ClientPlayNetworking.send(new RpgNetworking.HoverPayload(-1));
+            }
+            return;
+        }
+        // Com uma Ficha de Ameaca na mao, o contorno de MIRA some: o destaque
+        // passa a ser o mob vinculado a ficha (subtask do Bug C). Sem esta guarda,
+        // os dois contornos apareceriam juntos e nao daria para saber qual e qual.
+        if (holdsThreatSheet(client.player)) {
             if (lastHoveredId != -1) {
                 lastHoveredId = -1;
                 ClientPlayNetworking.send(new RpgNetworking.HoverPayload(-1));

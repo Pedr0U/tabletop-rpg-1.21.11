@@ -3924,3 +3924,190 @@ validacao virar uma Shooting gallery de 7 feedbacks.
   `Screen.title` e final no 1.21.11: titulo dinamico precisa de metodo proprio
   (ex. `currentTitle()` no ThreatSheetScreen). Padrao criado em 07/10/2026
   (`DotWidget`).
+
+## 08/10/2026 - Licoes do feedback (escada, camera apos sair, view por ficha)
+
+- **Reconexao nao troca a entidade do cliente de uma vez so; e o caso que o
+  fix de respawn nao cobre.** O `reset() do SpectatorCameraController zera
+  lastPlayerEntityId na desconexao; com a guarda antiga (lastPlayerEntityId
+  != 0 && id != last) o tick nunca pedia a lista de alvos de novo e o unico
+  caminho era o push do JOIN, que o receiver descarta enquanto o LocalPlayer
+  nao existe (TabletopRpgClient:612). Fix: tratar "0 -> id novo" como troca de
+  entidade no tick. Reutilizar o pedido C2S (SpectatorTargetsRequestPayload)
+  existente; push duplicado e inofensivo (setServerTargets substitui). (FATO.)
+- **Duas categorias de tags de mob:** 	abletoprpg_inserted = peca da mesa
+  (congelada, lookAt a cada tick) e 	abletoprpg_camera = visibilidade no
+  carrossel. O insertEnemy com cam_perm=true grava as DUAS; o camera tool
+  grava so a segunda e NAO congela (IA viva, por design). Todo rescan/heal que
+  junta os dois sets deve respeitar isso: so entra no insertedMobs quem tem a
+  tag de inserido. (FATO, revisado em 08/10/2026.)
+- **Colisao de destino em escada (Bug F):** a lamina de colisao da escada
+  (2px, eixo fino da VoxelShape, encostada na parede) fica DENTRO da coluna
+  clicada; mob com largura >= 2 blocos tem caixa que cobre a coluna inteira e
+  o level.noCollision recusava o destino. Excluir do AABB de teste o
+  intervalo fino da forma do PROPRiO bloco clicado (via bounds() da
+  VoxelShape, lado certo por min < 0.5) preserva a protecao real (teto, cerca,
+  bau, placa). (FATO.)
+- **Corrupcao de pipeline do PowerShell tambem afeta o gradle** (2>&1 | e
+  Select-Object marcam exit code 1 num build que passou). Sempre rodar
+  cmd /c "... && gradlew.bat build --console=plain -q > out.txt 2>&1 & echo
+  EXIT:%errorlevel%" e ler o EXIT. (FATO, reproduzido na sessao.)
+- **Reponder a lista de alvos so no JOIN e fragil: as entidades carregam
+  DEPOIS.** getSpectatorTargets resolve UUID via level.getEntity(uuid); no
+  JOIN os mobs da mesa ainda estao em carregamento assincrono -> resposta
+  vazia, e nada mais re-envia depois (so a troca de modo refaz o envio). E o
+  mecanismo exato do sintoma "so volta ao trocar de modo". (FATO, traca do
+  codigo; confirmar com o repro instrumentado.) Fix: re-broadcast no
+  ServerEntityEvents.ENTITY_LOAD quando um Mob com tabletoprpg_camera carrega
+  -- a lista se autocorrige quando as entidades passam a existir.
+- **ServerEntityEvents.ENTITY_LOAD esta em
+  net.fabricmc.fabric.api.event.lifecycle.v1 (modulo fabric-lifecycle-events-v1
+  2.6.15), NAO em fabric.api.entity.event.v1** -- fabric-entity-events-v1
+  3.1.1 nao tem a classe ServerEntityEvents (tem ServerLivingEntityEvents,
+  ServerPlayerEvents, ServerEntityWorldChangeEvents). Assinatura do evento:
+  (Entity entity, ServerWorld world); constantes ENTITY_LOAD/ENTITY_UNLOAD.
+  Verificado no sources jar. (FATO, build falhou no import errado e passou no
+  certo.)
+- **Contradicao master x locked em aberto:** carrossel so roda com
+  locked=true, mas canPlayerAct(master)=true (master nunca leva lock) -- e a
+  jogadora usa comandos que exigem master. Logs novos de sendLockToPlayer
+  (locked/modo/mestre) vao resolver com evidencia. Nao assumir nenhuma das
+  duas leituras ate o repro. (QUESTAO ABERTA.)
+- **RESOLVIDA pelos logs de08/10/2026:** o fluxo dela e claim master -> trocar
+  modo -> step down (locked=true) -> carrossel. O estado quebrado e o REJOIN ja
+  com locked=true; o pos-step-down funciona. Enquanto master o carrossel e
+  bloqueado de proposito (e' o portao `locked` do MinecraftMixin). (FATO.)
+- **ENTITY_LOAD validou a correcao de lista:** no rejoin o servidor reenviou e
+  o cliente logou "6 alvos (brutos)" -- a lista chega COMPLETA. O bug D
+  restante e cliente-side (camera/alvo), nao de lista. Distancia dos mobs ao
+  login: 4-17 blocos (medida no save) -- tracking por distancia descartado;
+  nenhum mecanismo de ocultacao existe no mod. (FATO.)
+- **Tecnica reutilizavel:** posicao de entidades de um mundo rodando lida
+  direto do save -- region file (header offsets + setor zlib) + NBT com
+  stdlib python, casando as UUIDs do log. Matou a H1 sem pedir outro repro.
+  Caveat: conteudo reflete o ultimo flush do servidor, nao necessariamente o
+  instante atual. (FATO, script em %TEMP%/opencode/find_mobs.py.)
+- **Log de sucesso e obrigatorio em flusos silenciosos:** o ciclo do carrossel
+  so logava o caminho vazio; o caso "clicou com lista cheia e entidade nao
+  resolve" ficou invisivel. Todo caminho de sucesso que e' hipotese de falha
+  precisa de log. (Licao, rodada3.)
+- **CORRECAO (rodada 4, 16/10/2026): o bug D NAO e cliente-side.** A hipotese
+  acima ("restante e cliente-side") esta ERRADA. O cliente so nao tinha as
+  entidades porque o servidor nao as enviou no join. (FATO por log do servidor
+  + prova por contradicao.)
+- **Log do servidor fica em disco:** `tabletop-rpg-1.21.11/run/logs/*.log.gz`
+  (rotacionado por sessao, `latest.log` = sessao corrente). NUNCA pedir o log do
+  servidor a jogadora antes de ler o disco. (FATO, rodada 4.)
+- **Caminho unico de envio de spawn (vanilla 1.21.11):** `ChunkMap.move(player)`
+  (ChunkMap.java:1070) -> `TrackedEntity.updatePlayer` (1391) -> 3 condicoes
+  (distancia horizontal; `broadcastToPlayer` default true; `isChunkTracked`) ->
+  `seenBy.add` + `ServerEntity.addPairing` (envia ClientboundAddEntityPacket).
+  `ChunkMap.move` so e' chamado por pacote de movimento processado
+  (`handleMovePlayer`:1132), camera/veiculo. Como o mixin cancela
+  `handleMovePlayer` de jogador preso, jogador preso nunca reavalia tracking; ao
+  destravar, o 1o move reenvia tudo. (FATO, sources lidos.)
+- **Fabric ENTITY_LOAD dispara no TAIL de `onTrackingStart`** (after
+  `ChunkMap.addEntity`/entityMap.put), e `removeEntity` apaga o TrackedEntity no
+  tracking end. Ou seja: a linha ENTITY_LOAD do log = entidade ja no entityMap.
+  (FATO, fabric-lifecycle-events-v1 2.6.15.)
+- **`ServerEntityTrackingEvents` NAO existe nesta versao do Fabric API** (nao
+  esta em lifecycle nem em entity-events). Para prova de tracking por jogador,
+  mixin em `net.minecraft.server.level.ServerEntity#addPairing/removePairing`.
+  (FATO, jar inspecionado.)
+- **Tecnica: `gradlew genSources`** gera sources legiveis do Minecraft em
+  `.gradle/loom-cache/minecraftMaven/.../*-sources.jar`; extrair e ler antes de
+  teorizar mecanica vanilla. Melhor que adivinhar. (FATO, rodada 4.)
+- **`ClientboundRemoveEntitiesPacket` getter = `getEntityIds()`** (`IntList`);
+  `ClientboundAddEntityPacket` = `getId()`/`getType()`/`getX()`/`getY()`/`getZ()`.
+  (FATO, sources.)
+- **CAUSA RAIZ DO BUG D (FATO, 16/10/2026, fonte vanilla + 2 logs):**
+  `ChunkMap.TrackedEntity.updatePlayer` (ChunkMap.java:1391-1401) exige
+  `e <= f && entity.broadcastToPlayer(p) && isChunkTracked(p, chunkX, chunkZ)`, e
+  `isChunkTracked` (ChunkMap.java:230-232) e
+  `getChunkTrackingView().contains(i,j) && !p.connection.chunkSender.isPending(ChunkPos.asLong(i,j))`.
+  No JOIN, `updatePlayerStatus(p,true)` (1042) zera a view (1052) e
+  `updateChunkTracking` (1053) marca TODOS os chunks da vista como pendentes ->
+  `isChunkTracked` = false -> o loop de join (1163-1167) nao envia NADA. O unico
+  gatilho posterior e `ChunkMap.move(player)` (1070), chamado por
+  `handleMovePlayer`. O mixin cancela `handleMovePlayer` com `!canPlayerAct` ->
+  jogador preso nunca recebe spawn. Ao destravar, o 1o movimento envia tudo.
+  (Prova: join travado 22:55:46 -> ZERO `DIAG spawn ENVIADO` por 37s; unlock
+  22:56:23 -> 5 ENVIADOS no mesmo segundo; join destravado -> envio ~2s apos o
+  login, nao no join.)
+- **FIX CANDIDATO DO BUG D (nao implementado, adiado):** no ramo `!canPlayerAct`
+  do `ServerGamePacketListenerImplMixin`, chamar
+  `player.level().getChunkSource().move(player)` antes do `ci.cancel()`.
+  `ChunkMap.move` so reavalia tracking -- nao move o corpo nem aceita posicao.
+  (Candidato alternativo: forcar `move` no `sendLockToPlayer(locked=true)`; pior,
+  nao cobre chunks que ficam prontos depois do lock.)
+- **O que foi tentado no bug D e NAO resolveu (nao repetir):** (1) guarda de
+  cliente `lastPlayerEntityId==0` para re-pedir a lista -- so o pedido; (2)
+  re-broadcast da lista no ENTITY_LOAD -- a lista passou a chegar completa mas as
+  ENTIDADES continuaram ausentes (tratava o sintoma); (3) hipoteses mortas:
+  lista vazia no join, "bug D e cliente-side", tracking por distancia,
+  view-distance, ocultacao/remocao no cliente, teleporte pendente, cliente
+  descartar o bundle (impossivel: haveria reenvio no unlock -- nao haveria).
+  (FATO, rodadas 1-4.)
+- **Instrumentacao de prova de spawn (mantida no build):** `ServerEntityMixin`
+  (`ServerEntity#addPairing`/`removePairing`, so tag `tabletoprpg_camera`) e
+  `ClientPacketListenerMixin` (`handleAddEntity` creeper/iron_golem,
+  `handleRemoveEntities`). 3 camadas: addPairing (servidor) -> handleAddEntity
+  (cliente) -> `getEntity` no tick. (FATO.)
+- **Padrao de sintoma:** "a lista de alvos chega certa mas as entidades nao
+  existem no cliente" NAO e problema de lista -- e envio de spawn no servidor.
+  Logar `addPairing` fechou em 1 repro o que 3 rodadas de log no cliente nao
+  fecharam. (Licao, rodada 4.)
+
+## Highlight da ficha na mao (subtask do Bug C, 16/10/2026)
+
+- **REQUISITO:** mestre segurando `threat_sheet` vinculada -> contorno no mob
+  vinculado, qualquer mao, atraves de paredes, sem limite de distancia, e o
+  hover de mira SOME enquanto segura. So o mestre. (Decisoes da jogadora.)
+- **Desenho:** o SERVIDOR decide (so ele conhece o vinculo ficha -> mob) e manda
+  `SheetHighlightPayload(List<Integer>)` (S2C, id `sheet_highlight`) so para o
+  mestre; o CLIENTE so desenha. Novo `SheetHighlightManager` faz isso no
+  `END_SERVER_TICK`; envia SO quando muda; loga cada envio. (FATO.)
+- **Onde o contorno e decidido no cliente:** `EntityRendererMixin` (@Redirect em
+  `Minecraft#shouldEntityAppearGlowing`, `extractRenderState`) -- e o ponto unico
+  de "quem brilha" no mod. Ele ja cobria o hover; agora `|| isSheetHighlighted`.
+  Qualquer novo destaque per-player deve passar por aqui. (FATO.)
+- **Checklist para adicionar um payload S2C (padrao do projeto):** record
+  `implements CustomPacketPayload` com `TYPE` = `new Type<>(TabletopRpg.id("..."))`
+  e `STREAM_CODEC` (`StreamCodec.composite` ou `ByteBufCodecs.VAR_INT.apply(
+  ByteBufCodecs.list())` para lista de ints); registrar em
+  `RpgNetworking.registerPayloads()`; `ClientPlayNetworking.registerGlobalReceiver
+  (..., (payload, context) -> context.client().execute(() -> ...))` no
+  `TabletopRpgClient`; limpar o estado no DISCONNECT. (FATO.)
+- **GOTCHA de mapeamento:** `ServerPlayer.level()` JA retorna `ServerLevel` (fonte
+  vanilla, `ServerPlayer.java:1708`); NAO existe `serverLevel()` nesta versao
+  (o build falha com "cannot find symbol"). Para o nivel do jogador use
+  `player.level()` ou o cast `(ServerLevel) player.level()`, como o resto do mod.
+  (FATO, erro de compilacao real.)
+- **FACT:** `Entity.ENTITY_COUNTER` e um `private static final AtomicInteger`
+  (Entity.java:187) -> ids de entidade sao unicos no SERVIDOR INTEIRO, nao por
+  dimensao. Um id antigo nunca casa com outra entidade depois de trocar de
+  mundo. (FATO, fonte vanilla.)
+- **A ficha so chega ao proprio mestre:** `ModItems.giveThreatSheet(master, ...)`
+  e chamado em `MasterCommands.java:580` com o proprio mestre -> nao existe, pelo
+  mod, um nao-mestre segurando ficha. (FATO.)
+- **LICAO DE REVISAO (defeito real pego em revisao):** cache de deteccao de
+  mudanca tem de incluir TODA entrada que muda a resposta. O estado guardava so
+  a assinatura da mao; ganhar o posto de Mestre com a ficha JA na mao nao mudava
+  a mao, entao o contorno so aparecia no refresh seguinte (ate 1s de atraso).
+  Corrigido guardando tambem `master` no estado. Ao comparar "mudou?", liste as
+  entradas, nao so a mais obvia. (Licao, 16/10/2026.)
+- **LICAO DE PROVA DE ASCII (tecnica):** o gate `scanEncoding` do projeto imprime
+  o total de caracteres nao-ASCII. Rodar o build antes e depois e comparar o
+  NUMERO e uma prova objetiva de que o texto novo e ASCII puro (aqui: 9771 nas
+  duas vezes; o arquivo novo tinha 0). Melhor que inspecionar linha a linha.
+  (Licao, 16/10/2026.)
+- **Validacao de artefato:** conferir no jar (`build/libs/*.jar`, zipfile) que a
+  classe nova existe: `SheetHighlightManager.class`, `$Sent.class`,
+  `RpgNetworking$SheetHighlightPayload.class`. Build verde NAO garante que a
+  classe entrou no jar; procurar o caminho de classe e barato. (FATO.)
+- **VALIDADO EM JOGO (17/10/2026):** a jogadora confirmou o highlight da ficha em
+  jogo ("esta funcionando bem"): contorno no mob vinculado com a ficha em qualquer
+  mao, o hover de mira some enquanto segura, e nada aparece para os outros. O
+  desenho do contorno e o mecanismo do hover que ja existia, entao o risco estava
+  na logica de decisao/envio, nao no render. (FATO.)
+
