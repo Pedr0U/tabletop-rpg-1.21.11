@@ -132,8 +132,9 @@ public class MasterCommands {
                     .then(Commands.literal("camera")
                         .executes(MasterCommands::insertCamera)))
 
-                // /rpg mob view <nome>  (só o mestre) -> ABRE A FICHA do monstro com aquele
-                // nome de exibição.
+                // /rpg mob view <nome>  (so o mestre) -> ABRE A FICHA com aquele NOME DE FICHA.
+                // O nome da ficha e unico no store; o nome de exibicao (do mob amarrado)
+                // pode se repetir e causava conflito (feedback da jogadora em 08/10/2026).
                 // /rpg mob give <nome>  (so o mestre) -> ENTREGA NO INVENTARIO o item da
                 // ficha do Mestre com aquele NOME DE FICHA (funciona mesmo sem mob no
                 // mundo, a qualquer hora -- feedback da jogadora em 07/10/2026).
@@ -155,7 +156,7 @@ public class MasterCommands {
                 .then(Commands.literal("mob")
                     .then(Commands.literal("view")
                         .then(Commands.argument("name", StringArgumentType.greedyString())
-                            .suggests(MasterCommands::suggestBoundMobs)
+                            .suggests(MasterCommands::suggestSheetNames)
                             .executes(MasterCommands::openMobSheetByName)))
                     .then(Commands.literal("give")
                         .then(Commands.argument("name", StringArgumentType.greedyString())
@@ -502,20 +503,27 @@ public class MasterCommands {
     }
 
     /**
-     * /rpg mob &lt;nome&gt;: ABRE a ficha de ameaça amarrada ao mob com aquele nome de
-     * exibição.
+     * /rpg mob view &lt;nome&gt;: ABRE a ficha de ameaca com aquele NOME DE FICHA.
      *
-     * <p><b>Mudança de 05/10/2026, pedido da jogadora:</b> este comando antes
+     * <p><b>Mudanca de 08/10/2026, feedback da jogadora:</b> antes o comando resolvia
+     * pelo NOME DE EXIBICAO do mob amarrado, e nomes de exibicao podem se repetir --
+     * dois mobs com o mesmo nome davam o aviso de ambiguidade. O nome da FICHA e unico
+     * no store (o save recusa duplicado), entao o view passou a resolver por ele,
+     * exatamente como o give. A ficha nem precisa estar amarrada a um mob para ser
+     * aberta; se estiver armada mas o mob nao estiver no mundo, ela abre do mesmo jeito
+     * (a amarra e so o caminho de abrir pelo mundo, nao um requisito).
+     *
+     * <p><b>Mudanca de 05/10/2026, pedido da jogadora:</b> este comando antes
      * SELECIONAVA o mob (congelava com {@code setNoAi} e armava o teletransporte do
-     * clique direito). Agora abre a ficha. Selecionar continua existindo, mas só pelo
-     * clique direito no mob, em {@code CombatController.toggleSelection}: a seleção por
-     * nome saiu de propósito, não por esquecimento.
+     * clique direito). Agora abre a ficha. Selecionar continua existindo, mas so pelo
+     * clique direito no mob, em {@code CombatController.toggleSelection}: a selecao por
+     * nome saiu de proposito, nao por esquecimento.
      *
-     * <p><b>Por que preciso deste comando:</b> o vanilla não cita criatura por nome em
-     * comando nenhum. {@code /tp} aceita seletor, e o seletor {@code @e[name="..."]} só
-     * acha quem tem nome customizado — ou seja, quem o Mestre já amarrou a uma ficha. Sem
- * * este comando, o caminho seria clicar com o botão direito, e isso não escala para
- * cima de uma mesa com dez ameaças (02/10/2026).
+     * <p><b>Por que preciso deste comando:</b> o vanilla nao cita criatura por nome em
+     * comando nenhum. {@code /tp} aceita seletor, e o seletor {@code @e[name="..."]} so
+     * acha quem tem nome customizado -- ou seja, quem o Mestre ja amarrou a uma ficha. Sem
+     * este comando, o caminho seria clicar com o botao direito, e isso nao escala para
+     * cima de uma mesa com dez ameacas (02/10/2026).
      */
     private static int openMobSheetByName(CommandContext<CommandSourceStack> ctx) {
         if (!verifyMasterPermission(ctx)) return 0;
@@ -524,25 +532,13 @@ public class MasterCommands {
             String rawName = StringArgumentType.getString(ctx, "name");
             String wanted = RollPreset.normalizeKey(rawName);
             if (wanted.isEmpty()) {
-                ctx.getSource().sendFailure(Component.literal("§c[RPG] Diga o nome de exibição da ameaça."));
+                ctx.getSource().sendFailure(Component.literal("§c[RPG] Diga o nome da ameaca."));
                 return 0;
             }
-            Mob mob = findBoundMobByName(ctx, master, wanted, rawName);
-            if (mob == null) {
-                // O helper ja mandou a falha (sem achado ou nome ambiguo).
-                return 0;
-            }
-            // O id ja veio no filtro do helper (linha do `sheetOf`): o comando achava a
-            // ficha e jogava fora. E ela que o `sendThreatSheetOpen` precisa.
-            String sheetId = ThreatSheetBinding.sheetOf(mob);
-            ThreatSheet sheet = ThreatSheetStore.findById(master.getUUID(), sheetId);
+            ThreatSheet sheet = ThreatSheetStore.find(master.getUUID(), wanted);
             if (sheet == null) {
-                // O mob tem a etiqueta de amarra mas a ficha nao esta no store. O
-                // `unbind` passa pelo `selfHeal`, entao isso nao acontece no caminho
-                // normal; se acontecer (store recarregado), avisar e recusar e melhor
-                // do que abrir uma tela vazia sem dizer por que ela esta vazia.
-                ctx.getSource().sendFailure(
-                        Component.literal("§c[RPG] The threat sheet bound to this mob is gone."));
+                ctx.getSource().sendFailure(Component.literal(
+                        "§c[RPG] Nenhuma ficha de ameaca com o nome \"" + rawName + "\"."));
                 return 0;
             }
             RpgNetworking.sendThreatSheetOpen(master, sheet);
@@ -599,63 +595,6 @@ public class MasterCommands {
     }
 
     /**
-     * O UNICO mob amarrado a uma ficha cujo nome de exibicao casa com {@code wanted}
-     * (normalizado), ou {@code null} com a falha ja enviada.
-     *
-     * <p><b>Por que so quem tem ficha conta:</b> sem ficha o nome e o do vanilla e nao
-     * distingue duas criaturas iguais. E <b>por que dois hits recusam:</b> duas
-     * criaturas com o mesmo nome dao um {@code @e[name=...]} ambiguo -- dizer isso e
-     * melhor do que escolher uma e o Mestre achar que escolheu.
-     */
-    private static Mob findBoundMobByName(CommandContext<CommandSourceStack> ctx,
-                                          ServerPlayer master, String wanted, String rawName) {
-        List<Mob> hits = new ArrayList<>();
-        for (ServerLevel level : master.level().getServer().getAllLevels()) {
-            for (Entity entity : level.getAllEntities()) {
-                if (!(entity instanceof Mob mob)) {
-                    continue;
-                }
-                if (ThreatSheetBinding.sheetOf(mob).isEmpty() || mob.getCustomName() == null) {
-                    continue;
-                }
-                if (RollPreset.normalizeKey(mob.getCustomName().getString()).equals(wanted)) {
-                    hits.add(mob);
-                }
-            }
-        }
-        if (hits.isEmpty()) {
-            ctx.getSource().sendFailure(Component.literal("§c[RPG] Nenhuma ameaça amarrada com o nome \""
-                    + rawName + "\"."));
-            return null;
-        }
-        if (hits.size() > 1) {
-            ctx.getSource().sendFailure(Component.literal("§c[RPG] " + hits.size()
-                    + " ameaças usam esse nome. Deixe o nome de exibição delas diferente."));
-            return null;
-        }
-        return hits.get(0);
-    }
-
-    /** Sugere os nomes de exibição das fichas do Mestre: é o que ele digitou ao amarrar. */
-    private static CompletableFuture<Suggestions> suggestBoundMobs(
-            CommandContext<CommandSourceStack> ctx, SuggestionsBuilder builder) {
-        String remaining = builder.getRemaining().toLowerCase(Locale.ROOT);
-        try {
-            ServerPlayer master = ctx.getSource().getPlayerOrException();
-            for (ThreatSheet sheet : ThreatSheetStore.snapshot(master.getUUID())) {
-                String name = sheet.identity().displayName();
-                if (!name.isEmpty() && name.toLowerCase(Locale.ROOT).startsWith(remaining)) {
-                    builder.suggest(name);
-                }
-            }
-        } catch (Exception ignored) {
-            // Sugestao nunca recusa o comando: se o jogador nao for um jogador, o
-            // autocomplete fica vazio e o comando segue dando o erro dele mesmo.
-        }
-        return builder.buildFuture();
-    }
-
-    /**
      * Sugere os nomes de FICHA do Mestre (nao de mob): e o que o give usa para achar
      * a ficha e entregar o item, esteja ela vinculada a um mob ou nao.
      */
@@ -671,7 +610,7 @@ public class MasterCommands {
                 }
             }
         } catch (Exception ignored) {
-            // Sugestao nunca recusa o comando (mesma regra do suggestBoundMobs).
+            // Sugestao nunca recusa o comando (mesma regra do view, que tambem usa nomes de ficha).
         }
         return builder.buildFuture();
     }

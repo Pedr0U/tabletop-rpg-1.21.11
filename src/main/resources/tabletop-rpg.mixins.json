@@ -12,7 +12,8 @@
   ],
   "server": [
     "ServerGamePacketListenerImplMixin",
-    "ServerGamePacketListenerImplAccessor"
+    "ServerGamePacketListenerImplAccessor",
+    "ServerEntityMixin"
   ],
   "injectors": {
     "defaultRequire": 1

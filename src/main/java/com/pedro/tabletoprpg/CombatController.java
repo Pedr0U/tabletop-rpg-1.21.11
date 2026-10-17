@@ -346,6 +346,33 @@ public final class CombatController {
         double x1 = Math.min(alvo.maxX, dest.getX() + 1.0);
         double z0 = Math.max(alvo.minZ, dest.getZ());
         double z1 = Math.min(alvo.maxZ, dest.getZ() + 1.0);
+        // ESCADA (caso 1 do comentario acima): o mob fica com os pes no FUNDO do bloco
+        // da escada, ou seja, DENTRO da coluna clicada, e a escada tem uma lamina de
+        // colisao de 2px encostada na parede. Um mob largo (mais de 2 blocos) tem caixa
+        // que cobre a coluna inteira, e sem esta excecao a propria lamina recusava o
+        // destino ("No room above that block to place the entity."), mesmo depois da
+        // mudanca de 05/10/2026 que ja ignorava as celulas vizinhas. A jogadora aceitou
+        // a sobreposicao ("o mob pode encostar/sobrepor"), entao a lamina da propria
+        // escada nao conta como obstaculo: excluimos o intervalo fino dela do teste,
+        // mantendo o resto da coluna coberto (teto, cerca, bau e placa continuam
+        // recusando).
+        if (clicked.is(Blocks.LADDER) && !clickedShape.isEmpty()) {
+            AABB escada = clickedShape.bounds();
+            if (escada.getXsize() < 1.0) {
+                if (escada.minX < 0.5) {
+                    x0 = Math.max(x0, dest.getX() + escada.maxX);
+                } else {
+                    x1 = Math.min(x1, dest.getX() + escada.minX);
+                }
+            }
+            if (escada.getZsize() < 1.0) {
+                if (escada.minZ < 0.5) {
+                    z0 = Math.max(z0, dest.getZ() + escada.maxZ);
+                } else {
+                    z1 = Math.min(z1, dest.getZ() + escada.minZ);
+                }
+            }
+        }
         boolean cobreColuna = x1 > x0 && z1 > z0;
         if (cobreColuna
                 && !level.noCollision(mob, new AABB(x0, alvo.minY, z0, x1, alvo.maxY, z1))) {
@@ -572,20 +599,30 @@ public final class CombatController {
     }
 
     /**
-     * Auto-recuperação dos mobs com câmera após reiniciar o servidor: os mobs
-     * persistem no mundo (com a marca NBT "tabletoprpg_camera" gravada em
-     * insertEnemy), mas o Set em memória é perdido. Re-registra os que ainda
-     * existem. Chamado ao montar a lista de alvos do carrossel.
+     * Auto-recuperacao dos mobs com camera (marca NBT "tabletoprpg_camera"): os mobs
+     * persistem no mundo, mas o Set em memoria pode ser perdido (JVM nova) ou ficar
+     * incompleto (chunk ainda nao carregado quando um scan rodou).
+     *
+     * <p><b>Por que re-varre sempre (08/10/2026):</b> antes a varredura so rodava com o
+     * Set vazio; se o primeiro scan achava so os mobs dos chunks ja carregados, o Set
+     * ficava cheio e os mobs com camera em chunk carregado depois nunca entravam no
+     * carrossel. A varredura roda so ao montar a lista de alvos (JOIN, troca de modo,
+     * toggle de camera) -- custo irrelevante para sessao de mesa.
+     *
+     * <p><b>Peca vs criatura viva:</b> so entram no lookAt (insertedMobs) os mobs que
+     * TAMBEM tem a tag "tabletoprpg_inserted" (insertEnemy com cam_perm=true, peca
+     * congelada). Os mobs do camera tool NAO ganham essa tag por design (IA viva) e
+     * ficam so no carrossel. Remocoes legitimas nao voltam: a camera tool remove a
+     * tag, e os mobs removidos (discard/morto) nao estao mais no mundo.
      */
     public static void selfHealCameraMobs(MinecraftServer server) {
-        if (!cameraMobs.isEmpty()) {
-            return;
-        }
         for (ServerLevel level : server.getAllLevels()) {
             for (Entity e : level.getAllEntities()) {
                 if (e instanceof Mob mob && mob.getTags().contains("tabletoprpg_camera")) {
                     cameraMobs.add(mob.getUUID());
-                    insertedMobs.add(mob.getUUID());
+                    if (mob.getTags().contains("tabletoprpg_inserted")) {
+                        insertedMobs.add(mob.getUUID());
+                    }
                 }
             }
         }

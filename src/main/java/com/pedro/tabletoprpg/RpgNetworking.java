@@ -1,6 +1,7 @@
 package com.pedro.tabletoprpg;
 
 import com.pedro.tabletoprpg.item.ModItems;
+import net.fabricmc.fabric.api.event.lifecycle.v1.ServerEntityEvents;
 import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
@@ -557,6 +558,34 @@ public final class RpgNetworking {
                     ByteBufCodecs.BOOL, TargetData::isPlayer,
                     TargetData::new
             );
+        }
+    }
+
+    /**
+     * Servidor -> Cliente: ids das entidades que devem aparecer com contorno para
+     * ESTE jogador por causa de uma Ficha de Ameaca que ele esta segurando
+     * (subtask do Bug C, 16/10/2026).
+     *
+     * <p><b>Por que o servidor decide:</b> o contorno e desenhado no cliente (ver
+     * {@code EntityRendererMixin}), mas quem conhece o vinculo ficha -> mob e o
+     * servidor. O pacote vai SO para quem tem a ficha na mao -- nenhum outro
+     * cliente destaca nada.
+     *
+     * <p><b>Por que uma LISTA e nao um id:</b> a ficha pode estar nas DUAS maos, e
+     * cada uma pode apontar para um mob diferente. Lista VAZIA significa "nao
+     * destaque nada" e e enviada quando o jogador guarda a ficha (ou perde o posto
+     * de Mestre) -- sem isso o contorno ficaria preso na tela.
+     */
+    public record SheetHighlightPayload(List<Integer> entityIds) implements CustomPacketPayload {
+        public static final Type<SheetHighlightPayload> TYPE = new Type<>(TabletopRpg.id("sheet_highlight"));
+        public static final StreamCodec<FriendlyByteBuf, SheetHighlightPayload> STREAM_CODEC = StreamCodec.composite(
+                ByteBufCodecs.VAR_INT.apply(ByteBufCodecs.list()), SheetHighlightPayload::entityIds,
+                SheetHighlightPayload::new
+        );
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
         }
     }
 
@@ -1507,6 +1536,9 @@ public final class RpgNetworking {
         // e sempre do Mestre.
         PayloadTypeRegistry.playS2C().register(SheetModelPayload.TYPE, SheetModelPayload.STREAM_CODEC);
         PayloadTypeRegistry.playC2S().register(SheetModelSavePayload.TYPE, SheetModelSavePayload.STREAM_CODEC);
+
+        // Ficha na mao -> contorno dos mobs vinculados, so para o dono da ficha.
+        PayloadTypeRegistry.playS2C().register(SheetHighlightPayload.TYPE, SheetHighlightPayload.STREAM_CODEC);
     }
 
     /**
@@ -1526,6 +1558,21 @@ public final class RpgNetworking {
 
     /** Registra os receptores no lado do servidor. */
     public static void registerServerReceivers() {
+        // Mob com camera entrou no mundo (chunk carregado): monta a lista e REENVIA
+        // para todos. Este e o unico gatilho que nao depende de timing: o JOIN e o
+        // re-pedido do cliente acontecem no primeiro instante, quando as entidades do
+        // mundo ainda nao terminaram de carregar, e a lista saia sem os mobs -- o
+        // carrossel so voltava a funcionar na troca de modo seguinte, que reconstruia
+        // a lista tarde o suficiente. Agora a lista se atualiza sozinha no momento
+        // exato em que os mobs ficam espectaveis (feedback da jogadora, 08/10/2026).
+        ServerEntityEvents.ENTITY_LOAD.register((entity, world) -> {
+            if (entity instanceof Mob mob && mob.getTags().contains("tabletoprpg_camera")) {
+                TabletopRpg.LOGGER.info("[TabletopRPG] Mob com camera carregado no mundo: {} -> reenviando alvos do carrossel.",
+                        mob.getUUID());
+                sendSpectatorTargetsToAll(world.getServer());
+            }
+        });
+
         ServerPlayNetworking.registerGlobalReceiver(MenuRequestPayload.TYPE, (payload, context) -> {
             TabletopRpg.LOGGER.info("[TabletopRPG] MenuRequestPayload recebido de {} -> enviando dados da sessão.",
                     context.player().getName().getString());
@@ -3038,8 +3085,12 @@ public final class RpgNetworking {
         if (player == null || player.connection == null) {
             return;
         }
-        ServerPlayNetworking.send(player,
-                PlayerLockPayload.of(!SessionManager.canPlayerAct(player), SessionManager.getMode()));
+        boolean lock = !SessionManager.canPlayerAct(player);
+        // Log diagnostico (08/10/2026): registra trava, modo e papel a cada envio,
+        // para o repro do carrossel mostrar em que estado o cliente entrou ao voltar.
+        TabletopRpg.LOGGER.info("[TabletopRPG] sendLockToPlayer para {}: locked={} modo={} mestre={}",
+                player.getName().getString(), lock, SessionManager.getMode(), SessionManager.isMaster(player));
+        ServerPlayNetworking.send(player, PlayerLockPayload.of(lock, SessionManager.getMode()));
     }
 
     /**
@@ -3329,7 +3380,9 @@ public final class RpgNetworking {
             return;
         }
         MinecraftServer server = player.level().getServer();
-        ServerPlayNetworking.send(player, new SpectatorTargetsPayload(getSpectatorTargets(server)));
+        List<SpectatorTargetsPayload.TargetData> targets = getSpectatorTargets(server);
+        logSpectatorTargets("para " + player.getName().getString(), targets);
+        ServerPlayNetworking.send(player, new SpectatorTargetsPayload(targets));
     }
 
     /** Envia a lista de alvos do carrossel para todos os jogadores. */
@@ -3337,10 +3390,22 @@ public final class RpgNetworking {
         if (server == null) {
             return;
         }
-        SpectatorTargetsPayload payload = new SpectatorTargetsPayload(getSpectatorTargets(server));
+        List<SpectatorTargetsPayload.TargetData> targets = getSpectatorTargets(server);
+        logSpectatorTargets("para todos", targets);
+        SpectatorTargetsPayload payload = new SpectatorTargetsPayload(targets);
         for (ServerPlayer player : server.getPlayerList().getPlayers()) {
             ServerPlayNetworking.send(player, payload);
         }
+    }
+
+    /**
+     * Log diagnostico (08/10/2026): tamanho da lista e quantos dela sao mobs.
+     * O repro do carrossel precisa mostrar se a resposta saiu vazia no JOIN
+     * (entidades ainda carregando) e quando ela volta cheia (ENTITY_LOAD).
+     */
+    private static void logSpectatorTargets(String destino, List<SpectatorTargetsPayload.TargetData> targets) {
+        long mobs = targets.stream().filter(t -> !t.isPlayer()).count();
+        TabletopRpg.LOGGER.info("[TabletopRPG] SpectatorTargets {}: {} alvos ({} mobs).", destino, targets.size(), mobs);
     }
 
     /** Envia o UUID do jogador ativo (turno) para um jogador. */

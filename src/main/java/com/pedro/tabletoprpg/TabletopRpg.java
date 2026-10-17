@@ -49,6 +49,11 @@ public class TabletopRpg implements ModInitializer {
 		// Registra o controle de combate (seleção/movimento de monstros, auras, highlight)
 		CombatController.register();
 
+		// Highlight da Ficha de Ameaca na mao (subtask do Bug C). Depende do
+		// registro dos payloads e roda no fim do tick, entao a ordem aqui nao
+		// importa; o payload `sheet_highlight` e enviado so quando muda.
+		SheetHighlightManager.register();
+
 		// Registra os payloads de rede (comum) e os receptores do lado servidor
 		RpgNetworking.registerPayloads();
 		RpgNetworking.registerServerReceivers();

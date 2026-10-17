@@ -28,20 +28,33 @@ import org.spongepowered.asm.mixin.injection.Redirect;
  *
  * <p>Ou seja: o contorno do destaque é renderizado no cliente de quem
  * hoverou — ninguém mais vê (nem o efeito Glowing vanilla é mais aplicado).
+ *
+ * <p><b>Segundo caso (subtask do Bug C, 16/10/2026):</b> entidades que o servidor
+ * mandou destacar por causa de uma Ficha de Ameaca que o jogador local está
+ * segurando ({@link TabletopRpgClient#isSheetHighlighted(int)}, alimentado pelo
+ * {@code SheetHighlightPayload}). Esse contorno não passa pelo hover: ele vale
+ * mesmo com a entidade atrás de uma parede e fora da mira, e continua aceso
+ * enquanto a ficha estiver na mão.
+ *
+ * <p>Os dois casos convivem na mesma resposta, mas nunca ao mesmo tempo na
+ * prática: com a ficha na mão o hover é suspenso (ver
+ * {@link TabletopRpgClient#holdsThreatSheet}).
  */
 @Mixin(EntityRenderer.class)
 public abstract class EntityRendererMixin {
 
     /**
      * Marca como "brilhante" apenas a entidade que o jogador local está
-     * mirando. Todos os outros mobs retornam {@code false} (sem contorno)
-     * mesmo que o efeito GLOWING não exista mais no servidor — para um
-     * jogador que NÃO está mirando nada, nada fica destacado.
+     * mirando, ou que o servidor mandou destacar por causa da ficha na mão.
+     * Todos os outros mobs retornam {@code false} (sem contorno) mesmo que o
+     * efeito GLOWING não exista mais no servidor — para um jogador que NÃO está
+     * mirando nada, nada fica destacado.
      */
     @Redirect(
             method = "extractRenderState(Lnet/minecraft/world/entity/Entity;Lnet/minecraft/client/renderer/entity/state/EntityRenderState;F)V",
             at = @At(value = "INVOKE", target = "Lnet/minecraft/client/Minecraft;shouldEntityAppearGlowing(Lnet/minecraft/world/entity/Entity;)Z"))
     private boolean tabletopRpg$glowOnlyForHover(Minecraft minecraft, Entity entity) {
-        return entity.getId() == TabletopRpgClient.getHoveredEntityId();
+        return entity.getId() == TabletopRpgClient.getHoveredEntityId()
+                || TabletopRpgClient.isSheetHighlighted(entity.getId());
     }
 }
