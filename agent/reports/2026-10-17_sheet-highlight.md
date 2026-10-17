@@ -3,10 +3,12 @@
 ## Status
 CONCLUIDO E VALIDADO EM JOGO (17/10/2026). Build verde, gate de encoding verde,
 classe presente no jar, e a jogadora confirmou o comportamento em jogo
-("esta funcionando bem"). Incluido no commit desta sessao, junto com o lote de
+("esta funcionando bem"). Incluido no commit `a7b3b38`, junto com o lote de
 08/10/2026 (escada / camera / comandos / diagnostico do bug D), que esteve
-parado sem commit. Bug D (camera espectador no rejoin) permanece NAO corrigido --
-adiado por decisao da jogadora; a causa raiz esta provada no relatorio de 08/10.
+parado sem commit; push fast-forward para `origin/main` feito em 17/10/2026
+(`2268338..a7b3b38`). Bug D (camera espectador no rejoin) permanece NAO
+corrigido -- adiado por decisao da jogadora; a causa raiz esta provada no
+relatorio de 08/10.
 
 ## Objective
 Subtask pendente do Bug C: enquanto o mestre segura o item `tabletop-rpg:threat_sheet`
@@ -175,4 +177,9 @@ Gravado em `agent/memory/project-memory.md` (secao "Highlight da ficha na mao"):
    (rejoin locked: esperado `DIAG spawn ENVIADO` no log do servidor no unlock).
 2. Quando o bug D fechar, remover a instrumentacao de diagnostico (2 mixins + as
    duas entradas nos `mixins.json`) e commitar a parte.
-3. Push pendente do commit desta sessao (fast-forward sobre `origin/main`).
+3. Entrega feita: commit `a7b3b38` + push fast-forward para `origin/main`
+   (`2268338..a7b3b38`, 17/10/2026). Nenhum conflito: o branch do outro
+   desenvolvedor (`pasta-Net`, ultimo commit 24/09/2026) estava separado e sem
+   nada novo.
+4. Pendente de decisao: o relatorio de 08/10 previa a tag
+   `checkpoint-20261008-feedback-batch3`; ela nao foi criada nem enviada.
