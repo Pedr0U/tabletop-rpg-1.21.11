@@ -4048,11 +4048,22 @@ validacao virar uma Shooting gallery de 7 feedbacks.
   view-distance, ocultacao/remocao no cliente, teleporte pendente, cliente
   descartar o bundle (impossivel: haveria reenvio no unlock -- nao haveria).
   (FATO, rodadas 1-4.)
-- **Instrumentacao de prova de spawn (mantida no build):** `ServerEntityMixin`
-  (`ServerEntity#addPairing`/`removePairing`, so tag `tabletoprpg_camera`) e
-  `ClientPacketListenerMixin` (`handleAddEntity` creeper/iron_golem,
-  `handleRemoveEntities`). 3 camadas: addPairing (servidor) -> handleAddEntity
-  (cliente) -> `getEntity` no tick. (FATO.)
+- **Instrumentacao de prova de spawn (REMOVIDA em 17/10/2026):** era
+  `ServerEntityMixin` (`ServerEntity#addPairing`/`removePairing`, so tag
+  `tabletoprpg_camera`) e `ClientPacketListenerMixin` (`handleAddEntity`
+  creeper/iron_golem, `handleRemoveEntities`). 3 camadas: addPairing (servidor) ->
+  handleAddEntity (cliente) -> `getEntity` no tick. (FATO.) A pedido da jogadora a
+  instrumentacao foi APAGADA em 17/10/2026 (poluia o log de jogo normal, inclusive
+  o do amigo); o codigo esta preservado no historico, no commit `a7b3b38`:
+  `git show a7b3b38:<caminho>`. A causa raiz do bug D continua provada, entao o fix
+  candidato nao depende dela.
+- **Remover um mixin e remover a entrada do `mixins.json` sao a MESMA operacao:**
+  os dois configs do projeto usam `"required": true`, entao uma classe listada e
+  inexistente faz o carregamento do mixin FALHAR (crash na inicializacao), nao um
+  aviso. Prova estatica barata antes de commitar: `json.load` nos dois configs
+  (sintaxe) e conferir que TODA classe listada existe no jar
+  (`<package-em-barras>/<Nome>.class`, contando as chaves `mixins` e `server` do
+  principal e `client` do de cliente). (Licao, 17/10/2026.)
 - **Padrao de sintoma:** "a lista de alvos chega certa mas as entidades nao
   existem no cliente" NAO e problema de lista -- e envio de spawn no servidor.
   Logar `addPairing` fechou em 1 repro o que 3 rodadas de log no cliente nao

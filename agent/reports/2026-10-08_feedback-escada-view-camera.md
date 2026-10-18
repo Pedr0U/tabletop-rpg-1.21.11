@@ -325,7 +325,9 @@ bug D **PROVADA por evidencia**: o servidor nao envia o spawn dos mobs de camera
 enquanto o jogador esta preso (locked). **FIX NAO IMPLEMENTADO** -- adiado a
 pedido da jogadora ("deixe este bug para depois"); esta registrado aqui com o
 caminho exato e os candidatos de correcao. A instrumentacao da rodada 4
-(`ServerEntityMixin`, `ClientPacketListenerMixin`) fica no build.
+(`ServerEntityMixin`, `ClientPacketListenerMixin`) foi **REMOVIDA em 17/10/2026**,
+a pedido da jogadora -- ver a secao "Remocao da instrumentacao" no fim deste
+relatorio. O codigo dela fica preservado no commit `a7b3b38`.
 Build verde (`BUILD SUCCESSFUL in 41s`); ASCII limpo. Nada commitado (HEAD 3f3a025).
 
 ## O que a rodada 4 mudou de entendimento (FATO -- fontes vanilla lidas)
@@ -480,9 +482,14 @@ login, junto com o 1o pacote de movimento -- nao no join em si.
 - **Candidato C (alternativa):** no `sendLockToPlayer(locked=true)`, forcar/agendar
   um `move` para aquele jogador. Menos preciso: nao cobre chunks que ficam
   prontos DEPOIS do lock (o caso real do rejoin).
-- Mesmo depois do fix, vale manter a instrumentacao ate a jogadora validar.
+
+- Historico (17/10/2026): o plano era manter a instrumentacao no build ate a
+  jogadora validar em jogo; ela pediu para remove-la antes disso -- ver a secao
+  "Remocao da instrumentacao (17/10/2026)" no fim deste relatorio.
 
 ### Instrumentacao deixada no build (reutilizavel)
+> REMOVIDA em 17/10/2026 (a pedido da jogadora). O texto abaixo descreve o que
+> existia; o codigo esta preservado no commit `a7b3b38`.
 - `ServerEntityMixin`: `net.minecraft.server.level.ServerEntity#addPairing` /
   `removePairing` (HEAD), loga so mobs com tag `tabletoprpg_camera`.
   `DIAG spawn ENVIADO/REMOVIDO`.
@@ -518,3 +525,61 @@ login, junto com o 1o pacote de movimento -- nao no join em si.
 - Quando o sintoma e "a lista chega mas as entidades nao existem no cliente", o
   suspeito nao e a lista: e o ENVIO de spawn no servidor. Logar `addPairing` foi o
   que fechou o caso em 1 repro (as rodadas 1-3 trataram o sintoma).
+
+---
+
+# Remocao da instrumentacao (17/10/2026)
+
+## O que foi feito
+A pedido da jogadora ("pode commitar e remover essas coisas que imprime no log"),
+a instrumentacao da rodada 4 foi **apagada** -- nao desabilitada:
+
+1. `src/main/java/com/pedro/tabletoprpg/mixin/ServerEntityMixin.java` -- removido.
+2. `src/client/java/com/pedro/tabletoprpg/client/mixin/ClientPacketListenerMixin.java`
+   -- removido.
+3. `src/main/resources/tabletop-rpg.mixins.json`: `"ServerEntityMixin"` removido do
+   array `server` (e a virgula da linha anterior ajustada).
+4. `src/client/resources/tabletop-rpg.client.mixins.json`:
+   `"ClientPacketListenerMixin"` removido do array `client` (idem).
+
+Nada mais foi tocado: nao existe outra instrumentacao do bug D no codigo (busca por
+`DIAG` em `src/` nao retorna nada depois da remocao). Os `LOGGER.info` de
+`SpectatorCameraController` e de `RpgNetworking` sao operacionais, das rodadas 1-3
+(parte dos fixes validados), e foram mantidos.
+
+## Por que remover as 2 entradas de config junto com as 2 classes
+`required: true` em ambos os `mixins.json`: uma classe listada e inexistente faz o
+carregamento do mixin FALHAR (crash na inicializacao), nao um aviso. A remocao tem
+que ser atomica: classe + entrada.
+
+## Validacao
+- `gradlew build`: `BUILD SUCCESSFUL in 15s`, 0 `error:`, gate de encoding
+  `192 arquivo(s) ... 0 mojibake, 0 ideograma, 0 U+FFFD` (era 194: caem os 2 arquivos
+  removidos).
+- Artefato provado por leitura direta do jar (`build/libs/tabletop-rpg-1.0.0.jar`):
+  - os dois `mixins.json` dentro do jar nao citam mais `ServerEntityMixin` nem
+    `ClientPacketListenerMixin`;
+  - nenhuma classe `*ServerEntityMixin*` / `*ClientPacketListenerMixin*` no jar;
+  - **toda** classe listada nos dois configs existe no jar (18/18) -- prova de que
+    nao sobrou entrada orfa apontando para classe inexistente;
+  - `SheetHighlightManager(.class, $Sent.class)` continua presente.
+- Os dois `.json` foram reparseados com `json.load` (sintaxe valida) e tem 0
+  caractere nao-ASCII.
+
+## Como restaurar (se o bug D voltar a precisar dela)
+```
+git show a7b3b38:src/main/java/com/pedro/tabletoprpg/mixin/ServerEntityMixin.java
+git show a7b3b38:src/client/java/com/pedro/tabletoprpg/client/mixin/ClientPacketListenerMixin.java
+git show a7b3b38:src/main/resources/tabletop-rpg.mixins.json
+git show a7b3b38:src/client/resources/tabletop-rpg.client.mixins.json
+```
+A causa raiz ja esta provada, entao o fix candidato nao depende dela; ela serve
+apenas para uma nova rodada de investigacao.
+
+## Riscos remanescentes
+- Esta remocao foi validada por build + inspecao do artefato, **nao executada em
+  jogo**: o proximo boot do cliente/servidor pela jogadora e que confirma na pratica
+  que nada quebrou. O risco e baixo (nao ha codigo novo, apenas remocao, com os
+  configs coerentes com o conteudo do jar).
+- A rotina de log da rodada 4 deixa de existir; um novo repro do bug D nao tera
+  `DIAG spawn ENVIADO` no servidor.

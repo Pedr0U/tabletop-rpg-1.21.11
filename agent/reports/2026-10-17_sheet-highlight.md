@@ -146,12 +146,16 @@ runtime foi provado somente pelo teste em jogo da jogadora.
   enquanto ela esta presa. Candidato: chamar `player.level().getChunkSource().move(player)`
   antes do `ci.cancel()` no `ServerGamePacketListenerImplMixin`. Detalhes e o que
   ja falhou: `agent/reports/2026-10-08_feedback-escada-view-camera.md`.
-- **Instrumentacao de diagnostico permanece no build** (rodada 4 do bug D):
-  `ServerEntityMixin` e `ClientPacketListenerMixin` logam spawn/remocao de mobs de
-  camera (servidor) e de creeper/iron_golem (cliente, `handleAddEntity` /
-  `handleRemoveEntities`). Sao uteis para retomar o bug D, mas geram volume de log
-  em jogo normal para qualquer jogador -- inclusive o amigo que trabalha no
-  `pasta-Net`. Remover em commit separado quando o bug D for encerrado.
+- **Instrumentacao de diagnostico REMOVIDA em 17/10/2026** (rodada 4 do bug D):
+  `ServerEntityMixin` e `ClientPacketListenerMixin` (logs de spawn/remocao de mobs
+  de camera no servidor e de creeper/iron_golem no cliente) e as duas entradas nos
+  `mixins.json` foram **apagados** a pedido da jogadora, para nao poluir o log de
+  jogo normal -- inclusive o do amigo que trabalha no `pasta-Net`. O codigo
+  completo dessas duas classes e dos dois registros fica preservado no historico,
+  no commit `a7b3b38`; para retomar o bug D com a mesma instrumentacao:
+  `git show a7b3b38:src/main/java/com/pedro/tabletoprpg/mixin/ServerEntityMixin.java`
+  e o mesmo para `ClientPacketListenerMixin`. A causa raiz ja esta provada, entao o
+  fix nao depende mais dela.
 - **Limite fisico do contorno** (nao e bug): e desenhado no cliente, entao o mob
   precisa EXISTIR no cliente -- dentro do `clientTrackingRange` do vanilla
   (~128 blocos) -- e dentro do campo de visao/frustum. Atras das costas ou fora do
