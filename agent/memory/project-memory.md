@@ -4111,3 +4111,41 @@ validacao virar uma Shooting gallery de 7 feedbacks.
   desenho do contorno e o mecanismo do hover que ja existia, entao o risco estava
   na logica de decisao/envio, nao no render. (FATO.)
 
+## Entrega e disciplina de git/encoding (17/10/2026)
+
+- **Entrega do highlight:** commit `a7b3b38` (16 arquivos, +1583/-116) + follow-up
+  `bbefbf9`, push fast-forward para `origin/main` (`2268338..a7b3b38..bbefbf9`).
+  Inclui o lote de 08/10 que estava parado sem commit. (FATO.)
+- **O outro desenvolvedor usa o branch `pasta-Net`:** ultimo commit 24/09/2026,
+  divergido do main (66 commits dele que o main nao tem x 2 do main que ele nao
+  tem). O push no main NAO conflita com isso; o merge futuro (se houver) sera
+  grande e precisa ser planejado, nao improvisado. (FATO.)
+- **Trabalho paralelo:** sempre `git ls-remote --heads origin` (le direto do
+  GitHub, nao usa cache) antes de push, para ver se o outro lado publicou algo.
+  Foi assim que se provou que nao havia nada novo. (Licao.)
+- **Assinatura de problema de fim de linha (CRLF) no diff:** o diff mostra o
+  arquivo INTEIRO reescrito (aqui: 4098/3911 linhas num arquivo de ~4000). O
+  teste que separa "fim de linha" de "conteudo" e comparar
+  `git diff --numstat --ignore-cr-at-eol` com `git diff --numstat`: se diferem, e
+  fim de linha. `core.autocrlf=true` (system gitconfig) converte CRLF->LF no add,
+  MAS **nao converte se houver CR solto no arquivo** -- foi exatamente o que
+  travou tudo aqui, e `git add --renormalize` NAO resolveu. (FATO.)
+- **Como reparar sem quebrar conteudo:** script (em `%TEMP%\opencode`) que faz
+  `w.replace(b'\r\n', b'\n')` preservando o CR solto, com asserts: nenhum U+FFFD,
+  contagem de nao-ASCII antes = depois (921 = 921), e `w.replace(b'\r',b'') ==
+  l.replace(b'\r',b'')`. A PROVA final e o `--numstat` do staged ficar igual com e
+  sem `--ignore-cr-at-eol` (aqui 187/0 nos dois) -- isso demonstra que so as
+  linhas novas entraram. (Licao/tecnica.)
+- **Defeito de escape em prosa:** escrever `\r` (escape) dentro de texto produz um
+  CR de verdade e come a letra seguinte: "O `reset()" virou "O CR eset()" na
+  memoria de 08/10. Ao escrever prosa com `\r`, `\n`, `\t`, conferir os bytes; o
+  scanEncoding NAO pega isso (CR < 128). (Licao, defeito real.)
+- **Nunca confiar em "parece" para medir blob:** `git cat-file -p <hash>` da os
+  bytes reais. `git show :path` funciona, mas `git show "::path"` (rev vazio
+  concatenado) e pathspec invalido: devolve stdout VAZIO e a leitura vira "arquivo
+  de 1 linha" -- conclusao falsa que eu quase registrei como fato. (Erro real.)
+- **Commit com mensagem longa no Windows:** `git commit -F <arquivo>` (mensagem em
+  arquivo em `%TEMP%\opencode`, ASCII, 0 CR). `git commit -m "..."` com aspas
+  escapadas dentro de `cmd /c` quebra: o cmd trata cada palavra da mensagem como
+  pathspec. (FATO.)
+
