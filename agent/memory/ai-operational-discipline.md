@@ -363,3 +363,34 @@ lento, nao e o modelo pensando, nao e o Gradle travado.
    saida nao filtrada. Fix: `grep`, `offset`/`limit`, filtro em tudo.
 4. **Bonus, 26/09/2026:** one-liner de PS com API errada em laco (ver secao
    "One-liner longo de PowerShell"). O usuario precisou abortar.
+
+## Consumir um arquivo antes de ele existir (17/10/2026) - erro de ordem dentro do turno
+
+### Sintoma
+`git commit -F %TEMP%\opencode\commit-msg-doc2.txt` falhou com
+`fatal: could not read log file '<...>\commit-msg-doc2.txt': No such file or directory`.
+A alteracao ficou staged, sem commit, e a jogadora teve que pedir para investigar.
+
+### FATOS (17/10/2026)
+1. HEAD continuava no commit anterior (`d9230c0`) e o `git status --short` continuava
+   mostrando a alteracao staged (`9/5`) -- quando o git nao consegue ler a mensagem
+   ele NAO cria commit e NAO desfaz o staging. Nada foi perdido.
+2. O arquivo de mensagem nao existia no instante do comando. O mesmo caminho
+   (`-F %TEMP%\opencode\commit-msg-*.txt`) ja tinha funcionado em outros tres
+   commits, o que descarta caminho errado, `%TEMP%` mal expandido, lock do index,
+   credencial e problema do repositorio.
+3. O texto do erro aponta para o arquivo da MENSAGEM, nao para o indice.
+
+### Causa raiz
+Ordem de operacoes dentro do mesmo turno: consumi o arquivo de mensagem que eu ainda
+ia criar. Nao e falha do git nem do ambiente.
+
+### REGRAS (duraveis)
+1. Nunca consumir um arquivo no mesmo turno em que ele e criado: criar, confirmar que
+   existe, e so depois consumir (passo separado, com a confirmacao visivel).
+2. Antes de `git commit -F <arquivo>`, provar no MESMO comando que a mensagem existe e
+   e utilizavel (existe + 0 CR + 0 nao-ASCII). Tres linhas de `assert` custam menos que
+   um turno perdido do usuario.
+3. Depois de qualquer `git commit`, conferir `git log --oneline -1` e
+   `git status --short`: commit que nao aparece no log nao existe, e staging intacto e
+   o sinal de que o git abortou antes de escrever.
