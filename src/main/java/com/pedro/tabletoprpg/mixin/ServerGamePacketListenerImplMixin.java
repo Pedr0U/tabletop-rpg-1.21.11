@@ -31,9 +31,18 @@ public abstract class ServerGamePacketListenerImplMixin {
     @Inject(method = "handleMovePlayer", at = @At("HEAD"), cancellable = true)
     private void tabletopRpg$cancelMoveIfLocked(ServerboundMovePlayerPacket packet, CallbackInfo ci) {
         if (!SessionManager.canPlayerAct(this.player)) {
-            // Ignora completamente o pacote: nada de posição/rotação é
-            // atualizado no servidor, então o cliente é corrigido de volta
-            // na posição travada no próximo pacote de sincronização.
+            // Ignora o pacote (nada de posição/rotação é atualizado no servidor,
+            // então o cliente é corrigido de volta na posição travada no próximo
+            // pacote de sincronização).
+            //
+            // MAS handleMovePlayer também faz a reavaliação da view de
+            // chunks/entidades do jogador (ServerLevel.getChunkSource().move(player),
+            // confirmado no bytecode vanilla). Cancelar sem reproduzir essa chamada
+            // deixava o jogador congelado sem entity-tracking: ele nunca recebia as
+            // entidades próximas (os mobs da câmera) até destravar — bug do jogador
+            // reconectado que não via os mobs no carrossel V. Repetimos a chamada
+            // aqui; move() faz early-return quando a seção não muda, então é barato.
+            this.player.level().getChunkSource().move(this.player);
             ci.cancel();
             return;
         }
