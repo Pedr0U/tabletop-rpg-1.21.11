@@ -13,8 +13,7 @@
 		"GuiMixin",
 		"EntityTurnMixin",
 		"EntityRendererMixin",
-		"DownedBodyAlignMixin",
-		"ClientPacketListenerMixin"
+		"DownedBodyAlignMixin"
 	],
 	"injectors": {
 		"defaultRequire": 1
