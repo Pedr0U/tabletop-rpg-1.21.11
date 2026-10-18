@@ -178,11 +178,15 @@ Gravado em `agent/memory/project-memory.md` (secao "Highlight da ficha na mao"):
 
 ## Next Steps
 1. Retomar o **bug D** com o fix de uma linha + build + um repro da jogadora
-   (rejoin locked: esperado `DIAG spawn ENVIADO` no log do servidor no unlock).
-2. Quando o bug D fechar, remover a instrumentacao de diagnostico (2 mixins + as
-   duas entradas nos `mixins.json`) e commitar a parte.
-3. Entrega feita: commit `a7b3b38` + push fast-forward para `origin/main`
-   (`2268338..a7b3b38`, 17/10/2026). Nenhum conflito: o branch do outro
+   (rejoin locked: esperado o mob de camera reaparecer no carrossel depois do
+   unlock). Atencao: a instrumentacao de log foi REMOVIDA em 17/10/2026 (commit
+   `d9230c0`), entao o repro agora e visual -- se precisar do `DIAG spawn ENVIADO`
+   de novo, restaurar do historico (commit `a7b3b38`).
+2. Feito em 17/10/2026 (commit `d9230c0`): a instrumentacao de diagnostico (2
+   mixins + as duas entradas nos `mixins.json`) foi removida a pedido da jogadora.
+   Nao ha mais esse item pendente.
+3. Entrega feita: commits `a7b3b38` e `bbefbf9`, push fast-forward para `origin/main`
+   (`2268338..bbefbf9`, 17/10/2026). Nenhum conflito: o branch do outro
    desenvolvedor (`pasta-Net`, ultimo commit 24/09/2026) estava separado e sem
    nada novo.
 4. Pendente de decisao: o relatorio de 08/10 previa a tag
