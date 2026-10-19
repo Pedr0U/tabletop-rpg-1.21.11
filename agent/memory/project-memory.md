@@ -4244,3 +4244,52 @@ mesmo metodo para reavaliar o entity-tracking do jogador (`getChunkSource().move
 qualquer cancel ali precisa reproduzir essa chamada, senao o jogador deixa de receber entidades
 proximas. E: `gradlew build` NAO valida injecao de mixin; so a carga real do cliente valida.
 >>>>>>> Stashed changes
+
+---
+
+## 2026-10-19 - Limpeza de codigo delegada ao agente Code Cleaner (etapas 1-4)
+
+FATO verificado (build + `git diff`): 9 arquivos, **+53/-102**, `gradlew build --no-daemon
+--console=plain` BUILD SUCCESSFUL em 4 execucoes (25s, 18s, 21s, 19s). Nenhum mixin, rede,
+persistencia ou Gradle tocado. Relatorio: `agent/reports/2026-10-19_limpeza-codigo-etapas-1-4.md`.
+
+PADRAO criado - `CharacterSheetScreen` e o ponto unico dos helpers de pintura das telas de
+ficha/formulario:
+- `protected static void drawLabel(GuiGraphics, Font, int boxX, String text, int boxY)` (rotulo
+  alinhado pela direita, 4 px antes da coluna das caixas);
+- `protected static void drawCenteredTitle(GuiGraphics, Font, int screenWidth, String|Component)`
+  (titulo centralizado em y = 8);
+- `protected static void drawNameWarningIfBlank(GuiGraphics, Font, EditBox)` + constantes
+  `COL_NAME_WARN = 0xFF5555` (aviso "Name required" logo ABAIXO da caixa de nome).
+- **ARMADILHA (causou 12 erros na 1a tentativa):** `SkillFormScreen`, `SpellFormScreen` e
+  `InventoryItemScreen` estendem `Screen` **direto**, nao `CharacterSheetScreen`; usavam essa classe
+  apenas como namespace de constantes. Helper de instancia nao chega la (`cannot find symbol`); o
+  helper tem de ser `static` e a chamada QUALIFICADA (`CharacterSheetScreen.drawX(...)`).
+
+CODIGO MORTO removido (criterio: nome aparece uma unica vez em `src`, ou seja, so a declaracao):
+`StatusScreen.PER_COUNT_DEFAULT`, `DiaryNodeScreen.MAX_CRUMBS`, `SheetData.LEGACY_ATTRIBUTE_IDS`,
+`DiceRollScreen.hasRollValue()`, cada um com a Javadoc orfa. Imports mortos:
+`net.minecraft.client.input.KeyEvent` em `DiaryNodeScreen` e `DiaryScreen` — em
+`InventoryItemScreen` o MESMO import tem uso real (nao remover por simetria).
+
+NAO extraido (decisao, nao pendencia): a guarda de `save()` dos formularios de Skill/Spell
+(`nameBox.setFocused(true); setInitialFocus(nameBox); return;`) segue duplicada. `Screen.
+setInitialFocus` e `protected` e nao e acessivel de helper estatico fora da hierarquia (exigiria
+lambda/`Consumer` ou classe base comum) - a duplicacao de 4 linhas custa menos que a indirecao.
+
+PENDENTE de teste em jogo (NAO validado): rotulos alinhados 4 px antes da coluna, titulo
+centralizado em y = 8, aviso "Name required" vermelho abaixo da caixa nas telas Skill/Spell/Item,
+e salvar normalmente. Build verde nao cobre pixel.
+
+PENDENTE (achado, nao tocado): ESTE arquivo tem conflito de stash NAO resolvido - linha 3903
+`<<<<<<< Updated upstream` e linha 4246 `>>>>>>> Stashed changes`, sem `=======` visivel - o trecho
+entre os marcadores (FIX de reconexao de 2026-10-17 e a LICAO sobre `handleMovePlayer`) pode estar
+duplicado. Regra append-only: aguarda decisao do usuario.
+
+LICAO de ambiente: `rg` NAO existe no PATH desta maquina (PowerShell) -> usar a ferramenta de busca
+interna do agente. E `Get-Content | Measure-Object -Line` NAO conta linhas vazias: relatou 3547
+linhas para este arquivo, que tem 4246 (a contagem real vem do rodape do `read`).
+
+LICAO de processo: as Javadocs orfas eram a unica fonte do *porque* de varios numeros (18 pericias
+com scroll, teto de 16 migalhas de pao, ids legados do NBT). Ao remover codigo morto, registrar no
+relatorio o que saiu antes de apagar - o git guarda o texto, nao a intencao.

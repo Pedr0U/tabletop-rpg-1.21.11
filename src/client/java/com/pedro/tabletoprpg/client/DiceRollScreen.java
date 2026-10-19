@@ -158,17 +158,6 @@ public class DiceRollScreen extends Screen {
         modifier = 0;
     }
 
-    /**
-     * Ha valor de rolagem? (01/10/2026)
-     *
-     * <p>Unico teste de "tem valor" da tela. O {@link #getRollExpression()}Returns
-     * "Select dice..." nesse caso, mas comparar com esse texto espalha uma constante
-     * magica pela tela; aqui a condicao esta escrita uma vez so.
-     */
-    private boolean hasRollValue() {
-        return !selectedDice.isEmpty() || modifier != 0;
-    }
-
     /** Constrói o texto visual, ex: "d20 + d10 + 9" ou "d8 - 2" */
     private String getRollExpression() {
         if (selectedDice.isEmpty() && modifier == 0) return "Select dice...";

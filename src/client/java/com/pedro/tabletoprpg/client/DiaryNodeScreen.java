@@ -9,7 +9,6 @@ import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.components.MultiLineEditBox;
 import net.minecraft.client.gui.screens.Screen;
-import net.minecraft.client.input.KeyEvent;
 import net.minecraft.client.input.MouseButtonEvent;
 import net.minecraft.network.chat.Component;
 
@@ -45,16 +44,6 @@ public class DiaryNodeScreen extends DiaryScreenBase {
     // escolhe conforme a altura da tela (ver `DESC_MIN`/`DESC_MAX` na base). O `chrome`
     // abaixo e medido com o MINIMO, e o que sobra da tela e acrescentado pelo `layoutPanel`
     // -- por isso os dois precisam usar o mesmo minimo, e nao um numero solto cada um.
-
-    /**
-     * Quantas etapas do caminho cabem no pior caso.
-     *
-     * <p><b>Por que um teto:</b> a profundidade e livre (a jogadora pediu "infinitas"), e um
-     * numero de fatias fixo aqui estouraria a tela num diario com 40 niveis. O corte e
-     * pela LARGURA em pixels, medido de tras para frente; o teto aqui e so o pior caso de um
-     * texto com {@link DiaryEntry#MAX_TITLE} caracteres por etapa.
-     */
-    private static final int MAX_CRUMBS = 16;
 
     private final int nodeId;
 

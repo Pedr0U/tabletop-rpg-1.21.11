@@ -89,20 +89,8 @@ public class StatusScreen extends CharacterSheetScreen {
     // COLUNA DE PERICIAS (decisao do usuario em 25/09/2026)
     // ------------------------------------------------------------------
 
-    /**
-     * Quantas pericias a coluna mostra por padrao.
-     *
-     * <p><b>27/09/2026 (Sheet Editor):</b> era a constante {@code 20}, duplicada
-     * a mao, e depois {@code SheetData.PERICIAS_PADRAO.size()}, que deixou de
-     * existir. O total agora vem do <b>modelo</b>, em tempo de execucao, e pode
-     * ser qualquer valor de 1 a {@code MAX_PERICIAS} porque e o Mestre quem
-     * decide. Por isso a coluna tem scroll proprio: antes, com 18 fixas, a
-     * altura cabia e nao havia o que rolar.
-     */
-    private static final int PER_COUNT_DEFAULT = 18;
     /** Painel mais largo que o das outras telas, para caber a coluna. */
     private static final int MAX_PANEL_W_STATUS = 600;
-    /**
     /**
      * Teto da largura dos campos de texto (nome, raca, classe, nivel, xp) E das
      * barras de HP e Mana: as duas coisas consomem o mesmo {@code boxW}.

@@ -147,23 +147,10 @@ public class InventoryItemScreen extends Screen {
      * caixa que ele nomeia.
      */
     private void renderLabels(GuiGraphics graphics) {
-        drawLabel(graphics, "Name", nameBox.getY());
-        drawLabel(graphics, "Type", typeBox.getY());
-        drawLabel(graphics, "Weight", weightBox.getY());
-        drawLabel(graphics, "Description", descriptionBox.getY());
-    }
-
-    /**
-     * Um rotulo terminado 4 px antes da coluna das caixas.
-     *
-     * <p><b>Alinhado pela direita:</b> assim um rotulo mais largo cresce para a
-     * esquerda e nunca invade a caixa -- que era o bug de "Description", a
-     * palavra mais larga do formulario.
-     */
-    private void drawLabel(GuiGraphics graphics, String text, int boxY) {
-        int right = nameBox.getX() - 4;
-        graphics.drawString(this.font, text, right - this.font.width(text),
-                boxY + 5, CharacterSheetScreen.COL_LABEL, false);
+        CharacterSheetScreen.drawLabel(graphics, this.font, nameBox.getX(), "Name", nameBox.getY());
+        CharacterSheetScreen.drawLabel(graphics, this.font, nameBox.getX(), "Type", typeBox.getY());
+        CharacterSheetScreen.drawLabel(graphics, this.font, nameBox.getX(), "Weight", weightBox.getY());
+        CharacterSheetScreen.drawLabel(graphics, this.font, nameBox.getX(), "Description", descriptionBox.getY());
     }
 
     /**
@@ -182,8 +169,7 @@ public class InventoryItemScreen extends Screen {
         super.render(graphics, mouseX, mouseY, delta);
         // O rotulo do titulo vem antes dos widgets (o mesmo cuidado da base: o
         // `super.render` desenha os widgets e o texto de cima do que vier depois).
-        graphics.drawString(this.font, this.title, (this.width - this.font.width(this.title)) / 2,
-                8, CharacterSheetScreen.COL_TITLE, false);
+        CharacterSheetScreen.drawCenteredTitle(graphics, this.font, this.width, this.title);
         renderLabels(graphics);
     }
 

@@ -138,15 +138,8 @@ public class SkillFormScreen extends Screen {
 
     /** Rotulos das caixas, ancorados na propria caixa. */
     private void renderLabels(GuiGraphics graphics) {
-        drawLabel(graphics, "Name", nameBox.getY());
-        drawLabel(graphics, "Description", descriptionBox.getY());
-    }
-
-    /** Um rotulo terminado 4 px antes da coluna das caixas. */
-    private void drawLabel(GuiGraphics graphics, String text, int boxY) {
-        int right = nameBox.getX() - 4;
-        graphics.drawString(this.font, text, right - this.font.width(text),
-                boxY + 5, CharacterSheetScreen.COL_LABEL, false);
+        CharacterSheetScreen.drawLabel(graphics, this.font, nameBox.getX(), "Name", nameBox.getY());
+        CharacterSheetScreen.drawLabel(graphics, this.font, nameBox.getX(), "Description", descriptionBox.getY());
     }
 
     /** Largura da coluna dos rotulos: a maior das duas palavras, mais folga. */
@@ -157,16 +150,9 @@ public class SkillFormScreen extends Screen {
     @Override
     public void render(GuiGraphics graphics, int mouseX, int mouseY, float delta) {
         super.render(graphics, mouseX, mouseY, delta);
-        graphics.drawString(this.font, this.title, (this.width - this.font.width(this.title)) / 2,
-                8, CharacterSheetScreen.COL_TITLE, false);
+        CharacterSheetScreen.drawCenteredTitle(graphics, this.font, this.width, this.title);
         renderLabels(graphics);
-        if (nameBox.getValue().isBlank()) {
-            String warn = "Name required";
-            // Sob a caixa de nome, e nao em cima dela: o texto do campo continuaria
-            // visivel e o jogador veria onde esta o problema.
-            graphics.drawString(this.font, warn, nameBox.getX(),
-                    nameBox.getY() + nameBox.getHeight() + 3, 0xFF5555, false);
-        }
+        CharacterSheetScreen.drawNameWarningIfBlank(graphics, this.font, nameBox);
     }
 
     /**

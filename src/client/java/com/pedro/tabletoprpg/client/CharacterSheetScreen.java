@@ -4,6 +4,7 @@ import com.pedro.tabletoprpg.RpgNetworking;
 import com.pedro.tabletoprpg.SheetData;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.EditBox;
@@ -147,6 +148,8 @@ public abstract class CharacterSheetScreen extends Screen {
     protected static final int COL_MANA_OVER = 0xFF8AC4FF;
     protected static final int COL_BAR_EDGE = 0xFF55555F;
     protected static final int COL_DOWNED = 0xFFFF6060;
+    /** Aviso de nome obrigatorio vazio, nas telas de formulario da ficha. */
+    protected static final int COL_NAME_WARN = 0xFF5555;
 
     /**
      * Um texto a desenhar no proximo {@code render} (montado em init).
@@ -998,6 +1001,41 @@ public abstract class CharacterSheetScreen extends Screen {
         graphics.fill(bar.x(), bar.y() + bar.h() - 1, bar.x() + bar.w(), bar.y() + bar.h(), COL_BAR_EDGE);
     }
 
+    /**
+     * Um rotulo terminado 4 px antes da coluna das caixas.
+     *
+     * <p><b>Alinhado pela direita:</b> assim um rotulo mais largo cresce para a
+     * esquerda e nunca invade a caixa -- que era o bug de "Description", a
+     * palavra mais larga do formulario.
+     */
+    protected static void drawLabel(GuiGraphics graphics, Font font, int boxX, String text, int boxY) {
+        int right = boxX - 4;
+        graphics.drawString(font, text, right - font.width(text), boxY + 5, COL_LABEL, false);
+    }
+
+    /** Titulo da tela centralizado no topo (y = 8). */
+    protected static void drawCenteredTitle(GuiGraphics graphics, Font font, int screenWidth, String text) {
+        graphics.drawString(font, text, (screenWidth - font.width(text)) / 2, 8, COL_TITLE, false);
+    }
+
+    /** Titulo da tela centralizado no topo (y = 8). */
+    protected static void drawCenteredTitle(GuiGraphics graphics, Font font, int screenWidth, Component text) {
+        graphics.drawString(font, text, (screenWidth - font.width(text)) / 2, 8, COL_TITLE, false);
+    }
+
+    /**
+     * Aviso de nome obrigatorio, logo abaixo da caixa quando ela esta vazia.
+     *
+     * <p><b>Sob a caixa, e nao em cima dela:</b> o texto do campo continuaria
+     * visivel e o jogador veria onde esta o problema.
+     */
+    protected static void drawNameWarningIfBlank(GuiGraphics graphics, Font font, EditBox nameBox) {
+        if (nameBox.getValue().isBlank()) {
+            graphics.drawString(font, "Name required", nameBox.getX(),
+                    nameBox.getY() + nameBox.getHeight() + 3, COL_NAME_WARN, false);
+        }
+    }
+
     @Override
     public void render(GuiGraphics graphics, int mouseX, int mouseY, float delta) {
         // O titulo vem ANTES de super.render() (27/09/2026): desenhado depois, ele
@@ -1007,9 +1045,7 @@ public abstract class CharacterSheetScreen extends Screen {
         // Subtitles, que chama renderBackground antes de render, e Screen.render
         // so itera os elementos -- e o painel comeca em y = 20, entao o titulo em
         // y = 8 nao e coberto por nenhum dos dois.
-        String title = titleText();
-        graphics.drawString(this.font, title,
-                (this.width - this.font.width(title)) / 2, 8, COL_TITLE, false);
+        drawCenteredTitle(graphics, this.font, this.width, titleText());
 
         // super.render() desenha os widgets.
         super.render(graphics, mouseX, mouseY, delta);
