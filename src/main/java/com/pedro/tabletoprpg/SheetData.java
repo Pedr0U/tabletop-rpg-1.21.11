@@ -928,16 +928,6 @@ public record SheetData(
     }
 
     /**
-     * Os seis ids que a ficha gravava antes do Sheet Editor, na ordem em que
-     * eram campos do record {@code Attributes}.
-     *
-     * <p>Serve a migracao do NBT e a {@link Attributes#fromLegacyIds}. Nao e a
-     * lista de atributos do jogo anymore - essa vem do {@link SheetModel}.
-     */
-    private static final List<String> LEGACY_ATTRIBUTE_IDS =
-            List.of("strength", "dexterity", "constitution", "intelligence", "wisdom", "charisma");
-
-    /**
      * O que um {@code SheetSkillPayload} quer fazer com a <b>skill</b>.
      *
      * <p><b>Skill e Perícia são coisas diferentes</b> (decisão do usuário, 25/09/2026).

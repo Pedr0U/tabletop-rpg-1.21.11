@@ -190,18 +190,11 @@ public class SpellFormScreen extends Screen {
     private void renderLabels(GuiGraphics graphics) {
         // O rotulo do circulo vem PRIMEIRO porque a linha dele e a de cima: e ele
         // que ancora a coluna de rotulos nesta tela (01/10/2026).
-        drawLabel(graphics, "Círculo", circleY);
-        drawLabel(graphics, "Name", nameBox.getY());
+        CharacterSheetScreen.drawLabel(graphics, this.font, nameBox.getX(), "Círculo", circleY);
+        CharacterSheetScreen.drawLabel(graphics, this.font, nameBox.getX(), "Name", nameBox.getY());
         for (int i = 0; i < FIELD_LABELS.length; i++) {
-            drawLabel(graphics, FIELD_LABELS[i], fieldBoxes[i].getY());
+            CharacterSheetScreen.drawLabel(graphics, this.font, nameBox.getX(), FIELD_LABELS[i], fieldBoxes[i].getY());
         }
-    }
-
-    /** Um rotulo terminado 4 px antes da coluna das caixas. */
-    private void drawLabel(GuiGraphics graphics, String text, int boxY) {
-        int right = nameBox.getX() - 4;
-        graphics.drawString(this.font, text, right - this.font.width(text),
-                boxY + 5, CharacterSheetScreen.COL_LABEL, false);
     }
 
     /**
@@ -223,14 +216,9 @@ public class SpellFormScreen extends Screen {
     @Override
     public void render(GuiGraphics graphics, int mouseX, int mouseY, float delta) {
         super.render(graphics, mouseX, mouseY, delta);
-        graphics.drawString(this.font, this.title, (this.width - this.font.width(this.title)) / 2,
-                8, CharacterSheetScreen.COL_TITLE, false);
+        CharacterSheetScreen.drawCenteredTitle(graphics, this.font, this.width, this.title);
         renderLabels(graphics);
-        if (nameBox.getValue().isBlank()) {
-            String warn = "Name required";
-            graphics.drawString(this.font, warn, nameBox.getX(),
-                    nameBox.getY() + nameBox.getHeight() + 3, 0xFF5555, false);
-        }
+        CharacterSheetScreen.drawNameWarningIfBlank(graphics, this.font, nameBox);
     }
 
     /**
