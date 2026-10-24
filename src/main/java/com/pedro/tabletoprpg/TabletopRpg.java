@@ -21,7 +21,8 @@ public class TabletopRpg implements ModInitializer {
 		PlayerControlHandler.register();
 
 		// Registra as regras de dano da sessão (jogadores e mobs imunes a dano físico)
-		DamageControlHandler.register();
+        DamageControlHandler.register();
+        net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents.SERVER_STARTED.register(SessionManager::onServerStarted);
 
 		// Registra os comandos do Mestre (/rpg ...)
 		MasterCommands.register();

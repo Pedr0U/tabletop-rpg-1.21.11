@@ -81,7 +81,9 @@ public record SheetModel(
         int attributeValueMin,
         int attributeValueMax,
         int periciaValueMax,
-        int defaultInitiative
+        int defaultInitiative,
+        boolean initiativeUseDefault,
+        String initiativePericiaId
     ) {
 
     /**
@@ -311,7 +313,9 @@ public record SheetModel(
                 DEFAULT_ATTRIBUTE_VALUE_MIN,
                 DEFAULT_ATTRIBUTE_VALUE_MAX,
                 DEFAULT_PERICIA_VALUE_MAX,
-                DEFAULT_INITIATIVE
+                DEFAULT_INITIATIVE,
+                true,
+                ""
         );
     }
 
@@ -374,6 +378,10 @@ public record SheetModel(
         // modificador de iniciativa do personagem pode ser negativo), entao ela
         // usa o mesmo teto absoluto dos limites de valor.
         defaultInitiative = clamp(defaultInitiative, VALUE_LIMIT_MIN, VALUE_LIMIT_MAX);
+        // 22/10/2026: a pericia marcada como iniciativa precisa existir na lista.
+        // Se a pericia foi removida (ou o id veio de um payload forjado), a marca
+        // cai para "nenhuma" em vez de apontar para uma linha que nao existe.
+        initiativePericiaId = hasPericiaId(pericias, initiativePericiaId) ? initiativePericiaId : "";
     }
 
     /**
@@ -416,7 +424,7 @@ public record SheetModel(
     ) {
         this(nameLabel, raceLabel, raceEnabled, classLabel, backgroundLabel, hpLabel, manaLabel,
                 manaEnabled, levelLabel, xpLabel, "CA", xp, attributes, pericias, attributeValueMin,
-                attributeValueMax, periciaValueMax, DEFAULT_INITIATIVE);
+                attributeValueMax, periciaValueMax, DEFAULT_INITIATIVE, true, "");
     }
 
     /**
@@ -451,7 +459,8 @@ public record SheetModel(
     ) {
         return new SheetModel(nameLabel, raceLabel, raceEnabled, classLabel, backgroundLabel, hpLabel,
                 manaLabel, manaEnabled, levelLabel, xpLabel, caLabel, xp, attributes, pericias,
-                attributeValueMin, attributeValueMax, periciaValueMax, defaultInitiative);
+                attributeValueMin, attributeValueMax, periciaValueMax, defaultInitiative,
+                initiativeUseDefault, initiativePericiaId);
     }
 
     private static List<AttributeDef> sanitizeAttributes(List<AttributeDef> raw) {
@@ -687,7 +696,8 @@ public record SheetModel(
             case "ca" -> new SheetModel(nameLabel, raceLabel, raceEnabled, classLabel,
                     backgroundLabel, hpLabel, manaLabel, manaEnabled, levelLabel, xpLabel,
                     value.isEmpty() ? caLabel : value, xp, attributes, pericias,
-                    attributeValueMin, attributeValueMax, periciaValueMax, defaultInitiative);
+                    attributeValueMin, attributeValueMax, periciaValueMax, defaultInitiative,
+                    initiativeUseDefault, initiativePericiaId);
             default -> this;
         };
     }
@@ -747,7 +757,34 @@ public record SheetModel(
     public SheetModel withDefaultInitiative(int value) {
         return new SheetModel(nameLabel, raceLabel, raceEnabled, classLabel, backgroundLabel, hpLabel,
                 manaLabel, manaEnabled, levelLabel, xpLabel, caLabel, xp, attributes, pericias,
-                attributeValueMin, attributeValueMax, periciaValueMax, value);
+                attributeValueMin, attributeValueMax, periciaValueMax, value,
+                initiativeUseDefault, initiativePericiaId);
+    }
+
+    /**
+     * Copia com a caixa "Usar iniciativa padrao?" trocada (22/10/2026).
+     *
+     * <p>Marcada, a iniciativa de todas as fichas e a {@link #defaultInitiative}.
+     * Desmarcada, cada personagem usa a pericia marcada ({@link #initiativePericiaId}).
+     */
+    public SheetModel withInitiativeUseDefault(boolean useDefault) {
+        return new SheetModel(nameLabel, raceLabel, raceEnabled, classLabel, backgroundLabel, hpLabel,
+                manaLabel, manaEnabled, levelLabel, xpLabel, caLabel, xp, attributes, pericias,
+                attributeValueMin, attributeValueMax, periciaValueMax, defaultInitiative,
+                useDefault, initiativePericiaId);
+    }
+
+    /**
+     * Copia com a pericia marcada como iniciativa trocada (22/10/2026).
+     *
+     * <p>So uma pericia fica marcada: o id novo substitui o anterior. Id vazio
+     * (ou de uma pericia que nao existe) quer dizer "nenhuma".
+     */
+    public SheetModel withInitiativePericia(String id) {
+        return new SheetModel(nameLabel, raceLabel, raceEnabled, classLabel, backgroundLabel, hpLabel,
+                manaLabel, manaEnabled, levelLabel, xpLabel, caLabel, xp, attributes, pericias,
+                attributeValueMin, attributeValueMax, periciaValueMax, defaultInitiative,
+                initiativeUseDefault, id == null ? "" : id);
     }
 
     /** Copia com outro rotulo/nome para um atributo. */
@@ -1145,6 +1182,19 @@ public record SheetModel(
         return Math.max(min, Math.min(value, max));
     }
 
+    /** Se alguma pericia da lista tem este id. Id nulo ou vazio nunca tem. */
+    private static boolean hasPericiaId(List<PericiaDef> list, String id) {
+        if (id == null || id.isEmpty()) {
+            return false;
+        }
+        for (PericiaDef def : list) {
+            if (def.id().equals(id)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     // ------------------------------------------------------------------
     // CODEC DE NBT
     // ------------------------------------------------------------------
@@ -1202,6 +1252,10 @@ public record SheetModel(
                             // gravado antes dela nao tem a chave, e a ausencia
                             // significa "o Mestre ainda nao configurou" (0).
                             .add("defaultInitiative", model.defaultInitiative(), Codec.INT)
+                            // 22/10/2026: a caixa "usar iniciativa padrao" e a pericia marcada.
+                            // Save antigo nao tem as chaves: o padrao e marcada e nenhuma.
+                            .add("initiativeUseDefault", model.initiativeUseDefault(), Codec.BOOL)
+                            .add("initiativePericiaId", model.initiativePericiaId(), Codec.STRING)
                             .build(prefix);
                 }
             },
@@ -1226,7 +1280,9 @@ public record SheetModel(
                             read(ops, map, "attributeValueMin", Codec.INT, DEFAULT_ATTRIBUTE_VALUE_MIN),
                             read(ops, map, "attributeValueMax", Codec.INT, DEFAULT_ATTRIBUTE_VALUE_MAX),
                             read(ops, map, "periciaValueMax", Codec.INT, DEFAULT_PERICIA_VALUE_MAX),
-                            read(ops, map, "defaultInitiative", Codec.INT, DEFAULT_INITIATIVE)
+                            read(ops, map, "defaultInitiative", Codec.INT, DEFAULT_INITIATIVE),
+                            read(ops, map, "initiativeUseDefault", Codec.BOOL, true),
+                            read(ops, map, "initiativePericiaId", Codec.STRING, "")
                     )).map(decoded -> Pair.of(decoded, input));
                 }
             }
@@ -1320,10 +1376,14 @@ public record SheetModel(
         ByteBufCodecs.VAR_INT.encode(buf, model.attributeValueMin());
         ByteBufCodecs.VAR_INT.encode(buf, model.attributeValueMax());
         ByteBufCodecs.VAR_INT.encode(buf, model.periciaValueMax());
-        // 22/10/2026: a iniciativa padrao da mesa entra por ULTIMO, como no
-        // record. O VAR_INT aceita numero negativo (o Minecraft escreve o
+        // 22/10/2026: a iniciativa padrao da mesa, depois dos tres limites, como
+        // no record. O VAR_INT aceita numero negativo (o Minecraft escreve o
         // sinal em 5 bytes), entao a iniciativa pode ser negativa.
         ByteBufCodecs.VAR_INT.encode(buf, model.defaultInitiative());
+        // 22/10/2026: a caixa "usar iniciativa padrao" e a pericia marcada, por
+        // ultimo, na mesma ordem do DECODER abaixo.
+        ByteBufCodecs.BOOL.encode(buf, model.initiativeUseDefault());
+        ByteBufCodecs.stringUtf8(32).encode(buf, model.initiativePericiaId());
     };
 
     private static final StreamDecoder<FriendlyByteBuf, SheetModel> DECODER = buf -> new SheetModel(
@@ -1346,10 +1406,13 @@ public record SheetModel(
             ByteBufCodecs.VAR_INT.decode(buf),
             ByteBufCodecs.VAR_INT.decode(buf),
             ByteBufCodecs.VAR_INT.decode(buf),
-            // 22/10/2026: a iniciativa padrao da mesa, na MESMA posicao do
-            // ENCODER acima (a ultima). Se um dos lados mudar de lugar, o
+            // 22/10/2026: a iniciativa padrao da mesa e os dois campos de
+            // iniciativa, na MESMA posicao do ENCODER acima (os ultimos).
+            // Se um dos lados mudar de lugar, o
             // round-trip do SheetModelCodecTest quebra.
-            ByteBufCodecs.VAR_INT.decode(buf)
+            ByteBufCodecs.VAR_INT.decode(buf),
+            ByteBufCodecs.BOOL.decode(buf),
+            ByteBufCodecs.stringUtf8(32).decode(buf)
     );
 
     public static final StreamCodec<FriendlyByteBuf, SheetModel> STREAM_CODEC =

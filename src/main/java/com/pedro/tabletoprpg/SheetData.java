@@ -143,8 +143,6 @@ public record SheetData(
      *
      * <p><b>Por que tem sinal:</b> a iniciativa e um modificador somado ao d20,
      * e modificador negativo e regra de RPG (destreza baixa, armadura pesada).
-     * O valor padrao da mesa ({@link SheetModel#defaultInitiative}) usa o mesmo
-     * intervalo, entao o Mestre tambem pode colocar uma tabela com penalidade.
      *
      * <p><b>E o mesmo teto dos limites de valor do Mestre</b>
      * ({@link SheetModel#VALUE_LIMIT_MAX}), pelo mesmo motivo: e o numero
@@ -743,15 +741,11 @@ public record SheetData(
      * leitura em regra de RPG, e o campo serve para mostrar a classe de armadura,
      * nao um modificador (modificadores vivem nos atributos, que vao a -30).
      *
-     * <p><b>22/10/2026, a iniciativa do personagem:</b> sao dois campos novos.
-     * O {@code initiative} e o valor <b>proprio</b> do personagem, e o
-     * {@code useDefaultInitiative} diz se ele esta usando a iniciativa padrao da
-     * mesa ({@link SheetModel#defaultInitiative()}) ou a sua. Marcado, o valor
-     * efetivo e o do Mestre; desmarcado, e o proprio.
-     *
-     * <p><b>Por que o valor proprio e gravado mesmo com a flag ligada:</b> quem
-     * desliga a flag, digita o numero e religa a flag nao pode perder o que
-     * digitou. O valor fica guardado, so nao e o que a ficha mostra.
+     * <p><b>22/10/2026, a iniciativa do personagem:</b> o {@code initiative} e o
+     * valor <b>proprio</b> do personagem, digitado pelo jogador quando a caixa
+     * "usar iniciativa padrao" do modelo esta marcada (ver {@code initiativeShown}).
+     * O {@code useDefaultInitiative} continua no save por compatibilidade, mas
+     * nao decide mais o que a ficha mostra.
      */
     public record Progress(int level, int xp, String xpText, int ca, int initiative,
                            boolean useDefaultInitiative) {
@@ -792,22 +786,6 @@ public record SheetData(
 
         public static Progress defaults() {
             return new Progress(1, 0, "", 0, 0, true);
-        }
-
-        /**
-         * O valor <b>efetivo</b> da iniciativa: o da mesa quando a flag esta
-         * ligada, e o proprio quando nao esta (22/10/2026).
-         *
-         * <p>E o que a ficha mostra e o que a rolagem usa. O modelo vem do
-         * {@link SheetModelHolder}, que existe nos dois lados: no servidor ele
-         * tem o modelo salvo pelo Mestre, e no cliente o modelo que veio no
-         * pacote.
-         */
-        public int effectiveInitiative() {
-            if (!useDefaultInitiative) {
-                return initiative;
-            }
-            return SheetModelHolder.current().defaultInitiative();
         }
     }
 
@@ -2111,12 +2089,10 @@ public record SheetData(
                             parseInt(value, progress.ca()), progress.initiative(),
                             progress.useDefaultInitiative()),
                     attributes, skills, pericias, attributeValueMin, attributeValueMax, periciaValueMax, inventory, spellbook);
-            // 22/10/2026: a iniciativa do personagem. Sao dois campos: o valor
-            // proprio ("initiative") e a flag do "usar a iniciativa do Mestre"
-            // ("useDefaultInitiative"). O valor e gravado MESMO com a flag
-            // ligada, para que quem desligue, digite e religue nao perca o
-            // numero. A flag chega como texto ("true"/"false"), como os outros
-            // booleanos da ficha.
+            // 22/10/2026: a iniciativa do personagem, o valor proprio gravado em
+            // "initiative". A caixa do modelo decide se ele e mostrado (ver
+            // initiativeShown). A flag por personagem ("usedefaultinitiative")
+            // continua aceita aqui, mas nao muda a ficha.
             case "initiative" -> new SheetData(identity, vitals,
                     new Progress(progress.level(), progress.xp(), progress.xpText(), progress.ca(),
                             parseInt(value, progress.initiative()), progress.useDefaultInitiative()),
@@ -2499,13 +2475,29 @@ public record SheetData(
             // `default` pelo mesmo motivo de hp/level: sem esta linha, "cd" cairia
             // em `attributes.valueOf("cd")` e a caixa mostraria 0 sempre.
             case "cd" -> spellbook.cd();
-            // 22/10/2026: a iniciativa. Devolve o valor EFETIVO: o da mesa
-            // quando a ficha esta usando a iniciativa do Mestre, e o proprio
-            // quando nao esta. Sem esta linha, "initiative" cairia em
-            // `attributes.valueOf(...)` e a caixa mostraria 0 sempre.
-            case "initiative" -> progress.effectiveInitiative();
+            // 22/10/2026: a iniciativa mostrada na ficha (ver initiativeShown).
+            // Sem esta linha, "initiative" cairia em `attributes.valueOf(...)` e
+            // a caixa mostraria 0 sempre.
+            case "initiative" -> initiativeShown();
             default -> attributes.valueOf(key);
         };
+    }
+
+    /**
+     * Iniciativa que a ficha mostra e a caixa edita (22/10/2026).
+     *
+     * <p>Com "usar iniciativa padrao" marcada no modelo, e o valor proprio do
+     * personagem ({@code progress.initiative}), que o jogador digita. Desmarcada,
+     * e o valor da pericia marcada no modelo, ou 0 sem pericia marcada. A regra
+     * usa a caixa <b>do modelo</b>, e nao a flag por personagem.
+     */
+    private int initiativeShown() {
+        SheetModel model = SheetModelHolder.current();
+        if (model.initiativeUseDefault()) {
+            return progress.initiative();
+        }
+        Pericia pericia = periciaById(model.initiativePericiaId());
+        return pericia == null ? 0 : pericia.value();
     }
 
     /**

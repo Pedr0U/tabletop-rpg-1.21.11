@@ -7,7 +7,6 @@ import com.pedro.tabletoprpg.SheetModelHolder;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
-import net.minecraft.client.gui.components.Checkbox;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.components.MultiLineEditBox;
 import net.minecraft.client.gui.components.Tooltip;
@@ -212,18 +211,6 @@ public class StatusScreen extends CharacterSheetScreen {
     /** Geometria das barras, calculada em buildPanel(). */
     private Bar hpBar;
     private Bar manaBar;
-
-    /**
-     * Checkbox "Usar iniciativa padrão" e a geometria para recriá-la.
-     *
-     * <p>Nesta versão o {@code Checkbox} não tem setter de estado: ele só muda
-     * quando a jogadora clica. O eco do servidor pode trazer a flag diferente
-     * (outra pessoa alterou a ficha), então a caixa é refeita no mesmo lugar,
-     * como em {@code PresetsScreen}.
-     */
-    private Checkbox initiativeCheckbox;
-    private int initiativeCheckboxX, initiativeCheckboxY, initiativeCheckboxW;
-    private boolean initiativeUsesDefault = true;
 
     /**
      * Os 6 botoes de passo de vida/mana, com o <b>campo</b> e o <b>delta</b> de
@@ -2467,63 +2454,22 @@ public class StatusScreen extends CharacterSheetScreen {
     }
 
     /**
-     * Cria o checkbox "Usar iniciativa padrão" e devolve o proximo Y.
+     * Iniciativa derivada da pericia marcada, somente leitura (22/10/2026).
      *
-     * <p>22/10/2026 (PARTE 6): a flag e por personagem ({@code SheetData.Progress}),
-     * e nao do modelo global. O campo de iniciativa logo abaixo mostra o valor
-     * efetivo e so aceita edicao quando a flag esta desligada.
+     * <p>So e usada com "usar iniciativa padrao" desmarcada: o valor e o da
+     * pericia marcada no modelo ({@link SheetModel#initiativePericiaId()}). Sem
+     * pericia marcada, ou sem o valor dela na ficha, mostra 0 -- o mesmo que o
+     * {@code align} usa para uma pericia sem valor gravado. Com a caixa marcada, a
+     * iniciativa e digitada pelo jogador (ver applyExtraState).
      */
-    private int addInitiativeToggle(int x0, int y, int w) {
-        initiativeCheckboxX = x0 + 2;
-        initiativeCheckboxY = y;
-        initiativeCheckboxW = Math.max(40, w - 4);
-        initiativeUsesDefault = sheet == null || sheet.progress().useDefaultInitiative();
-        initiativeCheckbox = buildInitiativeCheckbox(initiativeUsesDefault);
-        addRenderableWidget(initiativeCheckbox);
-        return y + rowH;
-    }
-
-    /**
-     * Monta o checkbox no estado pedido.
-     *
-     * <p>Nesta versao o {@code Checkbox} nao tem setter de estado, entao o eco do
-     * servidor que mude a flag precisa recriar o widget (ver
-     * {@link #applyExtraState}).
-     */
-    private Checkbox buildInitiativeCheckbox(boolean selected) {
-        Checkbox box = Checkbox.builder(Component.translatable("screen.tabletoprpg.status.use_default_initiative"), this.font)
-                .pos(initiativeCheckboxX, initiativeCheckboxY)
-                .maxWidth(initiativeCheckboxW)
-                .selected(selected)
-                .onValueChange((cb, checked) -> {
-                    initiativeUsesDefault = checked;
-                    if (sheet != null) {
-                        ClientPlayNetworking.send(new RpgNetworking.SheetFieldPayload(
-                                targetName, "useDefaultInitiative", Boolean.toString(checked)));
-                    }
-                    applyInitiativeEditable();
-                })
-                .build();
-        box.setSize(initiativeCheckboxW, Math.max(10, rowH - 2));
-        box.active = canEdit;
-        return box;
-    }
-
-    /**
-     * Escreve o {@code active} do checkbox e o {@code editable} do campo de
-     * iniciativa conforme a flag e a permissao de edicao.
-     *
-     * <p>Chamado no clique do checkbox e no {@code applyExtraState}, para o
-     * campo nao ficar editavel enquanto a ficha usa a iniciativa padrao.
-     */
-    private void applyInitiativeEditable() {
-        if (initiativeCheckbox != null) {
-            initiativeCheckbox.active = canEdit;
+    private int derivedInitiative() {
+        SheetModel m = model();
+        SheetModel.PericiaDef def = m.periciaById(m.initiativePericiaId());
+        if (def == null || sheet == null) {
+            return 0;
         }
-        EditBox box = fieldBoxes.get("initiative");
-        if (box != null) {
-            box.setEditable(canEdit && !initiativeUsesDefault);
-        }
+        SheetData.Pericia pericia = sheet.periciaById(def.id());
+        return pericia == null ? 0 : displayPericiaValue(pericia);
     }
 
     /**
@@ -2656,8 +2602,7 @@ public class StatusScreen extends CharacterSheetScreen {
         // 29/09/2026: o que sobra desse estouro na janela baixa e resolvido pela
         // rolagem da coluna esquerda ({@link #leftScroll}), e nao por mais uma
         // folga na conta.
-        // 22/10/2026 (PARTE 6): +2 linhas para o checkbox "Usar iniciativa
-        // padrão" e o campo de iniciativa, que ficam no fim de Progress.
+        // 22/10/2026: a iniciativa e uma linha so (derivada, sem checkbox).
         int neededRows = 3 + 5 + 3 + 3 + 2 + 2 + attrRowCount;
         // 27/09/2026 (Sheet Editor): o Mestre pode desligar a raca, a mana e o
         // XP, e ai as linhas abaixo somem. Sem descontar, a altura de linha
@@ -2794,10 +2739,9 @@ public class StatusScreen extends CharacterSheetScreen {
             y += rowH;
         }
 
-        // 22/10/2026 (PARTE 6): a iniciativa do personagem. O checkbox decide
-        // se a ficha usa a iniciativa padrão do modelo global; o campo mostra
-        // o valor efetivo e só é editável quando o checkbox está desmarcado.
-        y = addInitiativeToggle(x0, drawY(y), leftW);
+        // 22/10/2026: com "usar iniciativa padrao" marcada no modelo, a caixa e
+        // do jogador (editavel). Desmarcada, e derivada da pericia marcada e so
+        // leitura; ver applyExtraState.
         addField("initiative", x0, drawY(y), boxX, boxW, labelW, true);
         y += rowH;
 
@@ -4269,19 +4213,22 @@ public class StatusScreen extends CharacterSheetScreen {
         // 01/10/2026 (pagina 3): a caixa da CD e a linha do Modificador tambem
         // nao estao no `fieldBoxes` da base, entao recebem o eco do servidor aqui.
         applySpellHeader();
-        // 22/10/2026 (PARTE 6): o eco pode trazer a flag de iniciativa padrao
-        // diferente (outra pessoa alterou a ficha). O Checkbox nao tem setter,
-        // entao ele e recriado no mesmo lugar, como em PresetsScreen.
-        if (activeTab == 0 && initiativeCheckbox != null && sheet != null) {
-            boolean useDefault = sheet.progress().useDefaultInitiative();
-            if (initiativeUsesDefault != useDefault) {
-                removeWidget(initiativeCheckbox);
-                initiativeUsesDefault = useDefault;
-                initiativeCheckbox = buildInitiativeCheckbox(useDefault);
-                addRenderableWidget(initiativeCheckbox);
+        // 22/10/2026: caixa marcada no modelo -> o jogador digita a propria
+        // iniciativa (o valor vem do eco do servidor em applySheetToWidgets).
+        // Desmarcada -> derivada da pericia marcada, so leitura; escrever aqui
+        // nao manda payload, porque applySheetToWidgets roda com a notificacao
+        // desligada.
+        EditBox initiativeBox = fieldBoxes.get("initiative");
+        if (initiativeBox != null && sheet != null) {
+            if (model().initiativeUseDefault()) {
+                applyEditable(initiativeBox);
+            } else {
+                String shown = Integer.toString(derivedInitiative());
+                if (!shown.equals(initiativeBox.getValue())) {
+                    initiativeBox.setValue(shown);
+                }
+                initiativeBox.setEditable(false);
             }
-            initiativeUsesDefault = useDefault;
-            applyInitiativeEditable();
         }
     }
 

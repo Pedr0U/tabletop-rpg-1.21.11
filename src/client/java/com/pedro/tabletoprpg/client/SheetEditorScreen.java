@@ -7,6 +7,7 @@ import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.AbstractWidget;
 import net.minecraft.client.gui.components.Button;
+import net.minecraft.client.gui.components.Checkbox;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
@@ -258,14 +259,8 @@ public class SheetEditorScreen extends Screen {
         y = limitField(y, "pericia_max", staged.periciaValueMax(), false,
                 v -> staged = staged.withValueLimits(
                         staged.attributeValueMin(), staged.attributeValueMax(), v));
-        // 22/10/2026: a iniciativa PADRAO da mesa. O campo e com sinal (a
-        // iniciativa e um modificador do d20 e pode ser negativa) e fica numa
-        // secao propria, porque nao e um limite de valor: e o numero que o
-        // personagem usa quando o "usar a iniciativa do Mestre" esta ligado
-        // na ficha dele.
         y = header(y, "initiative");
-        y = limitField(y, "initiative_default", staged.defaultInitiative(), true,
-                v -> staged = staged.withDefaultInitiative(v));
+        y = initiativeUseDefaultField(y);
 
         y = header(y, "attributes");
         for (SheetModel.AttributeDef def : staged.attributes()) {
@@ -280,6 +275,12 @@ public class SheetEditorScreen extends Screen {
 
         y = header(y, "pericias");
         List<SheetModel.PericiaDef> pericias = staged.pericias();
+        // A coluna da iniciativa so existe com a caixa global desmarcada e com
+        // pericia criada: sem pericia nao ha o que marcar.
+        if (!staged.initiativeUseDefault() && !pericias.isEmpty()) {
+            captions.add(new Caption(y + 6, tr("initiative_column"), COL_CAPTION));
+            y += ROW_H;
+        }
         for (int i = 0; i < pericias.size(); i++) {
             y = periciaRow(y, pericias.get(i), i);
         }
@@ -390,12 +391,16 @@ public class SheetEditorScreen extends Screen {
      * fora o foco e o cursor. O {@code staged} atualizado por tecla e o que o
      * botao Salvar envia, entao a edicao ja vale sem remontar.
      */
-    private int limitField(int y, String key, int current, boolean signed, Consumer<Integer> apply) {
+    private int limitField(int y, String key, int current, boolean signed, boolean enabled,
+                           Consumer<Integer> apply) {
         captions.add(new Caption(y + 6, tr(key), COL_CAPTION));
         EditBox box = new EditBox(this.font, ctrlX(), y, ctrlW(), ROW_H - 4, tr(key));
         box.setFilter(s -> s.matches(signed ? "-?\\d{0,9}" : "\\d{0,9}"));
         box.setMaxLength(10);
         box.setValue(Integer.toString(current));
+        // Desligado (a caixa global de iniciativa esta desmarcada), o valor fica
+        // visivel mas nao e editado.
+        box.setEditable(enabled);
         box.setResponder(value -> {
             if (suppressNotify) {
                 return;
@@ -405,6 +410,37 @@ public class SheetEditorScreen extends Screen {
                 apply.accept(parsed);
             }
         });
+        addRenderableWidget(box);
+        slots.add(new Slot(box, y));
+        return y + ROW_H;
+    }
+
+    private int limitField(int y, String key, int current, boolean signed, Consumer<Integer> apply) {
+        return limitField(y, key, current, signed, true, apply);
+    }
+
+    /**
+     * A caixa "Usar iniciativa padrao?" (22/10/2026), marcada por padrao.
+     *
+     * <p>Marcada, cada ficha tem a propria iniciativa, digitada pelo jogador.
+     * Desmarcada, a iniciativa e a da pericia marcada, e cada pericia criada
+     * ganha uma marca na coluna ao lado ({@link #periciaRow}): so uma pericia
+     * pode ficar marcada.
+     *
+     * <p>Clicar reconstroi os widgets, porque e o que mostra ou esconde a coluna
+     * e liga ou desliga a caixa de valor; nao ha texto digitado a preservar aqui.
+     */
+    private int initiativeUseDefaultField(int y) {
+        Checkbox box = Checkbox.builder(tr("initiative_use_default"), this.font)
+                .pos(colX(), y)
+                .maxWidth(colW())
+                .selected(staged.initiativeUseDefault())
+                .onValueChange((cb, checked) -> {
+                    staged = staged.withInitiativeUseDefault(checked);
+                    rebuildWidgets();
+                })
+                .build();
+        box.setSize(colW(), ROW_H - 4);
         addRenderableWidget(box);
         slots.add(new Slot(box, y));
         return y + ROW_H;
@@ -573,6 +609,25 @@ public class SheetEditorScreen extends Screen {
             rebuildWidgets();
         }).bounds(rightX, y, BTN_W, ROW_H - 4).build();
         remove.active = staged.periciaCount() > SheetModel.MIN_PERICIAS;
+
+        // Coluna da iniciativa (22/10/2026): a marca fica a esquerda da linha,
+        // na faixa vazia do rotulo. So uma pericia fica marcada: gravar o id
+        // novo troca o anterior, e desmarcar a atual deixa nenhuma.
+        if (!staged.initiativeUseDefault()) {
+            String id = def.id();
+            Checkbox mark = Checkbox.builder(Component.empty(), this.font)
+                    .pos(colX(), y)
+                    .maxWidth(ROW_H - 4)
+                    .selected(id.equals(staged.initiativePericiaId()))
+                    .onValueChange((cb, checked) -> {
+                        staged = staged.withInitiativePericia(checked ? id : "");
+                        rebuildWidgets();
+                    })
+                    .build();
+            mark.setSize(ROW_H - 4, ROW_H - 4);
+            addRenderableWidget(mark);
+            slots.add(new Slot(mark, y));
+        }
 
         addRenderableWidget(name);
         addRenderableWidget(attr);

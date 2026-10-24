@@ -3,6 +3,8 @@ package com.pedro.tabletoprpg;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.fabric.api.event.player.UseBlockCallback;
 import net.fabricmc.fabric.api.event.player.UseEntityCallback;
+import net.fabricmc.fabric.api.networking.v1.PlayerLookup;
+import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.MinecraftServer;
@@ -497,6 +499,13 @@ public final class CombatController {
     private static final String TAG_DOWNED = "tabletoprpg_downed";
 
     /**
+     * Prefixo da tag que guarda a vida do mob antes de deitar, com o valor no
+     * final (ex.: "tabletoprpg_downed_hp=18.0"). A tag do Minecraft e texto, entao
+     * o valor vai junto dela.
+     */
+    private static final String TAG_DOWNED_HP = "tabletoprpg_downed_hp=";
+
+    /**
      * Deita (ou levanta) os monstros amarrados a uma ficha de ameaça.
      *
      * <p><b>Regra do Mestre (22/10/2026):</b> ficha com HP &lt;= 0 = monstro DEITADO,
@@ -519,6 +528,12 @@ public final class CombatController {
             if (mob == null) {
                 continue; // o mob nao existe mais
             }
+            if (mob.getTags().contains(TAG_DOWNED)) {
+                // Roda depois do tick vanilla (END_SERVER_TICK): o vanilla conta o
+                // deathTime de um mob morto e o remove em 20 ticks. O mob deitado
+                // nao morreu, entao zeramos a contagem a cada tick.
+                mob.deathTime = 0;
+            }
             ThreatSheet sheet = ThreatSheetStore.findAnyById(entry.getValue());
             if (sheet == null) {
                 // A ficha nao esta em memoria (Mestre fora da sessao, ou ficha apagada):
@@ -535,16 +550,22 @@ public final class CombatController {
     }
 
     /**
-     * Deita o mob: pose de nado (a unica vanilla que deita sem cama) e sem IA.
+     * Deita o mob: vida 0 (a queda de morte e a animacao vanilla) e sem IA.
      *
-     * <p><b>Por que a pose e a mesma do personagem deitado:</b> o vanilla nao tem pose
-     * "deitado de costas" (javap Entity$Pose: STANDING, SLEEPING, SWIMMING, ...), e
-     * SWIMMING e a unica que deixa a criatura no chao sem exigir cama.
+     * <p><b>Por que vida 0 e nao pose:</b> o vanilla desenha o mob morto deitado e
+     * vermelho sozinho, pelo {@code deathTime}. O mob nao morre de verdade: o
+     * {@link #tickDownedThreatMobs} zera o {@code deathTime} a cada tick, para o
+     * vanilla nao remover o mob em 20 ticks.
+     *
+     * <p><b>Por que a vida e guardada:</b> ela volta quando a ficha sobe acima de 0
+     * ({@link #clearDowned}). Guardamos so na primeira vez: as proximas chamadas
+     * veem a vida 0 e nao podem sobrescrever a vida real.
      */
     private static void applyDowned(Mob mob) {
-        if (mob.getPose() != Pose.SWIMMING) {
-            mob.setPose(Pose.SWIMMING);
+        if (downedHpTag(mob) == null) {
+            mob.addTag(TAG_DOWNED_HP + mob.getHealth());
         }
+        mob.setHealth(0.0f);
         if (!mob.isNoAi()) {
             mob.setNoAi(true);
         }
@@ -564,9 +585,29 @@ public final class CombatController {
         if (!mob.getTags().contains(TAG_DOWNED)) {
             return; // nao foi nos que deitou: nao mexe na pose nem na IA dele
         }
+        // Volta com a vida que tinha antes de deitar. Sem ela (ou com valor invalido),
+        // usa o maximo: o mob nao pode levantar com vida 0.
+        String hpTag = downedHpTag(mob);
+        float hp;
+        try {
+            hp = hpTag == null ? 0.0f : Float.parseFloat(hpTag.substring(TAG_DOWNED_HP.length()));
+        } catch (NumberFormatException e) {
+            hp = 0.0f; // tag editada a mao: cai no maximo abaixo
+        }
+        mob.setHealth(hp > 0.0f ? hp : mob.getMaxHealth());
+        if (hpTag != null) {
+            mob.removeTag(hpTag);
+        }
         mob.removeTag(TAG_DOWNED);
+        // Zera o deathTime do servidor e manda o mesmo reset para os clientes que
+        // veem o mob: o deathTime nao e sincronizado, e o cliente continuaria girando
+        // o mob como morto.
+        mob.deathTime = 0;
+        for (ServerPlayer watcher : PlayerLookup.tracking(mob)) {
+            ServerPlayNetworking.send(watcher, new RpgNetworking.DownedResetPayload(mob.getId()));
+        }
         if (mob.getPose() == Pose.SWIMMING) {
-            mob.setPose(Pose.STANDING);
+            mob.setPose(Pose.STANDING); // limpa o SWIMMING de versoes antigas da queda
         }
         // A IA so volta se o mob nao esta congelado por outra regra da mesa (peça,
         // monstro selecionado, ancora) nem pela Camera Tool.
@@ -574,6 +615,16 @@ public final class CombatController {
                 && !mob.getTags().contains(CameraToolManager.CAMERA_TAG)) {
             mob.setNoAi(false);
         }
+    }
+
+    /** Tag que guarda a vida antes de deitar, ou null se ainda nao foi guardada. */
+    private static String downedHpTag(Mob mob) {
+        for (String tag : mob.getTags()) {
+            if (tag.startsWith(TAG_DOWNED_HP)) {
+                return tag;
+            }
+        }
+        return null;
     }
 
     /**
@@ -773,6 +824,17 @@ public final class CombatController {
                     mob.setInvulnerable(invulnerable);
                     changed++;
                     break;
+                }
+            }
+        }
+        // Mobs inseridos antes de um restart nao estao em insertedMobs (o Set nasce vazio):
+        // varre os niveis pela tag NBT para que a invulnerabilidade tambem valha para eles.
+        for (ServerLevel level : server.getAllLevels()) {
+            for (Entity entity : level.getAllEntities()) {
+                if (entity instanceof Mob mob && mob.getTags().contains("tabletoprpg_inserted")
+                        && mob.isInvulnerable() != invulnerable) {
+                    mob.setInvulnerable(invulnerable);
+                    changed++;
                 }
             }
         }

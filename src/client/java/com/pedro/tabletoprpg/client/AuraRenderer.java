@@ -39,6 +39,10 @@ public final class AuraRenderer {
 
     public static void register() {
         WorldRenderEvents.AFTER_ENTITIES.register(context -> {
+            // No modo FREE a aura nao e desenhada (so o desenho; o limite do servidor nao muda).
+            if (TabletopRpgClient.isFreeMode()) {
+                return;
+            }
             List<RpgNetworking.AuraStatePayload.AuraData> auras = TabletopRpgClient.auras;
             if (auras.isEmpty()) {
                 return;

@@ -4307,3 +4307,62 @@ Modo Horda, HP 0 deitando, presets Open Roll, iniciativa, pt_br).
 LICAO: subagente cancelado no meio DEIXA codigo no working tree (a Parte 5 ja estava quase toda
 implementada quando a tarefa foi relancada). Antes de redelegar, checar `git diff --stat` e ler os
 arquivos-alvo.
+
+## 23/10/2026 - Correcoes pos-validacao (4 pendencias) - continuacao
+
+FATO verificado (build EXIT:0; 240 testes, 0 falhas; relatorio `reports/2026-10-23_correcoes-pos-validacao.md`):
+- Os 4 pontos pendentes foram aplicados pelo agente principal (duas delegacoes foram canceladas):
+  (1) `MasterCommands` release agora chama `BlockLockManager.sendSnapshotTo(player)` (o claim ja
+  tinha); (2) `SessionManager.onServerStarted` le `GameRules.SPAWN_MOBS` da overworld no
+  `SERVER_STARTED` (registrado em `TabletopRpg.onInitialize`) e chama `ThreatSheetBinding.forgetAll()`;
+  (3) `CombatController.applyInvulnerabilityToInsertedMobs` varre os niveis pela tag
+  `tabletoprpg_inserted`; (4) sobrecarga `broadcast(ctx, Component)` + chaves
+  `message.tabletoprpg.master_claimed_broadcast` / `master_released_broadcast` nos dois idiomas.
+- FATO verificado: o gate `scanEncoding` do `build.gradle` FALHA com U+FFFD dentro de codigo Java
+  (aqui, comentario em `MasterCommands` herdado de edicao anterior). Corrigido trocando os bytes do
+  trecho por ASCII, sem converter o arquivo inteiro. O build so volta a ficar verde com isso.
+- LICAO: texto com mojibake reescrito por ferramenta de edicao pode entrar com bytes corrompidos
+  sem erro. Em comentarios e codigo, usar so ASCII em texto novo; em JSON de lang, escapar o `§`
+  como `\u00a7`.
+- HIPOTESE (nao verificada): `en_us.json` tem trechos em que o `§` aparece como byte 0xA7 isolado
+  (a ferramenta mostra como caractere de substituicao), o que nao e UTF-8 valido. Se Minecraft
+  ler esses trechos como UTF-8, os codigos de cor se perdem. Verificar com bytes antes de afirmar.
+- NAO VALIDADO EM JOGO: as 4 correcoes (tecla B apos claim, gamerule apos restart, invulnerabilidade
+  de inseridos antigos, mensagens de claim/release em pt_br).
+
+## 23/10/2026 - HP 0 sem sumir, copias menores, iniciativa no Sheet Editor (relatorio `reports/2026-10-23_hp0-copias-iniciativa.md`)
+
+FATO verificado (javap em 1.21.11; build EXIT:0; 240 testes verdes; NAO testado em jogo):
+- `LivingEntity.tickDeath` incrementa `deathTime` e, aos 20, faz `remove(KILLED)` SO no servidor
+  (ha guarda de `isClientSide`). Por isso o servidor zera `mob.deathTime` a cada tick para o mob caido.
+- `setHealth(0)` nao chama `die()`; so grava dado sincronizado. O cliente conta `deathTime` sozinho
+  enquanto `isDeadOrDying()`; `LivingEntityRenderer` usa `deathTime` para o angulo de 90 graus e para o
+  overlay vermelho (`hasRedOverlay = hurtTime > 0 || deathTime > 0`).
+- `deathTime` NAO e sincronizado: ao levantar, o cliente precisa do pacote `DownedResetPayload`.
+- `hurtServer` ignora dano em mob com `isDeadOrDying()`: caido fica imune (suposicao, confirmar).
+- Tags de entidade sao TEXTO: a vida guardada e `tabletoprpg_downed_hp=<valor>`, nao NBT float.
+- HIPOTESE nao verificada: se `ClientLevel` tambem remove o mob aos 20 ticks, o mob some no cliente.
+  A pesquisa indicou a guarda de `isClientSide`; confirmar em jogo.
+- `DownedBodyAlignMixin` so atua em `Player`; nao interfere nos mobs.
+
+FATO (iniciativa): `SheetModel` ganhou `initiativeUseDefault` (padrao true) e `initiativePericiaId`
+(padrao vazio), NBT com fallback e STREAM_CODEC na mesma ordem. A caixa fica no `SheetEditorScreen`; a
+ficha do personagem nao tem mais caixa, so o valor derivado. Pendencia: `SheetData` ainda usa a regra
+antiga em `getNumeric("initiative")`; nenhum consumidor de combate encontrado.
+
+LICAO: subagente de implementacao costuma parar no limite de 3 arquivos mesmo quando o pedido ja
+autoriza. Autorizar os arquivos explicitamente no prompt evita a parada.
+
+## 23/10/2026 - Causa do mob travado ao levantar + nova regra de iniciativa (relatorio `reports/2026-10-23_pendencia-mob-travado-iniciativa.md`)
+
+FATO verificado (javap + codigo):
+- `clearDowned` chama `setHealth(hp)` e envia `DownedResetPayload` no MESMO tick. A vida so e
+  sincronizada no tick SEGUINTE (`ServerEntity.sendChanges` roda em `ChunkMap.tick`, depois de
+  `tickServer`). Resultado: o cliente recebe o reset ANTES da vida > 0, continua
+  `isDeadOrDying=true`, conta `deathTime` +1 e o residual fica para sempre (mob de pe, vermelho,
+  inclinado). Correcao proposta: reenviar `DownedResetPayload` atrasado 1 tick (set de UUIDs
+  pendentes limpo no proximo END_SERVER_TICK). NAO APLICADA AINDA.
+- HIPOTESE: `isFrozenByTable` mantem `noAi=true` por design (mob de mesa). Confirmar em jogo.
+- Decisao do usuario: nova regra de iniciativa - sem campo de valor no Sheet Editor (so caixa +
+  coluna de pericia); campo EDITAVEL de iniciativa so na ficha do jogador quando a caixa esta
+  marcada. Tarefa de implementacao CANCELADA (subagente); nao implementada.
