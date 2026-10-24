@@ -3196,7 +3196,7 @@ public final class RpgNetworking {
         } catch (RollPreset.PresetException e) {
             // Formula ou cor invalida: se acusa aqui, com o texto do RollPreset, que
             // e o mesmo que o comando mostraria.
-            return presetRefuse(player, "message.tabletoprpg.preset_create_failed", e.getMessage());
+            return presetRefuse(player, "message.tabletoprpg.preset_create_failed", e.toComponent());
         }
 
         UUID uuid = player.getUUID();
@@ -3334,7 +3334,7 @@ public final class RpgNetworking {
             preset = RollPreset.create(name, payload.formula(), payload.colorId(), payload.openRoll());
         } catch (RollPreset.PresetException e) {
             // Formula nao reconhecida: e agora que a tela acusa, ao salvar.
-            return refuse("message.tabletoprpg.preset_create_failed", e.getMessage());
+            return refuse("message.tabletoprpg.preset_create_failed", e.toComponent());
         }
 
         UUID uuid = player.getUUID();

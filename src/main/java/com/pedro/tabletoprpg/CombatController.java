@@ -506,6 +506,13 @@ public final class CombatController {
     private static final String TAG_DOWNED_HP = "tabletoprpg_downed_hp=";
 
     /**
+     * Mobs que acabaram de levantar. O reset visual vai no tick SEGUINTE: a vida
+     * (setHealth) so chega ao cliente depois do tick atual; se o reset chegasse antes,
+     * o cliente ainda veria isDeadOrDying e recontaria o deathTime (mob preso deitado).
+     */
+    private static final Set<UUID> PENDING_DOWNED_RESET = new HashSet<>();
+
+    /**
      * Deita (ou levanta) os monstros amarrados a uma ficha de ameaça.
      *
      * <p><b>Regra do Mestre (22/10/2026):</b> ficha com HP &lt;= 0 = monstro DEITADO,
@@ -520,6 +527,18 @@ public final class CombatController {
      * ficha), e nao todas as entidades do mundo.
      */
     private static void tickDownedThreatMobs(MinecraftServer server) {
+        // Reset pendente de quem levantou no tick anterior: a vida ja foi sincronizada.
+        for (UUID pending : new ArrayList<>(PENDING_DOWNED_RESET)) {
+            PENDING_DOWNED_RESET.remove(pending);
+            Mob mob = ThreatSheetBinding.mobEntity(server, pending);
+            if (mob == null) {
+                continue;
+            }
+            mob.deathTime = 0;
+            for (ServerPlayer watcher : PlayerLookup.tracking(mob)) {
+                ServerPlayNetworking.send(watcher, new RpgNetworking.DownedResetPayload(mob.getId()));
+            }
+        }
         // O cache do vinculo nasce vazio depois de um reinicio do servidor: e a tag
         // do mob que sabe do vinculo. Refazemos o cache uma vez por sessao.
         ThreatSheetBinding.selfHealOnce(server);
@@ -599,13 +618,10 @@ public final class CombatController {
             mob.removeTag(hpTag);
         }
         mob.removeTag(TAG_DOWNED);
-        // Zera o deathTime do servidor e manda o mesmo reset para os clientes que
-        // veem o mob: o deathTime nao e sincronizado, e o cliente continuaria girando
-        // o mob como morto.
+        // Zera o deathTime do servidor e agenda o reset visual para o proximo tick
+        // (ver PENDING_DOWNED_RESET): o deathTime nao e sincronizado.
         mob.deathTime = 0;
-        for (ServerPlayer watcher : PlayerLookup.tracking(mob)) {
-            ServerPlayNetworking.send(watcher, new RpgNetworking.DownedResetPayload(mob.getId()));
-        }
+        PENDING_DOWNED_RESET.add(mob.getUUID());
         if (mob.getPose() == Pose.SWIMMING) {
             mob.setPose(Pose.STANDING); // limpa o SWIMMING de versoes antigas da queda
         }

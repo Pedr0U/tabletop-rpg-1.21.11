@@ -69,7 +69,7 @@ public class SkillFormScreen extends Screen {
     private MultiLineEditBox descriptionBox;
 
     public SkillFormScreen(Screen parent, String targetName, int index, SheetData.Skill original) {
-        super(Component.literal(index < 0 ? "New Skill" : "Edit Skill"));
+        super(Component.translatable(index < 0 ? "screen.tabletoprpg.skill_form.title_new" : "screen.tabletoprpg.skill_form.title_edit"));
         this.parent = parent;
         this.targetName = targetName == null ? "" : targetName;
         this.index = index;
@@ -138,13 +138,13 @@ public class SkillFormScreen extends Screen {
 
     /** Rotulos das caixas, ancorados na propria caixa. */
     private void renderLabels(GuiGraphics graphics) {
-        CharacterSheetScreen.drawLabel(graphics, this.font, nameBox.getX(), "Name", nameBox.getY());
-        CharacterSheetScreen.drawLabel(graphics, this.font, nameBox.getX(), "Description", descriptionBox.getY());
+        CharacterSheetScreen.drawLabel(graphics, this.font, nameBox.getX(), Component.translatable("screen.tabletoprpg.skill_form.name").getString(), nameBox.getY());
+        CharacterSheetScreen.drawLabel(graphics, this.font, nameBox.getX(), Component.translatable("screen.tabletoprpg.skill_form.description").getString(), descriptionBox.getY());
     }
 
     /** Largura da coluna dos rotulos: a maior das duas palavras, mais folga. */
     private int labelW() {
-        return Math.max(LABEL_W, this.font.width("Description") + 6);
+        return Math.max(LABEL_W, this.font.width(Component.translatable("screen.tabletoprpg.skill_form.description").getString()) + 6);
     }
 
     @Override

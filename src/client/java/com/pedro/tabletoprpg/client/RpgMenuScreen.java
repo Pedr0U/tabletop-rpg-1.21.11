@@ -111,14 +111,13 @@ public class RpgMenuScreen extends Screen {
         //  - Mestre: Players, Rolls, Settings. O mestre NAO tem ficha propria
         //    (sem "My Sheet") e o jogador NAO tem "Players".
         if (isMaster) {
-            y = addButton("Players", x, y, () -> openPlayers());
+            y = addButton(Component.translatable("screen.tabletoprpg.rpg_menu.players"), x, y, () -> openPlayers());
             // 02/10/2026: as fichas de ameaça são do Mestre, e o botão fica no menu
-            // dele porque é onde o resto da mesa dele fica. Texto em português, como o
-            // resto do que entra nesta rodada; os botões antigos seguem em inglês.
+            // dele porque é onde o resto da mesa dele fica.
             //
             // <b>Esconder o botão NÃO é permissão:</b> qualquer jogador pode mandar o
             // pacote, e o handler no servidor recusa quem não for Mestre.
-            y = addButton("Fichas de Ameaça", x, y, () -> {
+            y = addButton(Component.translatable("screen.tabletoprpg.rpg_menu.threat_sheets"), x, y, () -> {
                 if (this.minecraft != null) {
                     this.minecraft.setScreen(new ThreatSheetsScreen(this));
                 }
@@ -128,10 +127,10 @@ public class RpgMenuScreen extends Screen {
             // passaram a ser a TERCEIRA ABA da ficha, que o jogador abre pelo
             // "Player Sheet" e o mestre pelas setinhas. Um botao separado levaria
             // a uma tela que deixa de existir.
-            y = addButton("Player Sheet", x, y, () -> openStatus());
+            y = addButton(Component.translatable("screen.tabletoprpg.rpg_menu.player_sheet"), x, y, () -> openStatus());
         }
 
-        y = addButton("Rolls", x, y, () -> {
+        y = addButton(Component.translatable("screen.tabletoprpg.rpg_menu.rolls"), x, y, () -> {
             if (this.minecraft != null) {
                 this.minecraft.setScreen(new DiceRollScreen(this));
             }
@@ -140,12 +139,12 @@ public class RpgMenuScreen extends Screen {
         // porque a jogadora pediu o botao "tanto do player quanto do mestre": o diario e
         // pessoal (cada um tem o seu, no NBT dele) e por isso nao faz sentido o mestre ter o
         // dele escondido.
-        y = addButton("Diário", x, y, () -> {
+        y = addButton(Component.translatable("screen.tabletoprpg.rpg_menu.diary"), x, y, () -> {
             if (this.minecraft != null) {
                 this.minecraft.setScreen(DiaryScreen.open(this));
             }
         });
-        y = addButton("Settings", x, y, () -> {
+        y = addButton(Component.translatable("screen.tabletoprpg.rpg_menu.settings"), x, y, () -> {
             if (this.minecraft != null) {
                 this.minecraft.setScreen(new RpgSettingsScreen(this, isMaster));
             }
@@ -153,7 +152,7 @@ public class RpgMenuScreen extends Screen {
 
         if (!isMaster && isMyTurn) {
             y += BUTTON_GAP;
-            addButton("End Turn", x, y, () -> {
+            addButton(Component.translatable("screen.tabletoprpg.rpg_menu.end_turn"), x, y, () -> {
                 sendCommand("rpg turn finish");
                 this.onClose();
             });
@@ -195,8 +194,8 @@ public class RpgMenuScreen extends Screen {
     }
 
     /** Adiciona um botão empilhado e retorna a próxima posição Y. */
-    private int addButton(String label, int x, int y, Runnable onPress) {
-        this.addRenderableWidget(Button.builder(Component.literal(label), b -> onPress.run())
+    private int addButton(Component label, int x, int y, Runnable onPress) {
+        this.addRenderableWidget(Button.builder(label, b -> onPress.run())
             .bounds(x, y, buttonWidth, BUTTON_HEIGHT)
             .build());
         return y + BUTTON_GAP;
@@ -229,11 +228,14 @@ public class RpgMenuScreen extends Screen {
         // Agora com FF no começo (Cinza escuro sólido)
         int textColor = 0xFF333333;
 
-        drawCenteredText(graphics, "Role: " + (isMaster ? "MASTER" : "PLAYER"), textY, textColor);
+        String roleName = Component.translatable(isMaster
+            ? "screen.tabletoprpg.rpg_menu.role_master"
+            : "screen.tabletoprpg.rpg_menu.role_player").getString();
+        drawCenteredText(graphics, Component.translatable("screen.tabletoprpg.rpg_menu.role", roleName).getString(), textY, textColor);
         textY += textSpacing;
-        drawCenteredText(graphics, "Mode: " + modeName, textY, textColor);
+        drawCenteredText(graphics, Component.translatable("screen.tabletoprpg.rpg_menu.mode", modeName).getString(), textY, textColor);
         textY += textSpacing;
-        drawCenteredText(graphics, "Turn: " + activePlayerName, textY, textColor);
+        drawCenteredText(graphics, Component.translatable("screen.tabletoprpg.rpg_menu.turn", activePlayerName).getString(), textY, textColor);
     }
 
     @Override

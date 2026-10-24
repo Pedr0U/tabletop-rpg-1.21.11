@@ -4366,3 +4366,106 @@ FATO verificado (javap + codigo):
 - Decisao do usuario: nova regra de iniciativa - sem campo de valor no Sheet Editor (so caixa +
   coluna de pericia); campo EDITAVEL de iniciativa so na ficha do jogador quando a caixa esta
   marcada. Tarefa de implementacao CANCELADA (subagente); nao implementada.
+
+## 23/10/2026 (continuacao) - Revive corrigido e iniciativa fechada (relatorio `reports/2026-10-23_revive-e-iniciativa.md`)
+
+FATO verificado: o reset visual do mob caido agora vai no tick SEGUINTE (`PENDING_DOWNED_RESET` em
+`CombatController`), porque a vida sincronizada so chega ao cliente depois do tick em que foi definida.
+Build EXIT:0; 240 testes verdes; validador aprovou com ressalvas. NAO testado em jogo.
+
+FATO verificado (git): a regra de iniciativa ja estava no commit `704bd0a` ("PT 2"), que NAO foi feito
+pelo agente. Esta sessao so corrigiu a javadoc de `SheetModel.withInitiativeUseDefault` (estava dizendo
+que a iniciativa era o `defaultInitiative` global).
+
+CORRECAO de bloco anterior: a ressalva "SheetData usa regra antiga" estava desatualizada. O getter do
+servidor (`SheetData.getNumeric("initiative")` -> `initiativeShown()`) ja segue a regra nova.
+
+PENDENTE: `SheetModel.withDefaultInitiative` sem chamador e `defaultInitiative` persistido sem uso.
+
+FATO (usuario, testes em jogo): revive do mob caido e iniciativa "estao tudo certo" (confirmado pelo
+usuario em 23/10/2026). Pendencias futuras que ele citou: acertar "algumas coisas" depois (nao
+especificadas ainda).
+
+DECISOES DO USUARIO sobre traducao (23/10/2026):
+- Rolls (`DiceRollScreen`): pode trocar a comparacao do texto "Select dice..." por constante.
+- Titulo "Character Status" (`StatusScreen` -> `CharacterSheetScreen`): pode traduzir.
+- Mensagens de erro de formula (DiceFormula, FormulaResolver, DiaryStore, RollPreset): traduzir,
+  dependendo do idioma do jogador.
+- "Player" -> "Jogador": pode traduzir. Traduzir SO o rotulo; o conteudo preenchido pelo jogador
+  nao entra agora.
+- Rotulos das fichas: pode traduzir. Conteudo padrao das fichas fica para depois (usuario vai descrever).
+
+PROGRESSO DA TRADUCAO (23/10/2026), cada lote validado por build EXIT:0 e 240 testes:
+- FEITO: `DiceRollScreen` (placeholder "Select dice..." -> chave `screen.tabletoprpg.dice_roll.select_dice`;
+  comparacao trocada por checagem de estado: sem dados e sem modificador). `StatusScreen` (titulo
+  "Character Status" traduzido no ponto de chamada; chave `screen.tabletoprpg.status.title_character`).
+  `DiceFormula`: 21 chaves `message.tabletoprpg.formula.error.*`; `SyntaxException` ganhou `key`, `args`
+  e `toComponent()`; `getMessage()` continua em ingles.
+- PENDENTE nesta etapa: os catch sites de `SyntaxException` em `MasterCommands` (~1009, ~1648, ~1686)
+  ainda usam `getMessage()` e precisam de `toComponent()`; o wrap em ~1729 perde a chave. Sem isso, a
+  traducao da formula nao chega ao chat. Validar no jogo com cliente em ingles e portugues.
+- PENDENTE: `FormulaResolver` (2), `DiaryStore` (5), `RollPreset` (2) com mensagens em ingles; "Player" ->
+  "Jogador" (rotulo em SheetModel ~601 e SheetData ~2631, cuidado: nao alterar chave de dado); rotulos
+  das fichas; `RpgMenuScreen`, `RpgSettingsScreen`, `PresetsScreen`, `PlayerListScreen`,
+  `InventoryItemScreen`, `SkillFormScreen`, `CharacterSheetScreen` ("Name required"); chat e menu de
+  `MasterCommands`; `DamageControlHandler` (~85); `ModItems` hover (~197, ~232).
+- NOTA: `DiceFormula` importa `net.minecraft.network.chat.Component` e o cabecalho da classe diz "Java
+  puro, sem Minecraft": comentario desatualizado a corrigir.
+- Limite operacional: subagente de implementacao recusa mais de 3 arquivos por tarefa mesmo com
+  autorizacao explicita. Dividir em lotes de ate 3 arquivos (tela + en_us + pt_br).
+
+PROGRESSO (continuacao, 23/10/2026, todos com build EXIT:0 e 240 testes):
+- FEITO: chat de erro de formula em `MasterCommands` (1009, 1648, 1686) usa `toComponent()`; wrap em
+  ~1729 repassa chave e args (`FormulaResolver.ResolveException` ganhou `getKey()`/`getArgs()`).
+- FEITO: `FormulaResolver` 6 mensagens viraram chave `message.tabletoprpg.formula.resolve.*`.
+- FEITO: `RollPreset` 5 mensagens viraram `message.tabletoprpg.preset.error.*` (+ cor desconhecida).
+- PENDENTE tecnico: (a) `RollPreset` ~223 captura `DiceFormula.SyntaxException`, que nao expoe
+  `getKey()`/`getArgs()`: adicionar em `DiceFormula` e usar no catch. (b) `MasterCommands` ~1285 e
+  ~1361: trocar `e.getMessage()` por `e.toComponent()` no `preset_create_failed`. (c) `RpgNetworking`
+  ~3199 e ~3337 (`presetRefuse`/`refuse`) passam `e.getMessage()`: trocar por `toComponent()`.
+- PENDENTE de aprovacao: `en_us.json` linhas ~71-73 (`formula.resolve.unknown_attribute*`) com ponto
+  duplo "formula.. Valid names" (bug ja existente, herdado de `validHint`). Corrigir com aprovacao.
+- PENDENTE: "Player" -> "Jogador"; rotulos das fichas; telas (`RpgMenuScreen`, `RpgSettingsScreen`,
+  `PresetsScreen`, `PlayerListScreen`, `InventoryItemScreen`, `SkillFormScreen`, `CharacterSheetScreen`
+  "Name required"); chat/menu do `MasterCommands`; `DamageControlHandler` ~85; `ModItems` hover ~197,
+  ~232; `DiaryStore` (5).
+- Validar no jogo: formula invalida (`/rpg roll 1d6+Xyz`, `/rpg roll 2d`) e preset invalido, em cliente
+  ingles e portugues. Nada validado em jogo ainda.
+
+PROGRESSO DA TRADUCAO (continuacao 2, 23/10/2026; relatorio `reports/2026-10-23_traducao-textos-ingles.md`):
+- FEITO: formula/preset/chat com `toComponent()`; ponto duplo corrigido; rotulos "Jogador", "Initiative",
+  "Character Appearance", "Character Backstory"; telas RpgMenu, RpgSettings, Presets, PlayerList,
+  InventoryItem, SkillForm, SpellForm, CharacterSheet ("Name required"); 10 avisos de chat e botoes do
+  menu ASCII (`createBtn`/`createSuggestBtn` recebem `Component`) no `MasterCommands`.
+- DECISAO DO IMPLEMENTADOR SEM CONFIRMACAO (revisar com o usuario): `threat_sheet_item_level` virou
+  "CR %s" (era "ND %s").
+- PENDENTE: rolagens do `MasterCommands` ("rolled", "TOTAL", "CRIT") exigem trocar retorno de
+  `rollDice`/`rollMessageFor` para Component; hovers dos botoes; `DiaryStore`; `SheetData.Spell.circleLabel()`
+  ("Circulo" fixo e "1o Circulo" em ingles); secoes da ficha ("Identity", "Progress", "Attributes",
+  "Skill Checks", "Bonus"); modos de camera (`SpectatorCameraController`) e cores de predefinicao
+  (`RollPresetColor`).
+- LICAO OPERACIONAL: dois builds Gradle simultaneos no mesmo projeto causaram EOF e XMLs ausentes. Um
+  build por vez. Subagente recusa mais de 3 arquivos por tarefa mesmo com autorizacao.
+
+PROGRESSO (continuacao 3, 23/10/2026): FEITO: rolagens do chat (`rollMessageFor`/`rollDice` viraram
+Component com chaves `message.tabletoprpg.roll.*`); dicas dos botoes do menu (`menu.hover.*`); circulo
+da magia (`screen.tabletoprpg.spell.circle`); secoes da ficha (`status.section.*`); nomes de modo de
+camera (`camera_mode.*`); cores de predefinicao (`roll_color.*`, `RollPresetColor.displayName` com
+`getString()`); en_us.json com valores em INGLES (45 chaves; antes havia portugues); botoes "Fichas de
+Ameaca" e "Diario" do menu (`rpg_menu.threat_sheets`/`diary`).
+DECISAO DO DIARIO: `DiaryStore` nao envia excecao ao chat (so `LOGGER.warn`), entao as 5 mensagens
+ficam em ingles de proposito (log).
+PENDENTE, requer decisao do usuario:
+1. (ALTO impacto, rede) mensagens de preset (`RpgNetworking.translatableText` -> `PresetResultPayload`
+   e `PresetCreateResultPayload`) e `RollPresetColor.displayName()` usam `getString()` no SERVIDOR, logo
+   saem no idioma do servidor, nao do jogador. Correcao = trocar String por Component nos payloads
+   (mudanca de STREAM_CODEC). Aguarda aprovacao.
+2. `MasterCommands` ~701: `@e[name="..."]` compara com `mob.getName().getString()`; mob sem nome
+   customizado devolve a traducao vanilla no idioma do servidor. Risco baixo; corrigir junto com (1).
+3. `DiaryScreenBase` ~153 `SCREEN_TITLE` "Diario" fixo (arquivo fora da autorizacao).
+4. `ThreatSheetScreen` ~1356: botao "Atualizar"/"Salvar" escrito em Java (nao passa pelo lang), enquanto a
+   mensagem `threat_sheet_blank_display_name` agora diz "click Update". Ajustar no Java.
+5. `PresetsScreen` "Del"/"Del?" mantidos em ingles de proposito (botao de 20 px).
+6. `DiceRollScreen` ~202 "§lDice Roller" fixo em ingles.
+7. `ThreatPericiasScreen` ~227 "*Escolha a Perícia*" fixo em portugues.
+Validacao independente do lote: APROVADO COM RESSALVAS (build EXIT:0, 240 testes, paridade 406 chaves).

@@ -160,7 +160,7 @@ public class DiceRollScreen extends Screen {
 
     /** Constrói o texto visual, ex: "d20 + d10 + 9" ou "d8 - 2" */
     private String getRollExpression() {
-        if (selectedDice.isEmpty() && modifier == 0) return "Select dice...";
+        if (selectedDice.isEmpty() && modifier == 0) return Component.translatable("screen.tabletoprpg.dice_roll.select_dice").getString();
 
         StringBuilder sb = new StringBuilder();
         if (!selectedDice.isEmpty()) {
@@ -181,7 +181,7 @@ public class DiceRollScreen extends Screen {
 
     private void rollDice() {
         String expr = getRollExpression();
-        if (expr.equals("Select dice...")) return;
+        if (selectedDice.isEmpty() && modifier == 0) return;
 
         // Limpa os espaços da string (ex: "d20+d10+9") e envia para o servidor
         String cmd = "rpg roll " + expr.replace(" ", "");

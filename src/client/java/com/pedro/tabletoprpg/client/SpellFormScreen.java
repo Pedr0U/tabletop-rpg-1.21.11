@@ -43,9 +43,13 @@ public class SpellFormScreen extends Screen {
     /** Espaco reservado ao rotulo a esquerda da caixa. */
     private static final int LABEL_W = 66;
 
-    /** Os cinco campos de texto, na ordem em que saem no formulario. */
-    private static final String[] FIELD_LABELS =
-            {"Execution", "Range", "Target", "Duration", "Cost"};
+    /** Chaves de traducao dos cinco campos de texto, na ordem em que saem no formulario. */
+    private static final String[] FIELD_LABEL_KEYS = {
+            "screen.tabletoprpg.spell_form.execution",
+            "screen.tabletoprpg.spell_form.range",
+            "screen.tabletoprpg.spell_form.target",
+            "screen.tabletoprpg.spell_form.duration",
+            "screen.tabletoprpg.spell_form.cost"};
 
     private final Screen parent;
     private final String targetName;
@@ -73,7 +77,7 @@ public class SpellFormScreen extends Screen {
             saveButton.active = !nameBox.getValue().isBlank();
         }
     }
-    private EditBox[] fieldBoxes = new EditBox[FIELD_LABELS.length];
+    private EditBox[] fieldBoxes = new EditBox[FIELD_LABEL_KEYS.length];
 
     /** O circulo escolhido no formulario, de 1 a 5. */
     private int circle;
@@ -82,7 +86,7 @@ public class SpellFormScreen extends Screen {
     private int circleY;
 
     public SpellFormScreen(Screen parent, String targetName, int index, SheetData.Spell original) {
-        super(Component.literal(index < 0 ? "New Magic" : "Edit Magic"));
+        super(Component.translatable(index < 0 ? "screen.tabletoprpg.spell_form.title_new" : "screen.tabletoprpg.spell_form.title_edit"));
         this.parent = parent;
         this.targetName = targetName == null ? "" : targetName;
         this.index = index;
@@ -133,13 +137,13 @@ public class SpellFormScreen extends Screen {
                 .build());
         y += ROW_H;
 
-        nameBox = field("Name", boxX, y, boxW, current.name(), SheetData.Spell.SPELL_NAME_MAX);
+        nameBox = field(Component.translatable("screen.tabletoprpg.sheet_editor.name").getString(), boxX, y, boxW, current.name(), SheetData.Spell.SPELL_NAME_MAX);
         y += ROW_H;
 
-        for (int i = 0; i < FIELD_LABELS.length; i++) {
-            int maxLen = i == FIELD_LABELS.length - 1
+        for (int i = 0; i < FIELD_LABEL_KEYS.length; i++) {
+            int maxLen = i == FIELD_LABEL_KEYS.length - 1
                     ? SheetData.Spell.SPELL_COST_MAX : SheetData.Spell.SPELL_FIELD_MAX;
-            fieldBoxes[i] = field(FIELD_LABELS[i], boxX, y, boxW, fieldValue(current, i), maxLen);
+            fieldBoxes[i] = field(Component.translatable(FIELD_LABEL_KEYS[i]).getString(), boxX, y, boxW, fieldValue(current, i), maxLen);
             y += ROW_H;
         }
 
@@ -190,10 +194,10 @@ public class SpellFormScreen extends Screen {
     private void renderLabels(GuiGraphics graphics) {
         // O rotulo do circulo vem PRIMEIRO porque a linha dele e a de cima: e ele
         // que ancora a coluna de rotulos nesta tela (01/10/2026).
-        CharacterSheetScreen.drawLabel(graphics, this.font, nameBox.getX(), "Círculo", circleY);
-        CharacterSheetScreen.drawLabel(graphics, this.font, nameBox.getX(), "Name", nameBox.getY());
-        for (int i = 0; i < FIELD_LABELS.length; i++) {
-            CharacterSheetScreen.drawLabel(graphics, this.font, nameBox.getX(), FIELD_LABELS[i], fieldBoxes[i].getY());
+        CharacterSheetScreen.drawLabel(graphics, this.font, nameBox.getX(), Component.translatable("screen.tabletoprpg.spell_form.circle").getString(), circleY);
+        CharacterSheetScreen.drawLabel(graphics, this.font, nameBox.getX(), Component.translatable("screen.tabletoprpg.sheet_editor.name").getString(), nameBox.getY());
+        for (int i = 0; i < FIELD_LABEL_KEYS.length; i++) {
+            CharacterSheetScreen.drawLabel(graphics, this.font, nameBox.getX(), Component.translatable(FIELD_LABEL_KEYS[i]).getString(), fieldBoxes[i].getY());
         }
     }
 
@@ -206,9 +210,9 @@ public class SpellFormScreen extends Screen {
      * que esta a direita dele.
      */
     private int labelW() {
-        int widest = Math.max(LABEL_W, this.font.width("Círculo") + 6);
-        for (String label : FIELD_LABELS) {
-            widest = Math.max(widest, this.font.width(label) + 6);
+        int widest = Math.max(LABEL_W, this.font.width(Component.translatable("screen.tabletoprpg.spell_form.circle").getString()) + 6);
+        for (String key : FIELD_LABEL_KEYS) {
+            widest = Math.max(widest, this.font.width(Component.translatable(key).getString()) + 6);
         }
         return widest;
     }

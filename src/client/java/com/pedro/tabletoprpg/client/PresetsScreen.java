@@ -351,7 +351,7 @@ public class PresetsScreen extends Screen {
      * espaco quando era menor.
      */
     private void rebuildFooter() {
-        String backLabel = "< Back to Rolls";
+        String backLabel = Component.translatable("screen.tabletoprpg.presets.back").getString();
         int usable = panelWidth - 2 * PAD;
         // O botao de voltar nunca passa da metade do painel: se a fonte estiver grande
         // demais para o espaco, e melhor o texto apertar do que empurrar Save e Use
@@ -563,11 +563,11 @@ public class PresetsScreen extends Screen {
                             b -> loadForEdit(storedIndex))
                     .bounds(rowLeft(), rowY, rowNameWidth(), btnH)
                     .tooltip(Tooltip.create(Component.literal(preset.formula()),
-                            Component.literal(shared
-                                    ? "Shared with the table: use it, do not edit"
+                            shared
+                                    ? Component.translatable("screen.tabletoprpg.presets.tip_shared")
                                     : preset.openRoll()
-                                    ? "Open Roll: the roll goes to the whole table"
-                                    : "Private: only the roller sees the roll")))
+                                    ? Component.translatable("screen.tabletoprpg.presets.tip_open_roll")
+                                    : Component.translatable("screen.tabletoprpg.presets.tip_private")))
                     .build());
 
             // Del com confirmacao em dois cliques, igual a lista de skills e magias.
@@ -580,8 +580,8 @@ public class PresetsScreen extends Screen {
                             Component.literal(pending ? "Del?" : "Del"),
                             b -> onDelete(storedIndex))
                     .bounds(delX(), rowY, ROW_BTN_W, btnH)
-                    .tooltip(Tooltip.create(Component.literal(
-                            pending ? "Click again to confirm" : "Delete")))
+                    .tooltip(Tooltip.create(Component.translatable(
+                            pending ? "screen.tabletoprpg.presets.confirm_delete" : "screen.tabletoprpg.presets.delete")))
                     .build());
         }
     }
@@ -608,9 +608,9 @@ public class PresetsScreen extends Screen {
                                 .withStyle(canMove ? ChatFormatting.WHITE : ChatFormatting.DARK_GRAY),
                         b -> move(index, up))
                 .bounds(x, rowY, ROW_BTN_W, btnH)
-                .tooltip(Tooltip.create(Component.literal(
-                        !canMove ? (up ? "Already first" : "Already last")
-                                : (up ? "Move up" : "Move down"))))
+                .tooltip(Tooltip.create(Component.translatable(
+                        !canMove ? (up ? "screen.tabletoprpg.presets.already_first" : "screen.tabletoprpg.presets.already_last")
+                                : (up ? "screen.tabletoprpg.presets.move_up" : "screen.tabletoprpg.presets.move_down"))))
                 .build();
         // `active = false` impede o clique E escurece o botao inteiro no vanilla.
         // Sem isto, a seta travada continuaria reordenando a lista se clicada.
@@ -675,7 +675,7 @@ public class PresetsScreen extends Screen {
     private void save() {
         if (editing != null && isShared(editing)) {
             // Preset de outra pessoa: o Save nao tem o que gravar.
-            setStatus("this preset is shared by another player: it can be used, not edited");
+            setStatus(Component.translatable("screen.tabletoprpg.presets.status_shared").getString());
             return;
         }
         String original = editing == null ? "" : editing.name();
@@ -697,7 +697,7 @@ public class PresetsScreen extends Screen {
      */
     private void usePreset() {
         if (editing == null) {
-            setStatus("click a preset in the list to use it");
+            setStatus(Component.translatable("screen.tabletoprpg.presets.status_pick_first").getString());
             return;
         }
         // O preset ja foi validado quando foi salvo, entao rolar direto pelo nome e
@@ -859,17 +859,19 @@ public class PresetsScreen extends Screen {
         // Rotulo a direita do campo: e a coluna que o bloco centralizado no `layout`
         // abriu para ele. Alinhar pela direita do campo e o que mantem "Name" e
         // "Formula" na mesma coluna, mesmo com nomes de largura diferente.
-        graphics.drawString(this.font, "Name",
-                nameBox.getX() - TIGHT_GAP - this.font.width("Name"),
+        String nameLabel = Component.translatable("screen.tabletoprpg.sheet_editor.name").getString();
+        String formulaLabel = Component.translatable("screen.tabletoprpg.presets.formula").getString();
+        graphics.drawString(this.font, nameLabel,
+                nameBox.getX() - TIGHT_GAP - this.font.width(nameLabel),
                 nameBox.getY() + 5, 0xFFB0B0B0, false);
-        graphics.drawString(this.font, "Formula",
-                formulaBox.getX() - TIGHT_GAP - this.font.width("Formula"),
+        graphics.drawString(this.font, formulaLabel,
+                formulaBox.getX() - TIGHT_GAP - this.font.width(formulaLabel),
                 formulaBox.getY() + 5, 0xFFB0B0B0, false);
 
         // "Color: <nome>" centrado como um par. O nome da cor sozinho, encostado no
         // campo, era mais largo que a coluna do rotulo e saia pela esquerda do painel
         // em cores como "Light Gray".
-        String colorLabel = "Color";
+        String colorLabel = Component.translatable("screen.tabletoprpg.presets.color").getString();
         String colorValue = selectedColor.displayName();
         int pairW = this.font.width(colorLabel) + GAP + this.font.width(colorValue);
         int pairX = panelX + (panelWidth - pairW) / 2;
@@ -1035,7 +1037,7 @@ public class PresetsScreen extends Screen {
         }
 
         if (presets.isEmpty()) {
-            graphics.drawCenteredString(this.font, "No presets yet. Fill the fields and Save.",
+            graphics.drawCenteredString(this.font, Component.translatable("screen.tabletoprpg.presets.empty"),
                     panelX + panelWidth / 2, listTop + 6, 0xFF808080);
         }
     }

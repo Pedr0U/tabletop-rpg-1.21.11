@@ -313,7 +313,7 @@ public class RpgSettingsScreen extends Screen {
                     100,
                     SpectatorCameraController.getTopDownZoom(),
                     SpectatorCameraController::setTopDownZoom,
-                    v -> "Zoom TopDown: " + (v > 0 ? "+" : "") + v
+                     v -> Component.translatable("screen.tabletoprpg.settings.topdown_zoom", (v > 0 ? "+" : "") + v).getString()
             );
             this.addRenderableWidget(this.topDownZoomSlider);
 
@@ -329,7 +329,7 @@ public class RpgSettingsScreen extends Screen {
                     100,
                     SpectatorCameraController.getTransitionSpeed(),
                     SpectatorCameraController::setTransitionSpeed,
-                    v -> "Transition Speed: " + v
+                     v -> Component.translatable("screen.tabletoprpg.settings.transition_speed", v).getString()
             );
             this.addRenderableWidget(this.transitionSpeedSlider);
         }
@@ -352,7 +352,15 @@ public class RpgSettingsScreen extends Screen {
 
     /** Rótulo do botão de ciclo conforme o estado atual. */
     private String cycleLabel() {
-        return this.cycleEnabled ? "Day/Night Cycle: On" : "Day/Night Cycle: Paused";
+        Component state = this.cycleEnabled
+                ? Component.translatable("screen.tabletoprpg.sheet_editor.on")
+                : Component.translatable("screen.tabletoprpg.settings.cycle_paused");
+        return Component.translatable("screen.tabletoprpg.settings.cycle", state).getString();
+    }
+
+    /** Texto Sim/Não traduzido para os rótulos de permissão. */
+    private static Component yesNo(boolean value) {
+        return Component.translatable(value ? "screen.tabletoprpg.settings.yes" : "screen.tabletoprpg.settings.no");
     }
 
     /** Atualiza o estado do ciclo quando a resposta do servidor chega (S2C). */
@@ -365,46 +373,47 @@ public class RpgSettingsScreen extends Screen {
 
     /** Rótulo do botão de permissão de quebra conforme o estado atual. */
     private String breakBlocksLabel() {
-        return this.breakBlocksEnabled ? "Players break blocks: Yes" : "Players break blocks: No";
+        return Component.translatable("screen.tabletoprpg.settings.break_blocks", yesNo(this.breakBlocksEnabled)).getString();
     }
 
     /** Rótulo do botão de permissão de colocação conforme o estado atual. */
     private String placeBlocksLabel() {
-        return this.placeBlocksEnabled ? "Players place blocks: Yes" : "Players place blocks: No";
+        return Component.translatable("screen.tabletoprpg.settings.place_blocks", yesNo(this.placeBlocksEnabled)).getString();
     }
 
     /** Rótulo do botão de clima conforme o estado atual (0=sol, 1=chuva, 2=tempestade). */
     private String weatherLabel() {
-        return switch (this.weatherState) {
-            case 0 -> "Weather: Clear";
-            case 1 -> "Weather: Rain";
-            default -> "Weather: Thunderstorm";
+        String state = switch (this.weatherState) {
+            case 0 -> "screen.tabletoprpg.settings.weather_clear";
+            case 1 -> "screen.tabletoprpg.settings.weather_rain";
+            default -> "screen.tabletoprpg.settings.weather_storm";
         };
+        return Component.translatable("screen.tabletoprpg.settings.weather", Component.translatable(state)).getString();
     }
 
     /** Rótulo do botão de limite de mestres conforme o estado atual. */
     private String maxMastersLabel() {
-        return "Max Masters: " + this.maxMastersValue;
+        return Component.translatable("screen.tabletoprpg.settings.max_masters", this.maxMastersValue).getString();
     }
 
     /** Rótulo do botão de spawn de mobs conforme o estado atual. */
     private String mobSpawnLabel() {
-        return this.mobSpawnEnabled ? "Mobs can spawn: Yes" : "Mobs can spawn: No";
+        return Component.translatable("screen.tabletoprpg.settings.mob_spawn", yesNo(this.mobSpawnEnabled)).getString();
     }
 
     /** Rótulo do botão de dano nos mobs conforme o estado atual. */
     private String mobDamageLabel() {
-        return this.mobDamageEnabled ? "Mobs can be damaged: Yes" : "Mobs can be damaged: No";
+        return Component.translatable("screen.tabletoprpg.settings.mob_damage", yesNo(this.mobDamageEnabled)).getString();
     }
 
     /** Rótulo do botão de órbita automática da câmera 3ª pessoa. */
     private String orbitalLabel() {
-        return SpectatorCameraController.isOrbitalEnabled() ? "Orbital Camera: Yes" : "Orbital Camera: No";
+        return Component.translatable("screen.tabletoprpg.settings.orbital_camera", yesNo(SpectatorCameraController.isOrbitalEnabled())).getString();
     }
 
     /** Rótulo do botão de modo de câmera de espectador. */
     private String cameraModeLabel() {
-        return "Camera Mode: " + SpectatorCameraController.getMode().getDisplayName();
+        return Component.translatable("screen.tabletoprpg.settings.camera_mode", SpectatorCameraController.getMode().getDisplayName()).getString();
     }
 
     /** Atualiza a permissão de quebra quando a resposta do servidor chega (S2C). */

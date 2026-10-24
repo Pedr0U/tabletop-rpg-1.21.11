@@ -53,7 +53,9 @@ public class PlayerListScreen extends Screen {
             y += 30;
         } else {
             for (String name : playerNames) {
-                String label = name.equals(activePlayerName) ? name + " (turn)" : name;
+                String label = name.equals(activePlayerName)
+                        ? name + " " + Component.translatable("screen.tabletoprpg.player_list.turn").getString()
+                        : name;
                 final String playerName = name;
                 if (isMaster) {
                     // Mestre: clicar abre (e permite editar) a ficha do jogador.
@@ -94,11 +96,11 @@ public class PlayerListScreen extends Screen {
     public void render(GuiGraphics graphics, int mouseX, int mouseY, float delta) {
         // super.render() desenha o fundo e os botões (sem duplicar o blur).
         super.render(graphics, mouseX, mouseY, delta);
-        String title = "\"" + sessionName + "\" - Players";
+        String title = "\"" + sessionName + "\" - " + Component.translatable("screen.tabletoprpg.player_list.title").getString();
         int titleX = (this.width - this.font.width(title)) / 2;
         graphics.drawString(this.font, title, titleX, 20, 0xFFFFFF, false);
         if (isMaster) {
-            String hint = "click a player to open their sheet";
+            String hint = Component.translatable("screen.tabletoprpg.player_list.hint").getString();
             graphics.drawString(this.font, hint,
                     (this.width - this.font.width(hint)) / 2, this.height - 24, 0xAAAAAA, false);
         }

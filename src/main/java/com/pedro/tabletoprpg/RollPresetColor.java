@@ -1,5 +1,7 @@
 package com.pedro.tabletoprpg;
 
+import net.minecraft.network.chat.Component;
+
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -63,7 +65,7 @@ public enum RollPresetColor {
     }
 
     public String displayName() {
-        return displayName;
+        return Component.translatable("screen.tabletoprpg.roll_color." + id).getString();
     }
 
     public int argb() {

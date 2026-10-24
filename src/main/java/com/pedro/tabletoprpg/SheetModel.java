@@ -9,6 +9,7 @@ import com.mojang.serialization.Encoder;
 import com.mojang.serialization.MapLike;
 import com.mojang.serialization.codecs.RecordCodecBuilder;
 import net.minecraft.network.FriendlyByteBuf;
+import net.minecraft.network.chat.Component;
 import net.minecraft.network.codec.ByteBufCodecs;
 import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.codec.StreamDecoder;
@@ -591,19 +592,21 @@ public record SheetModel(
             // Sem este caso o `default` devolvia a chave crua e a ficha
             // desenhava "xptext" no lugar do rotulo.
             case "xptext" -> xpLabel;
-            // 29/09/2026: nome do jogador dono da ficha. O rotulo e um LITERAL
-            // de proposito: nao ha `playerLabel` no modelo, porque o usuario
+            // 29/09/2026: nome do jogador dono da ficha. O rotulo vem do lang
+            // (screen.tabletoprpg.label.player); o valor do campo continua sendo
+            // "playername". Nao ha `playerLabel` no modelo, porque o usuario
             // nao pediu para que este campo virasse configuravel no Sheet
             // Editor. Ele fica aqui porque e este metodo que resolve o rotulo
             // de todo campo da ficha - `SheetData.labelOf` so chega no seu
             // `switch` quando o modelo devolve string vazia, e o `default`
             // abaixo devolve a propria chave.
-            case "playername" -> "Player";
-            // 22/10/2026: a iniciativa do personagem. O rotulo e um LITERAL,
-            // como o do Player: nao ha `initiativeLabel` no modelo, porque o
-            // campo novo nao virou configuravel no Sheet Editor (o que o
-            // Mestre configura la e a iniciativa PADRAO da mesa, outra coisa).
-            case "initiative" -> "Initiative";
+            case "playername" -> Component.translatable("screen.tabletoprpg.label.player").getString();
+            // 22/10/2026: a iniciativa do personagem. O rotulo vem do lang
+            // (screen.tabletoprpg.label.initiative), como o do Player: nao ha
+            // `initiativeLabel` no modelo, porque o campo novo nao virou
+            // configuravel no Sheet Editor (o que o Mestre configura la e a
+            // iniciativa PADRAO da mesa, outra coisa).
+            case "initiative" -> Component.translatable("screen.tabletoprpg.label.initiative").getString();
             default -> field;
         };
     }
@@ -764,7 +767,7 @@ public record SheetModel(
     /**
      * Copia com a caixa "Usar iniciativa padrao?" trocada (22/10/2026).
      *
-     * <p>Marcada, a iniciativa de todas as fichas e a {@link #defaultInitiative}.
+     * <p>Marcada, cada personagem tem campo proprio de iniciativa na ficha.
      * Desmarcada, cada personagem usa a pericia marcada ({@link #initiativePericiaId}).
      */
     public SheetModel withInitiativeUseDefault(boolean useDefault) {

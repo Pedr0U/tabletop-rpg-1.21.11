@@ -3,6 +3,7 @@ package com.pedro.tabletoprpg;
 import com.mojang.serialization.Codec;
 import com.mojang.serialization.codecs.RecordCodecBuilder;
 import net.minecraft.network.FriendlyByteBuf;
+import net.minecraft.network.chat.Component;
 import net.minecraft.network.codec.ByteBufCodecs;
 import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.codec.StreamDecoder;
@@ -1555,19 +1556,12 @@ public record SheetData(
          *
          * <p><b>O indicador ordinal (01/10/2026):</b> e {@code º} (U+00BA) e nao
          * a letra "o" -- pedido do usuario, que le "1o" como letra solta e nao
-         * como ordinal. O {@code default} cobre o circulo 0 e o 6, que o
-         * construtor ja cortou; devolve o 1º porque e o circulo mais provavel de um
-         * formulario recem-aberto.
+          * como ordinal. Um circulo fora de 1 a 5 (que o construtor ja cortou) cai
+          * no 1, que e o circulo mais provavel de um formulario recem-aberto.
          */
         public String circleLabel() {
-            return switch (circle) {
-                case 1 -> "1º Círculo";
-                case 2 -> "2º Círculo";
-                case 3 -> "3º Círculo";
-                case 4 -> "4º Círculo";
-                case 5 -> "5º Círculo";
-                default -> "1º Círculo";
-            };
+            int shown = circle >= CIRCLE_MIN && circle <= CIRCLE_MAX ? circle : CIRCLE_MIN;
+            return Component.translatable("screen.tabletoprpg.spell.circle", shown).getString();
         }
     }
 
@@ -2627,9 +2621,10 @@ public record SheetData(
      * chave, e "appearance" nao e vazio, entao o {@code switch} abaixo nunca era
      * alcancado e a ficha desenharia "appearance" cru no lugar do titulo. Como o
      * usuario nao pediu para editar estes dois nomes no Sheet Editor (ao contrario
-     * de {@code characterName}, que tem {@code nameLabel}), o nome e um literal
-     * dos dois, igual ao {@code case "playername" -> "Player"} do modelo. Sao os
-     * unicos dois campos com este tratamento: nenhum outro rotulo foi inventado.
+     * de {@code characterName}, que tem {@code nameLabel}), o nome vem do lang
+     * (screen.tabletoprpg.label.character_*), como o {@code playername} do
+     * modelo. Sao os unicos dois campos com este tratamento: nenhum outro
+     * rotulo foi inventado.
      */
     public static String labelOf(String field) {
         if (field == null) {
@@ -2637,10 +2632,10 @@ public record SheetData(
         }
         String key = field.toLowerCase(Locale.ROOT);
         if (key.equals("appearance")) {
-            return "Character Appearance";
+            return Component.translatable("screen.tabletoprpg.label.character_appearance").getString();
         }
         if (key.equals("backstory")) {
-            return "Character Backstory";
+            return Component.translatable("screen.tabletoprpg.label.character_backstory").getString();
         }
         String label = SheetModelHolder.current().labelOf(field);
         if (!label.isEmpty()) {
