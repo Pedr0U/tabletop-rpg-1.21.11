@@ -347,12 +347,6 @@ public class ThreatSheetScreen extends Screen {
     private final ListRegion copiesRegion = new ListRegion(KIND_COPIES);
     private final List<AbstractWidget> copiesWidgets = new ArrayList<>();
     private boolean copiesVisible;
-    /**
-     * O subgrupo de copias comeca recolhido (22/10/2026, PARTE 6): o cabecalho
-     * continua visivel e clicavel, mas as linhas so aparecem quando o Mestre
-     * abre o grupo.
-     */
-    private boolean copiesExpanded;
     private int copiesX;
     private int copiesRowsTop;
 
@@ -1094,7 +1088,7 @@ public class ThreatSheetScreen extends Screen {
         List<ListRegion> base = activeTab == 0
                 ? List.of(attrRegion, periciaRegion, featureRegion)
                 : List.of(passiveRegion, actionRegion);
-        if (!copiesVisible || !copiesExpanded) {
+        if (!copiesVisible) {
             return base;
         }
         List<ListRegion> all = new ArrayList<>(base);
@@ -1735,21 +1729,6 @@ String name = values.getOrDefault("name", "");
     }
 
     /**
-     * Abre ou fecha o subgrupo de copias (22/10/2026, PARTE 6).
-     *
-     * <p>O cabecalho continua no lugar; so as linhas somem. Ao fechar, o "Del?"
-     * pendente e desarmado, porque a linha que ele confirmava deixou de existir
-     * na tela.
-     */
-    private void toggleCopies() {
-        copiesExpanded = !copiesExpanded;
-        if (!copiesExpanded) {
-            pendingCopyDelete = -1;
-        }
-        rebuildCopiesColumn();
-    }
-
-    /**
      * Monta a coluna da direita: cabecalho (o titulo da MAE, clicavel, quando a
      * ficha aberta e uma copia; "Copias" + botao Copiar quando ela e a mae) e as
      * linhas das copias com a rolagem propria do projeto (a roda e a barra).
@@ -1766,43 +1745,26 @@ String name = values.getOrDefault("name", "");
 
         ThreatSheet mother = copiesMother();
         List<ThreatSheet> copies = copiesList();
-        int rowW = COPIES_W - BAR_W - 3;
         int headerH = GAP;
         if (sheet.isCopy()) {
             if (mother != null) {
                 headerH = ROW_H + GAP;
-                Button toggle = Button.builder(
-                                Component.literal(copiesExpanded ? "\u25BC" : "\u25B6"),
-                                b -> toggleCopies())
-                        .bounds(copiesX, contentTop, 18, ROW_H).build();
-                copiesWidgets.add(toggle);
-                addRenderableWidget(toggle);
                 Button titulo = Button.builder(
                                 Component.literal(font.plainSubstrByWidth(
-                                        mother.identity().name(), rowW - 20)),
+                                        mother.identity().name(), COPIES_W - 6)),
                                 b -> openSheet(mother))
-                        .bounds(copiesX + 20, contentTop, rowW - 20, ROW_H).build();
+                        .bounds(copiesX, contentTop, COPIES_W - BAR_W - 3, ROW_H).build();
                 copiesWidgets.add(titulo);
                 addRenderableWidget(titulo);
             }
         } else if (sheet.hasId()) {
             headerH = ROW_H + GAP;
-            Button toggle = Button.builder(
-                            Component.literal((copiesExpanded ? "\u25BC " : "\u25B6 ") + "Copias"),
-                            b -> toggleCopies())
-                    .bounds(copiesX, contentTop, Math.max(20, rowW - 48 - GAP), ROW_H).build();
-            copiesWidgets.add(toggle);
-            addRenderableWidget(toggle);
             this.copiarButton = Button.builder(Component.translatable("screen.tabletoprpg.threat_sheet.copy"), b -> copyThis())
-                    .bounds(copiesX + rowW - 48, contentTop, 48, ROW_H).build();
+                    .bounds(copiesX + COPIES_W - BAR_W - 3 - 48, contentTop, 48, ROW_H).build();
             copiesWidgets.add(copiarButton);
             addRenderableWidget(copiarButton);
         }
         copiesRowsTop = contentTop + headerH;
-        if (!copiesExpanded) {
-            pendingCopyDelete = -1;
-            return;
-        }
 
         int rowsH = contentBottom - copiesRowsTop;
         copiesRegion.set(copiesX, copiesRowsTop, COPIES_W, rowsH, ROW_H, copies.size());
@@ -1815,6 +1777,7 @@ String name = values.getOrDefault("name", "");
         for (int i = copiesRegion.offset; i < copiesRegion.lastIndex() && i < copies.size(); i++) {
             ThreatSheet copia = copies.get(i);
             int y = copiesRegion.rowY(i);
+            int rowW = COPIES_W - BAR_W - 3;
             if (copia.hasId() && copia.id().equals(sheet.id())) {
                 // A ficha aberta: o nome sai apagado do render e a linha so tem o
                 // Del -- nunca um botao que reabriria a ficha sobre ela mesma.
@@ -1904,8 +1867,11 @@ String name = values.getOrDefault("name", "");
      * e a FICHA ABERTA (quando ela e copia) como linha apagada na lista.
      */
     private void drawCopiesColumnTexts(GuiGraphics graphics) {
-        if (!copiesVisible || !copiesExpanded || sheet == null) {
+        if (!copiesVisible || sheet == null) {
             return;
+        }
+        if (!sheet.isCopy() && sheet.hasId()) {
+            graphics.drawString(this.font, "Copias", copiesX + 2, contentTop + 4, COL_SECTION, false);
         }
         List<ThreatSheet> copies = copiesList();
         for (int i = copiesRegion.offset; i < copiesRegion.lastIndex() && i < copies.size(); i++) {

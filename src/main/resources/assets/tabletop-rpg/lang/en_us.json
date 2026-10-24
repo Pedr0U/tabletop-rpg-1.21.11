@@ -1,6 +1,8 @@
 {
   "key.tabletoprpg.menu": "Open RPG Menu",
   "key.tabletoprpg.camera_mode": "Cycle Camera Mode",
+  "message.tabletoprpg.master_claimed_broadcast": "\u00a76\u00a7e%s \u00a7fis now the \u00a7bGame Master\u00a7f!",
+  "message.tabletoprpg.master_released_broadcast": "\u00a76\u00a7e%s \u00a7fhas stepped down as Game Master.",
   "key.tabletoprpg.spectator": "Spectator Camera (Game Master)",
   "message.tabletop-rpg.spectator_only_master": "Only the Game Master can use the spectator camera.",
   "key.category.tabletop-rpg.rpg": "Tabletop RPG",
@@ -62,7 +64,8 @@
   "screen.tabletoprpg.sheet_editor.attribute_max": "Attribute maximum",
   "screen.tabletoprpg.sheet_editor.pericia_max": "Pericia maximum",
   "screen.tabletoprpg.sheet_editor.initiative": "Initiative",
-  "screen.tabletoprpg.sheet_editor.initiative_default": "Default initiative",
+  "screen.tabletoprpg.sheet_editor.initiative_use_default": "Use default initiative?",
+  "screen.tabletoprpg.sheet_editor.initiative_column": "Initiative",
   "screen.tabletoprpg.sheet_editor.attributes": "Attributes",
   "screen.tabletoprpg.sheet_editor.pericias": "Pericias",
   "screen.tabletoprpg.sheet_editor.field_name": "Name label",
@@ -204,6 +207,8 @@
   "screen.tabletoprpg.threat_sheets.back": "< Voltar",
   "screen.tabletoprpg.threat_sheets.tooltip_identity": "Tipo: %s   Tamanho: %s",
   "screen.tabletoprpg.threat_sheets.tooltip_vitals": "Deslocamento: %s   HP: %s / %s   CA: %s",
+  "screen.tabletoprpg.threat_sheets.copies_expanded": "\u25BC Copies (%s)",
+  "screen.tabletoprpg.threat_sheets.copies_collapsed": "\u25B6 Copies (%s)",
   "screen.tabletoprpg.threat_sheet.go_abilities": "Ir para Habilidades",
   "screen.tabletoprpg.threat_sheet.back_to_sheet": "Voltar para a ficha",
   "screen.tabletoprpg.threat_sheet.show_name": "Exibir nome em cima da ameaça?",
@@ -234,7 +239,6 @@
   "screen.tabletoprpg.status.edit": "Edit",
   "screen.tabletoprpg.status.edit_item_tooltip": "Editar este item",
   "screen.tabletoprpg.status.write_here": "write here",
-  "screen.tabletoprpg.status.use_default_initiative": "Usar iniciativa padrão",
   "screen.tabletoprpg.status.previous_tab": "Aba anterior",
   "screen.tabletoprpg.status.next_tab": "Proxima aba"
 }

@@ -60,6 +60,11 @@ public final class ThreatSheetBinding {
 
     /** O cache ja foi refeito pelo menos uma vez nesta sessao? */
     private static boolean healed = false;
+    /**
+     * Jogador -> tick em que o clique de entidade amarrou. O clique no ar chega logo depois,
+     * no mesmo gesto, e nao pode repetir a mensagem nem abrir a ficha.
+     */
+    private static final Map<UUID, Long> BOUND_BY_ENTITY_TICK = new ConcurrentHashMap<>();
 
     private ThreatSheetBinding() {
     }
@@ -386,6 +391,7 @@ public static boolean handleEntityClick(ServerPlayer player, ServerLevel level,
         }
 
         bind(level, mob, sheet);
+        BOUND_BY_ENTITY_TICK.put(player.getUUID(), level.getGameTime());
         TabletopRpg.LOGGER.info("[TabletopRPG] Ficha '{}' amarrada em {} via clique de entidade.",
                 sheet.identity().name(), EntityTargets.describe(entity, mob));
         player.displayClientMessage(linkMessage(mob, sheet), false);
@@ -456,9 +462,13 @@ public static Mob mobUnderCrosshair(ServerPlayer player) {
      * existem porque os dois eventos chegam em pacotes separados e a ordem entre eles nao e
      * garantida; nenhum dos dois abre a ficha.
      *
-     * @return {@code true} se amarrou
+     * @return {@code true} se amarrou ou se o clique ja foi amarrado pelo clique de entidade
      */
     public static boolean bindUnderCrosshair(ServerPlayer player) {
+        Long boundAt = BOUND_BY_ENTITY_TICK.remove(player.getUUID());
+        if (boundAt != null && player.level().getGameTime() - boundAt <= 1) {
+            return true;
+        }
         Mob mob = mobUnderCrosshair(player);
         if (mob == null) {
             return false;

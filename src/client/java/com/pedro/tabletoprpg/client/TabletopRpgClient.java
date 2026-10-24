@@ -14,6 +14,7 @@ import net.minecraft.client.Camera;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
 import net.minecraft.resources.Identifier;
+import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.Mob;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.entity.projectile.ProjectileUtil;
@@ -800,6 +801,17 @@ public class TabletopRpgClient implements ClientModInitializer {
                 sheetHighlightIds = Set.copyOf(payload.entityIds());
                 LOGGER.info("[TabletopRPG-Client] SheetHighlight recebido: {} entidade(s) -> {}",
                         payload.entityIds().size(), payload.entityIds());
+            });
+        });
+
+        // Mob deitado voltou de pe: o deathTime nao e sincronizado, entao o cliente
+        // zera o contador do mob (senao ele continuaria girado e vermelho).
+        ClientPlayNetworking.registerGlobalReceiver(RpgNetworking.DownedResetPayload.TYPE, (payload, context) -> {
+            context.client().execute(() -> {
+                if (context.client().level != null
+                        && context.client().level.getEntity(payload.entityId()) instanceof LivingEntity living) {
+                    living.deathTime = 0;
+                }
             });
         });
 

@@ -243,7 +243,7 @@ public class MasterCommands {
         try {
             ServerPlayer player = ctx.getSource().getPlayerOrException();
             if (SessionManager.setMaster(player)) {
-                broadcast(ctx, "��6��e" + player.getName().getString() + " ��fis now the ��bGame Master��f!");
+                broadcast(ctx, Component.translatable("message.tabletoprpg.master_claimed_broadcast", player.getName().getString()));
                 RpgNetworking.sendToAll(ctx.getSource().getServer());
                 BlockLockManager.sendSnapshotTo(player);
                 refreshChatMenu(ctx);
@@ -265,15 +265,15 @@ public class MasterCommands {
         try {
             ServerPlayer player = ctx.getSource().getPlayerOrException();
             if (SessionManager.isMaster(player)) {
-                // Com vǭrios mestres, sair um NǟO derruba a sessǜo: s�� o
-                // ǧltimo mestre que sai reseta o combate (22/10/2026).
+                // Com varios mestres, sair um NAO derruba a sessao: so o ultimo mestre que sai reseta o combate (22/10/2026).
                 boolean lastMaster = SessionManager.getMasterCount() <= 1;
                 SessionManager.releaseMaster(player);
                 if (lastMaster) {
                     CombatController.reset(ctx.getSource().getServer());
                 }
-                broadcast(ctx, "��6��e" + player.getName().getString() + " ��fhas stepped down as Game Master.");
+                broadcast(ctx, Component.translatable("message.tabletoprpg.master_released_broadcast", player.getName().getString()));
                 RpgNetworking.sendToAll(ctx.getSource().getServer());
+                BlockLockManager.sendSnapshotTo(player);
                 RpgNetworking.sendAuraStateToAll(ctx.getSource().getServer());
                 // O reset limpou os mobs com cǽmera: atualiza o carrossel.
                 RpgNetworking.sendSpectatorTargetsToAll(ctx.getSource().getServer());
@@ -1908,8 +1908,12 @@ public class MasterCommands {
     }
 
     private static void broadcast(CommandContext<CommandSourceStack> ctx, String message) {
+        broadcast(ctx, Component.literal(message));
+    }
+
+    private static void broadcast(CommandContext<CommandSourceStack> ctx, Component message) {
         PlayerList playerList = ctx.getSource().getServer().getPlayerList();
-        playerList.broadcastSystemMessage(Component.literal(message), false);
+        playerList.broadcastSystemMessage(message, false);
     }
 
     /**

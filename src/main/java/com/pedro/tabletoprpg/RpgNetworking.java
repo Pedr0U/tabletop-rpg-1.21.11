@@ -719,6 +719,24 @@ public final class RpgNetworking {
     }
 
     /**
+     * Servidor -> Cliente: o mob deitado voltou de pe (HP da ficha acima de 0).
+     * O deathTime nao e sincronizado, entao o cliente zera o contador deste mob
+     * para ele levantar (sem isso continuaria vermelho e deitado).
+     */
+    public record DownedResetPayload(int entityId) implements CustomPacketPayload {
+        public static final Type<DownedResetPayload> TYPE = new Type<>(TabletopRpg.id("downed_reset"));
+        public static final StreamCodec<FriendlyByteBuf, DownedResetPayload> STREAM_CODEC = StreamCodec.composite(
+                ByteBufCodecs.VAR_INT, DownedResetPayload::entityId,
+                DownedResetPayload::new
+        );
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
+    /**
      * Servidor -> Cliente: UUID do jogador ativo (turno atual) como string;
      * vazio ("") quando não há turno ativo. Usado pelo espectador para saber
      * se o alvo espectado está no turno dele (câmera 3ª pessoa = mouse do
@@ -1705,6 +1723,8 @@ public final class RpgNetworking {
 
         // Ficha na mao -> contorno dos mobs vinculados, so para o dono da ficha.
         PayloadTypeRegistry.playS2C().register(SheetHighlightPayload.TYPE, SheetHighlightPayload.STREAM_CODEC);
+        // Mob deitado voltou de pe: zera o deathTime do cliente (ver DownedResetPayload).
+        PayloadTypeRegistry.playS2C().register(DownedResetPayload.TYPE, DownedResetPayload.STREAM_CODEC);
     }
 
     /**

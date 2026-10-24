@@ -283,6 +283,17 @@ public class SessionManager {
         return mobsCanSpawn;
     }
 
+    /**
+     * Ao subir o servidor: o gamerule de spawn persiste no mundo, mas o estado da sessao volta ao
+     * padrao. Le o valor real do mundo para a UI nao mostrar "pode spawnar" com o spawn bloqueado.
+     * Nao reescreve o gamerule. Tambem esvazia o cache de vinculos (o selfHeal reconstroi pelas tags)
+     * para um segundo mundo na mesma JVM nao herdar UUIDs antigos.
+     */
+    public static void onServerStarted(net.minecraft.server.MinecraftServer server) {
+        mobsCanSpawn = server.overworld().getGameRules().get(net.minecraft.world.level.gamerules.GameRules.SPAWN_MOBS);
+        ThreatSheetBinding.forgetAll();
+    }
+
     public static void setMobsCanSpawn(boolean value) {
         mobsCanSpawn = value;
     }

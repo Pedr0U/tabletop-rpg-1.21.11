@@ -13,7 +13,9 @@ import net.minecraft.client.input.MouseButtonEvent;
 import net.minecraft.network.chat.Component;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * Lista das <b>fichas de ameaca</b> do Mestre (02/10/2026).
@@ -47,6 +49,10 @@ public class ThreatSheetsScreen extends Screen {
     private static final int FOOTER_H = 20;
     private static final int STATUS_H = 10;
     private static final int ROW_BTN_W = 24;
+    /** Altura da "pasta" de copias: menor que a linha, para nao parecer um botao normal. */
+    private static final int TOGGLE_H = 14;
+    /** Quanto a copia fica recuada em relacao a mae. */
+    private static final int COPY_INDENT = 12;
     private static final int BAR_W = 4;
     private static final int PANEL_W = 300;
 
@@ -75,6 +81,20 @@ public class ThreatSheetsScreen extends Screen {
      * pior do que nao apagar. O indice trava a linha.
      */
     private int deletePending = -1;
+
+    /**
+     * Uma linha da lista: a ficha-mae, o botao que abre/fecha as copias dela (so quando
+     * ela tem copias, logo abaixo) ou uma copia do grupo aberto.
+     */
+    private record Row(ThreatSheet sheet, RowKind kind) {}
+
+    private enum RowKind { MOTHER, TOGGLE, COPY }
+
+    /**
+     * As maes cujo grupo de copias esta recolhido, pelo id. Vazio = tudo aberto, que
+     * e o estado inicial de cada abertura da tela (22/10/2026).
+     */
+    private final Set<String> collapsedGroups = new HashSet<>();
 
     private String status = "";
     private int statusColor = COL_MUTED;
@@ -123,7 +143,7 @@ public class ThreatSheetsScreen extends Screen {
     }
 
     private int maxScroll() {
-        return Math.max(0, mothers().size() - visibleRows);
+        return Math.max(0, rows().size() - visibleRows);
     }
 
     /** "Me manda a lista": o pedido e a propria tela, e nao o menu. */
@@ -142,8 +162,8 @@ public class ThreatSheetsScreen extends Screen {
                 .bounds(panelX + panelW - PAD - btnW, footerY, btnW, FOOTER_H).build());
     }
 
-    /** So as fichas MAES: as copias aparecem na coluna do editor, nao na lista
-     *  principal (07/10/2026). A lista de baixo e a rolagem usam esta contagem. */
+    /** So as fichas MAES (07/10/2026). As copias entram na lista so como linhas do
+     *  grupo da mae, em {@link #rows()}. */
     private List<ThreatSheet> mothers() {
         List<ThreatSheet> out = new ArrayList<>();
         for (ThreatSheet sheet : sheets()) {
@@ -154,19 +174,72 @@ public class ThreatSheetsScreen extends Screen {
         return out;
     }
 
+    /**
+     * As linhas da lista, na ordem em que aparecem: cada mae; logo abaixo dela, o
+     * botao de abrir/fechar o grupo (so quando ha copias); e as copias, se o grupo
+     * estiver aberto.
+     */
+    private List<Row> rows() {
+        List<Row> out = new ArrayList<>();
+        for (ThreatSheet mother : mothers()) {
+            out.add(new Row(mother, RowKind.MOTHER));
+            if (!mother.hasId()) {
+                continue;
+            }
+            List<ThreatSheet> copies = copiesOf(mother);
+            if (copies.isEmpty()) {
+                continue;
+            }
+            out.add(new Row(mother, RowKind.TOGGLE));
+            if (collapsedGroups.contains(mother.id())) {
+                continue;
+            }
+            for (ThreatSheet copy : copies) {
+                out.add(new Row(copy, RowKind.COPY));
+            }
+        }
+        return out;
+    }
+
+    /** As copias da mae, na ordem da lista. */
+    private List<ThreatSheet> copiesOf(ThreatSheet mother) {
+        List<ThreatSheet> out = new ArrayList<>();
+        for (ThreatSheet sheet : sheets()) {
+            if (sheet.hasId() && mother.id().equals(sheet.copyOf())) {
+                out.add(sheet);
+            }
+        }
+        return out;
+    }
+
+    /**
+     * Abre ou fecha o grupo de copias de uma mae. O "Del?" pendente e desarmado, porque
+     * a linha que ele confirmava pode ter saido da tela.
+     */
+    private void toggleGroup(ThreatSheet mother) {
+        if (collapsedGroups.contains(mother.id())) {
+            collapsedGroups.remove(mother.id());
+        } else {
+            collapsedGroups.add(mother.id());
+        }
+        deletePending = -1;
+        rebuildList();
+    }
+
     private void rebuildList() {
         for (AbstractWidget old : listWidgets) {
             removeWidget(old);
         }
         listWidgets.clear();
 
-        // As linhas sao so maes; a bolinha amarela agora vive DENTRO do botao do
-        // nome (o widget DotWidget), entao os 6 px que sobravam antes do Del
-        // voltaram para o nome.
-        List<ThreatSheet> sheets = mothers();
+        // O grupo fechado encurta a lista: a rolagem nao pode ficar alem do fim novo.
+        listScroll = Math.min(listScroll, maxScroll());
+        // Mae, botao de grupo e copia dividem o mesmo nome/Del; a bolinha amarela
+        // vive DENTRO do botao do nome (o widget DotWidget).
+        List<Row> rows = rows();
         int nameW = Math.max(40,
                 panelW - 2 * PAD - ROW_BTN_W - GAP - BAR_W);
-        int to = Math.min(sheets.size(), listScroll + visibleRows);
+        int to = Math.min(rows.size(), listScroll + visibleRows);
         // A linha marcada saiu de vista: o "Del?" nao esta mais na tela, e manter o
         // indice faria o proximo clique no Del APAGAR sem o Mestre ter visto a
         // confirmacao. Perdido o "Del?", o proximo clique comeca a confirmacao de novo.
@@ -174,16 +247,35 @@ public class ThreatSheetsScreen extends Screen {
             deletePending = -1;
         }
         for (int i = listScroll; i < to; i++) {
-            ThreatSheet sheet = sheets.get(i);
+            Row row = rows.get(i);
+            ThreatSheet sheet = row.sheet();
             int y = listTop + (i - listScroll) * ROW_H;
             int index = i;
+
+            // O botao de abrir/fechar o grupo e uma "pasta" compacta, alinhada a esquerda
+            // sob a mae: a largura e so a do texto dele, e a altura e TOGGLE_H.
+            if (row.kind() == RowKind.TOGGLE) {
+                boolean collapsed = collapsedGroups.contains(sheet.id());
+                Component label = Component.translatable(collapsed
+                                ? "screen.tabletoprpg.threat_sheets.copies_collapsed"
+                                : "screen.tabletoprpg.threat_sheets.copies_expanded",
+                        copiesOf(sheet).size());
+                Button toggle = Button.builder(label, b -> toggleGroup(sheet))
+                        .bounds(panelX + PAD, y + (ROW_H - TOGGLE_H) / 2,
+                                this.font.width(label) + 12, TOGGLE_H).build();
+                listWidgets.add(toggle);
+                addRenderableWidget(toggle);
+                continue;
+            }
+            // A copia fica recuada; o Del dela cai na mesma coluna do Del da mae.
+            int indent = row.kind() == RowKind.COPY ? COPY_INDENT : 0;
 
             // Mesmo corte dos botoes da ficha: o `Button` desenha o rotulo com
             // `drawCenteredString`, e um nome de 48 caracteres atravessaria a borda.
             Button name = Button.builder(
-                            Component.literal(this.font.plainSubstrByWidth(sheet.listLabel(), nameW - 2)),
+                            Component.literal(this.font.plainSubstrByWidth(sheet.listLabel(), nameW - indent - 2)),
                             b -> open(sheet))
-                    .bounds(panelX + PAD, y, nameW, ROW_H)
+                    .bounds(panelX + PAD + indent, y, nameW - indent, ROW_H)
                     .tooltip(sheetTooltip(sheet))
                     .build();
             listWidgets.add(name);
@@ -246,8 +338,8 @@ public class ThreatSheetsScreen extends Screen {
 
     /** O primeiro clique marca, o segundo na mesma linha apaga. */
     private void onDelete(int index) {
-        List<ThreatSheet> sheets = mothers();
-        if (index < 0 || index >= sheets.size()) {
+        List<Row> rows = rows();
+        if (index < 0 || index >= rows.size()) {
             deletePending = -1;
             rebuildList();
             return;
@@ -259,11 +351,11 @@ public class ThreatSheetsScreen extends Screen {
         }
         deletePending = -1;
         ClientPlayNetworking.send(new RpgNetworking.ThreatSheetDeletePayload(
-                sheets.get(index).identity().name()));
+                rows.get(index).sheet().identity().name()));
     }
 
     private int thumbHeight() {
-        int total = mothers().size();
+        int total = rows().size();
         if (total <= visibleRows) {
             return listBottom - listTop;
         }
