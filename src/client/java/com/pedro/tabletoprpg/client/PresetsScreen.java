@@ -7,6 +7,7 @@ import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.minecraft.ChatFormatting;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
+import net.minecraft.client.gui.components.Checkbox;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.components.Tooltip;
 import net.minecraft.client.gui.screens.Screen;
@@ -14,7 +15,9 @@ import net.minecraft.client.input.MouseButtonEvent;
 import net.minecraft.network.chat.Component;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * A tela de <b>Presets de Rolagem</b>: lista em cima, formulario embaixo (01/10/2026).
@@ -67,9 +70,53 @@ public class PresetsScreen extends Screen {
      */
     private int deletePending = -1;
 
+    /**
+     * As chaves dos presets que a mesa compartilhou (22/10/2026).
+     *
+     * <p>Um preset compartilhado aparece na lista, mas nao e da jogadora: ela pode
+     * USAR (a rolagem vai para a mesa), e nao pode editar nem apagar. E o conjunto
+     * de chaves que diz a tela qual linha e de quem.
+     */
+    private final Set<String> sharedKeys = new HashSet<>();
+
     private EditBox nameBox;
     private EditBox formulaBox;
     private RollPresetColor selectedColor = RollPresetColor.WHITE;
+
+    /** A caixa "Open Roll": o preset rola para a mesa inteira, e nao so para quem rola. */
+    private Checkbox openRollBox;
+
+    /** Onde a caixa "Open Roll" fica, para poder recria-la com o estado novo. */
+    private int openRollX, openRollY, openRollW;
+
+    /** O estado da caixa "Open Roll", que vai no pacote do Save. */
+    private boolean openRoll;
+
+    /**
+     * (Re)cria a caixa "Open Roll" no estado atual.
+     *
+     * <p><b>Por que recriar e nao usar um setter:</b> nesta versao do Minecraft o
+     * {@code Checkbox} nao tem metodo para trocar o estado de fora: ele so muda
+     * quando a jogadora clica nele. Abrir um preset com a flag ligada (ou desligada)
+     * precisaria mudar o desenho da caixa, entao a caixa e refeita com o estado
+     * certo. O resto da tela nao e tocado, para o que a jogadora estava digitando
+     * ficar como esta.
+     */
+    private void rebuildOpenRollBox() {
+        if (openRollBox != null) {
+            removeWidget(openRollBox);
+        }
+        openRollBox = Checkbox.builder(Component.translatable("screen.tabletoprpg.presets.open_roll"), this.font)
+                .pos(openRollX, openRollY)
+                .maxWidth(openRollW)
+                .selected(openRoll)
+                .onValueChange((cb, checked) -> openRoll = checked)
+                .build();
+        openRollBox.setSize(openRollW, FIELD_H);
+        // Preset de outra pessoa: a flag nao se mexe aqui.
+        openRollBox.active = editing == null || !isShared(editing);
+        addRenderableWidget(openRollBox);
+    }
 
     private int panelX, panelY, panelWidth, panelHeight;
     private int listTop, listBottom, listScroll, listRowHeight, visibleRows;
@@ -140,7 +187,7 @@ public class PresetsScreen extends Screen {
     private static final String ARROW_DOWN = "\u2193";
 
     public PresetsScreen(Screen parentScreen) {
-        super(Component.literal("Presets"));
+        super(Component.translatable("screen.tabletoprpg.presets.title"));
         this.parentScreen = parentScreen;
     }
 
@@ -194,6 +241,7 @@ public class PresetsScreen extends Screen {
         int chrome = TITLE_H + GAP
                 + FIELD_H + TIGHT_GAP
                 + FIELD_H + GAP
+                + FIELD_H + GAP               // caixa "Open Roll"
                 + STATUS_H + TIGHT_GAP          // rotulo "Color: <nome>"
                 + swatchBlockHeight + GAP
                 + ROW_H + TIGHT_GAP             // rodape: Back | Save | Use
@@ -239,7 +287,14 @@ public class PresetsScreen extends Screen {
         formulaBox = field("Formula", boxX, nameBox.getY() + FIELD_H + TIGHT_GAP, boxW);
         formulaBox.setMaxLength(RollPreset.MAX_FORMULA);
 
-        colorLabelY = formulaBox.getY() + FIELD_H + GAP;
+        // A caixa "Open Roll" fica entre a formula e as cores: e uma opcao do
+        // preset, como a cor, e nao um campo de texto.
+        openRollX = boxX;
+        openRollY = formulaBox.getY() + FIELD_H + GAP;
+        openRollW = boxW;
+        rebuildOpenRollBox();
+
+        colorLabelY = openRollBox.getY() + FIELD_H + GAP;
         int swatchRows = rowsOfSwatches();
         int swatchesWidth = swatchPerRow * swatchSize + (swatchPerRow - 1) * swatchGap;
         swatchX = panelX + (panelWidth - swatchesWidth) / 2;
@@ -314,9 +369,9 @@ public class PresetsScreen extends Screen {
 
         this.addRenderableWidget(Button.builder(Component.literal(backLabel), b -> onClose())
                 .bounds(backX, footerY, backActualW, ROW_H).build());
-        this.addRenderableWidget(Button.builder(Component.literal("Save"), b -> save())
+        this.addRenderableWidget(Button.builder(Component.translatable("screen.tabletoprpg.presets.save"), b -> save())
                 .bounds(saveX, footerY, btnW, ROW_H).build());
-        this.addRenderableWidget(Button.builder(Component.literal("Use"), b -> usePreset())
+        this.addRenderableWidget(Button.builder(Component.translatable("screen.tabletoprpg.presets.use"), b -> usePreset())
                 .bounds(useX, footerY, btnW, ROW_H).build());
     }
 
@@ -486,14 +541,19 @@ public class PresetsScreen extends Screen {
             RollPreset preset = presets.get(i);
             int rowY = listTop + (i - listScroll) * listRowHeight;
             int storedIndex = i;
+            // Preset de outra pessoa: sem setas e sem Del. Nao ha o que reordenar
+            // nem o que apagar em preset que nao e da jogadora.
+            boolean shared = isShared(preset);
 
             // Setas: uma casa por clique. As DUAS existem em toda linha, mesmo na
             // primeira e na ultima: quem nao tem para onde ir fica escura e travada
             // em vez de sumir (pedido da jogadora). Sumir fazia a borda da lista
             // parecer um botao quebrado, e ela nao descobria que o preset ja estava
             // no topo ou no fim da lista.
-            addArrow(rowY, upX, btnH, storedIndex, true);
-            addArrow(rowY, upX + ROW_BTN_W + ROW_BTN_GAP, btnH, storedIndex, false);
+            if (!shared) {
+                addArrow(rowY, upX, btnH, storedIndex, true);
+                addArrow(rowY, upX + ROW_BTN_W + ROW_BTN_GAP, btnH, storedIndex, false);
+            }
 
             // O nome: abre para edicao, e mostra a formula no hover (pedido do
             // usuario). O tooltip e a resposta ao "ao passar o mouse aparecera a
@@ -503,11 +563,19 @@ public class PresetsScreen extends Screen {
                             b -> loadForEdit(storedIndex))
                     .bounds(rowLeft(), rowY, rowNameWidth(), btnH)
                     .tooltip(Tooltip.create(Component.literal(preset.formula()),
-                            Component.literal("Color: " + preset.color().displayName())))
+                            Component.literal(shared
+                                    ? "Shared with the table: use it, do not edit"
+                                    : preset.openRoll()
+                                    ? "Open Roll: the roll goes to the whole table"
+                                    : "Private: only the roller sees the roll")))
                     .build());
 
             // Del com confirmacao em dois cliques, igual a lista de skills e magias.
             boolean pending = deletePending == storedIndex;
+            if (shared) {
+                // Nada a apagar: preset de outra pessoa fica sem o botao.
+                continue;
+            }
             addListWidget(Button.builder(
                             Component.literal(pending ? "Del?" : "Del"),
                             b -> onDelete(storedIndex))
@@ -587,6 +655,8 @@ public class PresetsScreen extends Screen {
             editing = null;
             nameBox.setValue("");
             formulaBox.setValue("");
+            openRoll = false;
+            rebuildOpenRollBox();
             deletePending = -1;
             return;
         }
@@ -595,14 +665,28 @@ public class PresetsScreen extends Screen {
         nameBox.setValue(editing.name());
         formulaBox.setValue(editing.formula());
         selectedColor = editing.color();
+        // A caixa acompanha o preset: e o que o Save vai gravar.
+        openRoll = editing.openRoll();
+        rebuildOpenRollBox();
         deletePending = -1;
     }
 
     /** O botao Save: cria quando nao ha preset em edicao, edita quando ha. */
     private void save() {
+        if (editing != null && isShared(editing)) {
+            // Preset de outra pessoa: o Save nao tem o que gravar.
+            setStatus("this preset is shared by another player: it can be used, not edited");
+            return;
+        }
         String original = editing == null ? "" : editing.name();
         ClientPlayNetworking.send(new RpgNetworking.PresetSavePayload(
-                original, nameBox.getValue().trim(), formulaBox.getValue().trim(), selectedColor.id()));
+                original, nameBox.getValue().trim(), formulaBox.getValue().trim(), selectedColor.id(),
+                openRoll));
+    }
+
+    /** O preset e de outra pessoa (compartilhado com a mesa)? */
+    private boolean isShared(RollPreset preset) {
+        return preset != null && sharedKeys.contains(preset.key());
     }
 
     /**
@@ -1001,12 +1085,17 @@ public class PresetsScreen extends Screen {
     private static String pendingStatus = "";
 
     /** Chamado pelo receptor do cliente com a lista nova e a mensagem do servidor. */
-    public void applyResult(boolean ok, String message, List<RollPreset> updated) {
+    public void applyResult(boolean ok, String message, List<RollPreset> updated, List<String> shared) {
         if (updated != null && !updated.isEmpty()) {
             presets = new ArrayList<>(updated);
         } else if (ok) {
             // Ok com lista vazia = a jogadora deletou o ultimo preset.
             presets = new ArrayList<>();
+        }
+        // Quais linhas sao de outra pessoa: muda o que a tela deixa fazer com elas.
+        sharedKeys.clear();
+        if (shared != null) {
+            sharedKeys.addAll(shared);
         }
         pendingStatus = message == null ? "" : message;
         if (panelWidth > 0) {

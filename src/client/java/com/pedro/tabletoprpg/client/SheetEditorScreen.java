@@ -258,6 +258,14 @@ public class SheetEditorScreen extends Screen {
         y = limitField(y, "pericia_max", staged.periciaValueMax(), false,
                 v -> staged = staged.withValueLimits(
                         staged.attributeValueMin(), staged.attributeValueMax(), v));
+        // 22/10/2026: a iniciativa PADRAO da mesa. O campo e com sinal (a
+        // iniciativa e um modificador do d20 e pode ser negativa) e fica numa
+        // secao propria, porque nao e um limite de valor: e o numero que o
+        // personagem usa quando o "usar a iniciativa do Mestre" esta ligado
+        // na ficha dele.
+        y = header(y, "initiative");
+        y = limitField(y, "initiative_default", staged.defaultInitiative(), true,
+                v -> staged = staged.withDefaultInitiative(v));
 
         y = header(y, "attributes");
         for (SheetModel.AttributeDef def : staged.attributes()) {

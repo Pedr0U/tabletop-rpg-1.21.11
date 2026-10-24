@@ -93,7 +93,7 @@ Raiz única `/rpg`, **sem aliases**. Todos registrados em
 | `/rpg session set <nome>` | só o Mestre | Define o nome da sessão; nomes vazios são recusados e o texto é cortado em 64 caracteres | `MasterCommands.java: onRegister` (handler `setSessionName: setSessionName`) |
 | `/rpg insert enemy <tipo> <cam_perm>` | só o Mestre | Invoca um mob 2 blocos à frente do Mestre, na direção do olhar dele. `tipo` aceita `zombie` ou `minecraft:zombie`; a sugestão só oferece criaturas da categoria `MONSTER` (vanilla e de outros mods). `cam_perm` é `true`/`false` | `MasterCommands.java: onRegister` (sugestões `suggestEntityTypes: suggestEntityTypes`, handler `insertEnemy: insertEnemy`) |
 | `/rpg insert camera` | só o Mestre | **Não define câmera nenhuma sozinho**: arma o pedido e responde `Click a creature to add or remove its camera.` O **próximo clique do Mestre numa criatura** põe (ou tira) aquela criatura do carrossel de câmera. Existe para criaturas que **já estão no mundo** — spawnadas normalmente, por `/summon` ou de outros mods —, onde `/rpg insert enemy <tipo> true` não se aplica. O item `Camera Tool` faz o mesmo, sem comando | `MasterCommands.java: onRegister` (handler `insertCamera: insertCamera`, que chama `CameraToolManager.arm`) |
-| `/rpg remove enemy` | só o Mestre | Remove **1 mob por execução**: o que estiver selecionado no momento. Exige ter clicado com o botão direito no mob antes | `MasterCommands.java: onRegister` (handler `removeEnemy: removeEnemy`) |
+| `/rpg remove enemy` | só o Mestre | Remove **1 mob por execução**: o que estiver selecionado no momento. Exige ter clicado com o botão direito no mob antes. **Aceita também o seletor `@e[name="Nome Exato"]`**: nesse caso remove **todos** os mobs do RPG com aquele nome exato, sem precisar clicar em nenhum deles. O nome é lido do texto do seletor (só a opção `name=` é usada) e a busca filtra por **nome exato** e por **mob do RPG** (`CombatController.java: isRpgMob`) — uma criatura natural do mundo com o mesmo nome nunca é removida. Se nada casar, o chat avisa que nada foi encontrado | `MasterCommands.java: onRegister` (handlers `removeEnemy: removeEnemy` e `removeEnemyBySelector: removeEnemyBySelector`, leitura do nome em `selectorName: selectorName`, descarte em `CombatController.java: removeMob`) |
 | `/rpg block_lock` | só o Mestre | **Não tranca nada sozinho**: arma o pedido e responde `Click a block to LOCK it. Players will not be able to use it.` O **próximo clique do Mestre num bloco** tranca aquele bloco. O pedido vale para 1 clique | `MasterCommands.java: onRegister` (handler `blockLock: blockLock`, que chama `BlockLockManager.arm`) |
 | `/rpg block_lock remove` | só o Mestre | O mesmo para **destrancar**: arma o pedido, e o próximo clique do Mestre no bloco o destrava | `MasterCommands.java: onRegister` (idem) (handler `blockUnlock: blockUnlock`) |
 
@@ -129,8 +129,16 @@ Raiz única `/rpg`, **sem aliases**. Todos registrados em
     entidade que não é `Mob` responde `Only creatures can be a camera target.` e **não** consome o
     pedido armado.
   - **A câmera exige persistência**: a criatura recebe `setPersistenceRequired()`, porque criatura de
-    câmera que despawna some do carrossel em silêncio, sem nada no log. Ela **não** fica com IA
-    desligada — congelar o mob não foi pedido e mudaria o que ele é na mesa.
+    câmera que despawna some do carrossel em silêncio, sem nada no log.
+  - **A câmera também CONGELA a criatura** (PARTE 3): o mob marcado fica **parado** — sem andar, sem
+    vagar, sem atacar — do mesmo jeito que o monstro selecionado fica (`setNoAi(true)`, em
+    `CameraToolManager.java: toggle`). O congelamento é re-aplicado quando a lista de alvos é
+    reconstruída, porque a flag de IA não sobrevive ao reinício do servidor e a tag sim
+    (`CombatController.java: selfHealCameraMobs`).
+  - **Tirar a camera devolve o mob ao mundo**, mas só quando o `CombatController` não está segurando
+    ele: peça da mesa, monstro selecionado ou monstro **já selecionado antes** continuam congelados
+    (`CombatController.java: isFrozenByTable`). Sem essa guarda, tirar a câmera de um monstro que o
+    Mestre já tinha selecionado poria a criatura andando sozinha.
   - **A marca é o mesmo rótulo do `cam_perm`**: `tabletoprpg_camera` no NBT, e o `selfHealCameraMobs`
     do `CombatController` reinscreve os marcados depois de reiniciar o mundo. As duas vias — comando
     `cam_perm=true` e clique — terminam no mesmo estado.
@@ -151,6 +159,10 @@ Raiz única `/rpg`, **sem aliases**. Todos registrados em
 - **`/rpg remove enemy`** sem seleção devolve
   `§c[RPG] No enemy selected. Right-click an enemy first, then run /rpg remove enemy.`
   (`MasterCommands.java: removeEnemy`).
+- **`/rpg remove enemy`** com o seletor `@e[name="..."]` e sem resultado devolve
+  `§c[RPG] No enemy named "Nome" was found.`, e um texto que não é um seletor no formato aceito
+  devolve `§c[RPG] Use @e[name="Nome Exato"] to remove enemies by name.`
+  (`MasterCommands.java: removeEnemyBySelector`).
 - **Trancar blocos (`/rpg block_lock`, `/rpg block_lock remove` e o item `Block Locker`)**: as trancas
   valem **para os jogadores** (não-mestre); o Mestre nunca é bloqueado, nem com o item na mão. A
   recusa vale **independente do turno**: mesmo o jogador do turno recebe `Block Locked`, porque a
@@ -380,7 +392,7 @@ executou o comando (`refreshChatMenu: rollDice`), sem precisar digitar `/rpg men
 
 ## 3. Teclas
 
-As duas teclas do mod estão em uma **aba própria** na tela de Controles, chamada **`Tabletop RPG`**
+As três teclas do mod estão em uma **aba própria** na tela de Controles, chamada **`Tabletop RPG`**
 (categoria registrada em `TabletopRpgClient.java: onInitializeClient`, rótulo em `en_us.json`, chave `key.category.tabletop-rpg.rpg`). Antes elas
 caíam em `Miscellaneous`.
 
@@ -388,12 +400,14 @@ caíam em `Miscellaneous`.
 |---|---|---|
 | `R` | Abre o **menu gráfico** do TableTop RPG. O cliente pede os dados da sessão e o servidor responde abrindo a tela com papel, modo e turno corretos | `TabletopRpgClient.java: onInitializeClient` (consumo `: onInitializeClient`; abertura da tela `: registerNetworking`) |
 | `V` | Cicla o modo de câmera: `3rd Person` → `1st Person` → `Top-Down` → `Free`. Fora do modo espectador, alterna entre a câmera normal do jogo e a câmera Livre. Mostra o modo na barra de ação (`§b[Camera] §f...`) | `TabletopRpgClient.java: onInitializeClient` (consumo `: onInitializeClient`; ciclo `SpectatorCameraController.java: cycleMode`) |
-| `Tab` na aba `Tabletop RPG` | Aba própria em Opções → Controles, com as duas teclas acima | `TabletopRpgClient.java: onInitializeClient`, `en_us.json`, chave `key.category.tabletop-rpg.rpg` |
+| `B` | **Só o Mestre**: liga/desliga o **modo de câmera de espectador** dele, que nunca é travado pelo servidor. Mostra `Spectator camera ON/OFF` na barra de ação. Um jogador comum que aperta recebe `Only the Game Master can use the spectator camera.` | `TabletopRpgClient.java: onInitializeClient` (consumo `: onInitializeClient`; alternância `SpectatorCameraController.java: toggleMasterSpectator`) |
+| `Tab` na aba `Tabletop RPG` | Aba própria em Opções → Controles, com as três teclas acima | `TabletopRpgClient.java: onInitializeClient`, `en_us.json`, chave `key.category.tabletop-rpg.rpg` |
 
 ### Teclas vanilla consumidas pelo mod
 
-Só valem **enquanto o jogador está travado** (modo Investigação/Combate fora do turno). Fora desse
-estado, o vanilla funciona normalmente.
+Só valem **enquanto o jogador está travado** (modo Investigação/Combate fora do turno) **ou enquanto
+o Mestre está no modo de câmera de espectador** (tecla `B`). Fora desses estados, o vanilla funciona
+normalmente.
 
 | Tecla vanilla | O que o mod faz com ela | Arquivo:símbolo |
 |---|---|---|
@@ -420,7 +434,7 @@ O `V` também está disponível como botão `Camera Mode: ...` na tela de Settin
 | `AttributePickerScreen` — `Attribute` | Botão de atributo de uma perícia, dentro da `StatusScreen` (`StatusScreen.java: openPericiaAttribute`) | Escolhe com qual atributo a perícia soma. A lista vem do **modelo**, não de um enum: são os atributos que o Mestre deixou (1 a 10), com o atual marcado por `>` (`AttributePickerScreen.java: init`, `: options`; `SheetModelHolder.java: current`) |
 | `SheetEditorScreen` — `Sheet Editor` | **Só o Mestre**, pelo botão direito no item `sheet_editor` (`ModItems.java: SHEET_EDITOR`, uso em `ModItems.java: onUseItem`, que confere `SessionManager.isMaster` e chama `RpgNetworking.java: sendOpenSheetEditor`; o servidor reconfere o Mestre em `sendOpenSheetEditor`). O item usa a textura **placeholder** `minecraft:item/writable_book` (livro com pena), a pedido do usuário (`models/item/sheet_editor.json`), e aparece com o nome **Sheet Editor**. Os **dois** bugs que impediam isso, corrigidos em 28/09/2026, tinham a mesma causa — namespace e modelo. **Sprite:** o 1.21.11 carrega o modelo de item **só** de `assets/<namespace>/items/<id>.json`, e `assets/tabletop-rpg/items/sheet_editor.json` **não existia**, então o item era desenhado com o modelo ausente; a ausência é **silenciosa**, sem warning no log, porque o arquivo que falta nunca chega ao parser, e o `models/item/sheet_editor.json` continuava correto, só nunca lido — agora existe o arquivo de `items/`, que aponta para o modelo. **Nome:** a chave de tradução automática do item inclui o **hífen** do namespace, ou seja `item.tabletop-rpg.sheet_editor`; a chave usada era `item.tabletoprpg.sheet_editor`, sem hífen, e o jogo mostrava a chave crua em vez de `Sheet Editor`. **Não** há botão para isso no `RpgMenuScreen` | Edita o **modelo** da ficha (o formato, não os valores de ninguém): rótulo de cada campo de texto (incluindo o **rótulo do CA**, `field_ca`, 01/10/2026), `Race` e `Mana` on/off, o **modo do XP** (`SheetModel.java: XpMode`: `Number`, `Free text`, `Hidden`), e as listas de **atributos** (sigla + nome, com `+ Attribute` e `X`) e de **perícias** (nome, atributo padrão, com `+ Pericia` e `X`) (`SheetEditorScreen.java: buildContent`, `: attributeRow`, `: periciaRow`). **Seção `Value limits`** (28/09/2026, `SheetEditorScreen.java: limitField`, entre a seção de XP e a de atributos): três campos numéricos — **Attribute min** (-30), **Attribute max** (30) e **Pericia max** (30) — que **substituem as constantes fixas** de `SheetData`. Eles viajam no `SheetModel`, no NBT (3 chaves `optionalFieldOf`) **e** no pacote (3 `VAR_INT` em encoder **e** decoder, que neste arquivo são lambdas separadas: mudar um lado só compila e quebra em runtime), e a **ficha** carrega os mesmos três números, com o clamp no **construtor compacto do record** (`SheetData.java: composite`), o que faz qualquer caminho que reconstrói a ficha respeitar o teto sem mexer em cada método. **Teto invertido** (`min` maior que `max`) vira `[min, min]` e não intervalo vazio, senão o clamp levaria todo valor para o piso. O **mínimo da perícia continua 0 fixo**, e o campo do máximo do atributo não aceita `-`, então um intervalo todo negativo não pode ser digitado no teto. **Nome de perícia repetido** (28/09/2026): antes a caixa **voltava sozinha** e o modelo recusava a troca (`SheetModel.java: withPericiaText`); agora o repetido **entra** na caixa e no rascunho, o que trava o `Save` passou a ser a tela (`SheetEditorScreen.java: hasDuplicateName`, comparação sem diferenciar maiúsculas, como o resto do projeto), o aviso `duplicate pericia name` entrou entre o de nome vazio e o de `unsaved changes`, e `canDiscard` passou a considerar o caso — sem isso o Mestre ficava preso na tela sem saída. A identidade continua sendo o **id**: dois nomes iguais com ids diferentes convivem no modelo, então `/rpg roll <perícia>` pega a **primeira** (`MasterCommands.java: findPericia`). Uma coluna só, rolando junto (`SheetEditorScreen.java: applyScroll`), e a janela de visibilidade dos widgets usa a **altura real do widget** (`slot.widget().getHeight()`, 16px) em vez da altura da linha (`ROW_H`, 20), com um **critério único** para controle e cabeçalho (`SheetEditorScreen.java: fitsInPanel`); o título da tela também é desenhado **antes** do `super.render()`, então o texto não fica na frente do widget. Efeito observável: com a lista rolada, a caixa de texto não sai mais para fora do painel nem some atrás do título. A edição é **em memória** e só grava no `Save` (`SheetEditorScreen.java: save`, que envia `RpgNetworking.java: SheetModelSavePayload`); `Discard` volta ao último salvo, `Reset` volta ao modelo padrão e `Close` fecha (`SheetEditorScreen.java: buildFooter`). **Fechar sem salvar não é cancelar** (decisão do usuário em 27/09/2026): fechar com `ESC` — ou pelo botão `Close`, ou abrindo outra tela como o inventário, porque o gancho é a **saída** da tela e não só o `ESC` — e reabrir o item mostra de novo o que estava na tela, mas **não aplicado** — o modelo do servidor continua sendo o de `baseline` e nada é enviado (`SheetEditorScreen.java: captureDraft`, chamado por `onClose` e por `removed`, que registra a saída da tela, e `: takeDraft`, que a consome na abertura seguinte). Só o `Discard` volta ao salvo e só o `Save` aplica; os dois apagam o rascunho (`: clearDraft`). O `Reset` faz o **contrário**: põe o modelo padrão no rascunho, mas **não** mexe no estado salvo, então a tela continua marcada como suja (`SheetEditorScreen.java: isDirty`) e fechar depois do `Reset` **preserva** o rascunho com o padrão, que ainda não foi gravado no servidor. O rascunho vive **na tela, não em disco**: não vai para o `SheetModel`, nem para o `SheetData`, nem para pacote, e é descartado ao desconectar (`TabletopRpgClient.java: registerConnectionCleanup`, que chama `SheetEditorScreen.java: discardTransientState`) — sem isso, entrar no mundo B abriria o editor com o rascunho do mundo A e o `Save` gravaria A no `SavedData` de B. **Nome de perícia vazio não entra no modelo:** a caixa **fica** com o que foi digitado, o modelo continua com o último nome válido, e a tela rastreia a pendência por **posição** na lista (`SheetEditorScreen.java: pendingNames`, `: hasPendingName`, `: captureDraft`). Enquanto houver pendência o `Save` fica **desabilitado** e aparece o aviso `screen.tabletoprpg.sheet_editor.pericia_no_name` (`pericia without a name`), que tem prioridade sobre o aviso de `unsaved changes` (`: render`). O botão `X` de remover **continua funcionando**, porque remove por posição e não pelo nome: é o único caminho para sair de um nome inválido (`: periciaRow`). O `Discard` **também** foi habilitado nesse caso, senão apagar o nome e não mexer em mais nada desligaria `Save`, `Discard` e `Reset` ao mesmo tempo e não sobraria saída (`: canDiscard`, que vale "sujo **ou** com nome pendente"). O cliente **não** é autoridade: o servidor reconstrói o `SheetModel` ao desserializar o payload, o que dispara o construtor compacto e saneia rótulos, duplicatas e os tetos de 10/30 (`SheetModel.java: SheetModel`) |
 | `DiceRollScreen` — `Rolls` | Botão `Rolls` do menu (`RpgMenuScreen.java: buildMenu`) | Monta a rolagem clicando em dados (`d4 d6 d8 d10 d12 d20 d100`, `DiceRollScreen.java: buildUI`) e modificadores (`-10 -1 +1 +10`, `: buildUI`), mostra a expressão e envia `/rpg roll <expressão>` ao servidor (`: rollDice`) |
-| `RpgSettingsScreen` — `Settings` | Botão `Settings` do menu (`RpgMenuScreen.java: buildMenu`) | **Mestre:** slider de horário, botão `Day/Night Cycle: On/Paused`, `Players break blocks: Yes/No`, `Players place blocks: Yes/No`, `Weather: Clear/Rain/Thunderstorm` e `Back` (`RpgSettingsScreen.java: init`, bloco do Mestre). **Jogador:** `Orbital Camera: Yes/No`, `Camera Mode: ...`, `Zoom TopDown` e `Transition Speed`, mais `Back` (`: init`) |
+| `RpgSettingsScreen` — `Settings` | Botão `Settings` do menu (`RpgMenuScreen.java: buildMenu`) | **Mestre:** slider de horário, botão `Day/Night Cycle: On/Paused`, `Players break blocks: Yes/No`, `Players place blocks: Yes/No`, `Max Masters: 1..5`, `Mobs can spawn: Yes/No`, `Mobs can be damaged: Yes/No`, `Weather: Clear/Rain/Thunderstorm` e `Back` (`RpgSettingsScreen.java: init`, bloco do Mestre). **Jogador:** `Orbital Camera: Yes/No`, `Camera Mode: ...`, `Zoom TopDown` e `Transition Speed`, mais `Back` (`: init`) |
 | `CharacterSheetScreen` | — | Classe base de `StatusScreen` e `SkillsScreen`; não é aberta sozinha (`CharacterSheetScreen.java: CharacterSheetScreen`) |
 
 Os botões `-10` e `-1` da `DiceRollScreen` montam expressões como `d8-2` e **funcionam**:
@@ -440,6 +454,11 @@ ataques de mob. Existem duas exceções de segurança, que não são "dano de me
 `DamageTypes.GENERIC_KILL` (`/kill`, para o Mestre desfazer erros de sessão).
 `DamageControlHandler.java: register`.
 
+A única exceção é a opção **`Mobs can be damaged`** do Mestre, que é **desligada por padrão**
+(`SessionManager.java: mobsCanBeDamaged`): com ela ligada, os mobs da mesa passam a levar dano
+normal (`DamageControlHandler.java: register`), e o mob inserido que morre é **removido para
+sempre** (`DamageControlHandler.java: register`, evento `AFTER_DEATH`).
+
 ### HP menor ou igual a zero = deitado, não morto
 
 Quando o **HP da ficha** chega a 0 (ou fica negativo), o personagem **deita e não morre**:
@@ -458,6 +477,26 @@ Quando o **HP da ficha** chega a 0 (ou fica negativo), o personagem **deita e n�
   tick — o Mestre precisa ver quem está caído (`RpgNetworking.java: sendDownedState`, `sendDownedSnapshotTo`).
 - Com HP maior que zero o personagem levanta sozinho (`DamageControlHandler.java: tickDownedPlayer`).
 
+### Ficha de ameaça: Modo Horda (1:N) e monstro deitado
+
+- A Ficha de Ameaça tem uma caixa **"Modo Horda (1:N)?"** na coluna esquerda do editor
+  (`ThreatSheetScreen.java: buildSheetLeftColumn`). **Desmarcada**, vale a regra antiga: uma ficha
+  vale para **no máximo um** monstro, e amarrar outro mob **rouba** a ficha do primeiro
+  (`ThreatSheetBinding.java: bind`).
+- **Marcada**, a mesma ficha vale para **vários** monstros ao mesmo tempo: o vínculo novo **não**
+  apaga o vínculo dos outros (`ThreatSheetBinding.java: bind`). O modo é uma propriedade da
+  **ficha**, não do vínculo — uma ficha sem monstro nenhum continua valendo.
+- O **destaque da ficha na mão** passa a contornar **todos** os monstros vinculados, e não só um
+  (`SheetHighlightManager.java: collectTarget`). O salvamento pelo editor também propaga o **nome
+  de exibição** para todos eles (`RpgNetworking.java: saveThreatSheetFromScreen`).
+- **HP da ficha em 0 (ou menos) deita os monstros vinculados** (22/10/2026, regra do Mestre): o
+  servidor põe a pose `SWIMMING`, **desliga a IA** e zera o movimento horizontal
+  (`CombatController.java: tickDownedThreatMobs`, `: applyDowned`). Com o HP de volta acima de 0, o
+  monstro **levanta sozinho** e a IA é religada — exceto se ele estiver congelado por outra regra da
+  mesa ou pela Camera Tool (`CombatController.java: clearDowned`).
+- Uma ficha gravada **antes** do Modo Horda carregar com a caixa **desmarcada**, sem perder nada
+  (`ThreatSheet.java: CODEC`).
+
 ### Turno
 
 Um único jogador ativo, sem fila e sem ordem (`SessionManager.java: activePlayerUuid`, `isActivePlayer`). Quem pode agir
@@ -472,6 +511,10 @@ Um único jogador ativo, sem fila e sem ordem (`SessionManager.java: activePlaye
   (`CombatController.java: toggleSelection`). **Ela não segue ninguém** (`: tickControlledMonsters`) e é removida no fim do
   turno (`clearPlayerAnchor: clearPlayerAnchor`).
 - O **Mestre nunca é limitado** (`CombatController.java: isPlayerBeyondAura`), e jogador sem âncora também não.
+- **No modo `FREE` o monstro é LIVRE** (22/10/2026, decisão do usuário): a âncora e a aura **não
+  limitam** o movimento dele, e o destino pode ser qualquer distância. O limite continua valendo em
+  `INVESTIGATION` e `COMBAT` (`CombatController.java: isMonsterMovementFree`,
+  `CombatController.java: moveSelectedMonster`).
 - Ao ultrapassar a borda, o jogador é **projetado de volta para a borda** e o cliente recebe um
   teleporte, em vez de só ter o pacote cancelado — é o que barra o jogador no limite sem deixá-lo
   preso em dessincronia (`CombatController.java: clampToAura`, `ServerGamePacketListenerImplMixin.java: tabletopRpg$cancelMoveIfLocked`).
@@ -496,6 +539,21 @@ de turno: no modo `FREE` todos podem; em `INVESTIGATION`/`COMBAT` só o Mestre e
 (`PlayerControlHandler.java: canInteract`). A decisão é sempre do **servidor**; no cliente essas
 checagens devolvem "deixa passar" para não cancelar o clique antes do pacote ir ao servidor
 (`PlayerControlHandler.java: canBreakBlocks`, `canPlaceBlocks`, `canInteract`).
+
+### Mestres permitidos
+
+O Mestre define quantos mestres a sessão aceita, de **1 a 5** (`SessionManager.java: maxMasters`,
+`: setMaxMasters`, que faz o clamp; o limite sobe e desce pelo botão `Max Masters` da tela de
+`Settings`, `RpgSettingsScreen.java: init`). O valor é guardado no servidor e devolvido ao cliente
+por payload próprio (`RpgNetworking.java: MaxMastersSettingStatePayload`), junto com a query que a
+tela dispara ao abrir.
+
+### Spawn de mobs
+
+O Mestre liga ou desliga o spawn natural de mobs com `Mobs can spawn` (`RpgSettingsScreen.java:
+init`), que é **ligado por padrão** (`SessionManager.java: mobsCanSpawn`). O servidor aplica a
+regra do mundo `SPAWN_MOBS` e `SPAWN_MONSTERS` em **todas as dimensões** ao mudar a opção
+(`RpgNetworking.java: applyMobSpawnGameRule`) — o controle é do servidor, sem mixin e sem evento.
 
 ### Clima
 
@@ -529,11 +587,22 @@ não "voltar" sozinho durante a transição (`SessionManager.java: playersCanPla
 - Só funciona para **mobs**, dentro da distância definida por `/rpg hoverdistance`
   (`TabletopRpgClient.java: tickHover`), e é **desligado enquanto a câmera de espectador está
   ativa** (`: tickHover`).
+- **O destaque de mira só existe no modo `COMBATE`** (PARTE 3): nos modos `FREE` e `INVESTIGATION`
+  não há contorno de entidade. O cliente não só para de enviar o hover fora do combate — ele
+  **zera o id** que o `EntityRendererMixin` lê, para o contorno sumir no mesmo tick da troca de modo
+  (`TabletopRpgClient.java: getHoveredEntityId`, `TabletopRpgClient.java: isCombatMode`).
 
 ### Monstros da mesa
 
-- Mobs invocados por `/rpg insert enemy` nascem com **IA desligada, sem despawn e invulneráveis**, e
-  nunca agem sozinhos (`MasterCommands.java: insertEnemy`).
+- Mobs invocados por `/rpg insert enemy` nascem com **IA desligada e sem despawn**, e nunca agem
+  sozinhos (`MasterCommands.java: insertEnemy`). Eles só nascem **invulneráveis** quando a opção
+  `Mobs can be damaged` está **desligada** (`MasterCommands.java: insertEnemy`); com a opção
+  ligada, nascem vulneráveis e a invulnerabilidade é removida/reaplicada em todos os mobs já
+  inseridos quando o Mestre liga/desliga a opção (`CombatController.java:
+  applyInvulnerabilityToInsertedMobs`).
+- Mob inserido que **morre** com a opção `Mobs can be damaged` ligada é **removido para sempre**:
+  some do mundo, sai da lista de mobs inseridos e de câmera, perde o vínculo da ficha de ameaça e
+  o chat avisa que ele foi destruído (`DamageControlHandler.java: register`, evento `AFTER_DEATH`).
 - Todo mob inserido — mesmo sem estar selecionado — **olha para o jogador mais próximo** a cada tick
   (`CombatController.java: tickControlledMonsters`).
 - O Mestre seleciona um mob com o **botão direito** e o move com o **botão direito em um bloco**
@@ -541,7 +610,8 @@ não "voltar" sozinho durante a transição (`SessionManager.java: playersCanPla
   0,35 bloco por tick (`CombatController.java: MOVE_SPEED`, `moveSelectedMonster`).
 - O destino precisa estar **dentro da aura do monstro**; fora dela o movimento é recusado
   (`CombatController.java: moveSelectedMonster`), assim como quando não há espaço para a entidade ficar em cima
-  do bloco (`: moveSelectedMonster`).
+  do bloco (`: moveSelectedMonster`). **No modo `FREE` essa recusa não existe**: o monstro é livre e
+  pode ir para qualquer distância da âncora (`CombatController.java: isMonsterMovementFree`).
 - Ao selecionar o mesmo mob de novo, ele é **desselecionado** e volta a ser uma peça congelada
   (`CombatController.java: toggleSelection`).
 - **Entidades montadas em partes também são selecionáveis** (01/10/2026, `EntityTargets.java`): o
@@ -801,6 +871,25 @@ Enquanto o jogador está travado, a câmera assume o controle (`SpectatorCameraC
   (`SpectatorCameraController.java: advanceTransition`; `RpgSettingsScreen.java: init`).
 - A câmera Livre tem colisão: ela **não atravessa parede** (`SpectatorCameraController.java: collideFreeCamera`).
 
+#### O Mestre no modo de câmera de espectador (PARTE 3)
+
+- O Mestre **nunca é travado** pelo servidor (ele sempre pode agir), então a câmera de espectador não
+  ligaria sozinha para ele. A tecla `B` liga/desliga o **mesmo modo** que o jogador travado tem
+  (`SpectatorCameraController.java: toggleMasterSpectator`).
+- Dentro do modo, o comportamento é **igual ao do jogador travado**: `V` cicla os quatro modos,
+  clique esquerdo troca para o próximo alvo e clique direito para o anterior, e o `F5` é engolido. A
+  trava local (`TabletopRpgClient.java: locked`) é o que liga esses controles, e ela vale para o
+  Mestre porque o servidor nunca o trava (`TabletopRpgClient.java: registerNetworking`).
+- **O Mestre nunca é alvo** — nem de si mesmo, nem do carrossel dos outros. O servidor já o exclui da
+  lista de alvos de todo mundo (`RpgNetworking.java: getSpectatorTargets`), e no cliente o carrossel do
+  Mestre **não tem a posição 0 "eu mesmo"**: o índice 0 já é o primeiro alvo da lista do servidor
+  (`SpectatorCameraController.java: carouselSize`, `: listIndex`, `: getCurrentTarget`).
+- Sem alvo válido (lista vazia), a câmera de espectador do Mestre não liga; a câmera **Livre** é a
+  única que continua, porque ela voa a partir do próprio corpo e não precisa de alvo
+  (`SpectatorCameraController.java: tick`).
+- Quem não é Mestre não tem a tecla: o papel é decidido pelo servidor e chega no cliente pelo retrato
+  das trancas (no login) ou pelo menu da sessão (tecla `R`) (`TabletopRpgClient.java: isMaster`).
+
 ---
 
 ## 6. Estado por conexão: o que sobrevive e o que se perde
@@ -846,6 +935,10 @@ Enquanto o jogador está travado, a câmera assume o controle (`SpectatorCameraC
 - Na entrada, o servidor reenvia o estado de trava, o estado de deitado de todos os jogadores, a
   distância do destaque, o carrossel, o jogador ativo e a aura
   (`RpgNetworking.java: registerServerReceivers`).
+- **O modo de câmera de espectador do Mestre também é limpo ao desconectar** (PARTE 3): ele é estado
+  da sessão, não preferência, então quem sai do mundo volta sem ele
+  (`SpectatorCameraController.java: reset`). O papel de Mestre é reenviado pelo servidor no login
+  (retrato das trancas), então a tecla `B` volta a funcionar depois de reconectar.
 
 ### O que **não** persiste — limitação conhecida
 

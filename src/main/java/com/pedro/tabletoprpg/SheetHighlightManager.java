@@ -159,7 +159,7 @@ public final class SheetHighlightManager {
 
     /** Ids das entidades vinculadas as fichas que o jogador segura. */
     private static List<Integer> resolveTargets(ServerPlayer player) {
-        List<Integer> ids = new ArrayList<>(2);
+        List<Integer> ids = new ArrayList<>();
         collectTarget(player, player.getMainHandItem(), ids);
         collectTarget(player, player.getOffhandItem(), ids);
         return ids;
@@ -170,20 +170,20 @@ public final class SheetHighlightManager {
         if (sheetId.isEmpty()) {
             return;
         }
-        UUID mobUuid = ThreatSheetBinding.mobOf(player.level().getServer(), sheetId);
-        if (mobUuid == null) {
-            return;
-        }
-        // So o mob DESTE mundo: o cliente do jogador so tem entidades do proprio
-        // nivel, entao um id de outro mundo nao desenharia nada (e ocuparia a
-        // comparacao de "mudou" sem necessidade).
-        Entity mob = player.level().getEntity(mobUuid);
-        if (mob == null) {
-            return;
-        }
-        int id = mob.getId();
-        if (!out.contains(id)) {
-            out.add(id);
+        // Modo Horda (22/10/2026): a ficha pode valer para varios monstros, e TODOS
+        // eles entram no destaque.
+        for (UUID mobUuid : ThreatSheetBinding.mobsOf(player.level().getServer(), sheetId)) {
+            // So o mob DESTE mundo: o cliente do jogador so tem entidades do proprio
+            // nivel, entao um id de outro mundo nao desenharia nada (e ocuparia a
+            // comparacao de "mudou" sem necessidade).
+            Entity mob = player.level().getEntity(mobUuid);
+            if (mob == null) {
+                continue;
+            }
+            int id = mob.getId();
+            if (!out.contains(id)) {
+                out.add(id);
+            }
         }
     }
 }

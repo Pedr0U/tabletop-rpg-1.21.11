@@ -58,7 +58,7 @@ public class AttributePickerScreen extends Screen {
 
     public AttributePickerScreen(Screen parent, String skillName, String current,
                                  Consumer<String> onPick) {
-        super(Component.literal("Attribute"));
+        super(Component.translatable("screen.tabletoprpg.attribute_picker.title"));
         this.parent = parent;
         this.skillName = skillName;
         // Id vazio = a pericia ainda nao tem atributo escolhido. Nao existe mais
@@ -102,7 +102,7 @@ public class AttributePickerScreen extends Screen {
             y += BUTTON_H + GAP;
         }
 
-        addRenderableWidget(Button.builder(Component.literal("Cancel"), b -> onClose())
+        addRenderableWidget(Button.builder(Component.translatable("screen.tabletoprpg.attribute_picker.cancel"), b -> onClose())
                 .bounds(x, y + 4, BUTTON_W, BUTTON_H).build());
     }
 

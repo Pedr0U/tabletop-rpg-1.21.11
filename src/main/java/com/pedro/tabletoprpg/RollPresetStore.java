@@ -93,6 +93,33 @@ public final class RollPresetStore {
     /** A ordem da lista. O indice e derivado dela, nunca a fonte da verdade. */
     private static final Map<UUID, List<RollPreset>> PRESETS = new HashMap<>();
 
+    /**
+     * Os presets <b>compartilhados</b> da mesa, com o dono de cada um.
+     *
+     * <p><b>22/10/2026.</b> Um preset marcado como "Open Roll" e publicado aqui:
+     * ele passa a ser visivel e utilizavel por qualquer jogador da mesa, e nao
+     * so por quem o criou. A chave e o {@link RollPreset#key()}, o mesmo nome
+     * normalizado que a busca usa, para que o preset compartilhado seja achado
+     * pelo mesmo caminho do preset particular.
+     *
+     * <p><b>Por que fica em memoria e nao no NBT de cada jogador:</b> o preset
+     * compartilhado e da mesa, nao de uma pessoa. Se ficasse no NBT do dono, ele
+     * sumiria quando o dono saisse, e a mesa perderia o preset no meio do
+     * encounter. O preco e que o compartilhamento nao sobrevive ao servidor: com
+     * o servidor de volta, cada jogador republica o que tem, na carga do NBT
+     * ({@link #replaceAll}).
+     */
+    private static final Map<String, SharedPreset> SHARED = new LinkedHashMap<>();
+
+    /**
+     * Um preset compartilhado e o dono que o publicou.
+     *
+     * @param owner  quem publicou (e quem pode despublicar)
+     * @param preset o preset em si
+     */
+    public record SharedPreset(UUID owner, RollPreset preset) {
+    }
+
     private RollPresetStore() {
     }
 
@@ -109,6 +136,23 @@ public final class RollPresetStore {
 
     /** Procura pelo nome digitado, ja normalizado. */
     public static Optional<RollPreset> find(UUID playerUuid, String rawName) {
+        Optional<RollPreset> own = findOwn(playerUuid, rawName);
+        if (own.isPresent()) {
+            return own;
+        }
+        return findShared(rawName).map(SharedPreset::preset);
+    }
+
+    /**
+     * Procura <b>somente</b> entre os presets da propria jogadora.
+     *
+     * <p><b>Por que os dois buscas:</b> {@link #find} acha tambem o preset
+     * compartilhado da mesa, que e o que a jogadora quer ao <b>usar</b> um preset.
+     * Mas editar ou apagar um preset que e de outra pessoa nao pode passar por
+     * essa porta: quem edita e o dono. Por isso os comandos de edicao e de
+     * exclusao usam esta busca, que so enxerga o que a jogadora criou.
+     */
+    public static Optional<RollPreset> findOwn(UUID playerUuid, String rawName) {
         if (playerUuid == null || rawName == null) {
             return Optional.empty();
         }
@@ -123,6 +167,66 @@ public final class RollPresetStore {
             }
         }
         return Optional.empty();
+    }
+
+    /** O preset compartilhado com esse nome, se algum jogador o publicou. */
+    public static Optional<SharedPreset> findShared(String rawName) {
+        if (rawName == null) {
+            return Optional.empty();
+        }
+        return Optional.ofNullable(SHARED.get(RollPreset.normalizeKey(rawName)));
+    }
+
+    /**
+     * Publica um preset para a mesa inteira.
+     *
+     * <p><b>So publica preset com {@code openRoll}:</b> sem a flag, o preset e
+     * particular e nao tem por que aparecer para os outros.
+     */
+    public static void publishShared(UUID owner, RollPreset preset) {
+        if (owner == null || preset == null || !preset.openRoll()) {
+            return;
+        }
+        SHARED.put(preset.key(), new SharedPreset(owner, preset));
+    }
+
+    /**
+     * Tira um preset da mesa. So o dono tira, e so se o preset for mesmo dele.
+     */
+    public static void unpublishShared(UUID owner, String rawName) {
+        if (owner == null || rawName == null) {
+            return;
+        }
+        String key = RollPreset.normalizeKey(rawName);
+        SharedPreset current = SHARED.get(key);
+        if (current != null && owner.equals(current.owner())) {
+            SHARED.remove(key);
+        }
+    }
+
+    /**
+     * Os presets compartilhados que <b>nao</b> sao de quem esta olhando.
+     *
+     * <p>O dono ve o preset na propria lista (ele e o unico que pode editar), e
+     * nao na lista de compartilhados: mostrar duas vezes enfeitiçaria a tela.
+     */
+    public static List<SharedPreset> listShared(UUID viewerUuid) {
+        List<SharedPreset> out = new ArrayList<>();
+        for (SharedPreset shared : SHARED.values()) {
+            if (viewerUuid == null || !viewerUuid.equals(shared.owner())) {
+                out.add(shared);
+            }
+        }
+        return out;
+    }
+
+    /** As chaves dos presets compartilhados que nao sao de quem esta olhando. */
+    public static List<String> sharedKeys(UUID viewerUuid) {
+        List<String> out = new ArrayList<>();
+        for (SharedPreset shared : listShared(viewerUuid)) {
+            out.add(shared.preset().key());
+        }
+        return out;
     }
 
     /** A posicao do preset na ordem da jogadora, ou -1 se nao existe. */
@@ -171,11 +275,29 @@ public final class RollPresetStore {
         String key = preset.key();
         for (int i = 0; i < stored.size(); i++) {
             if (stored.get(i).key().equals(key)) {
-                return Optional.of(stored.set(i, preset));
+                RollPreset previous = stored.set(i, preset);
+                syncShared(playerUuid, previous, preset);
+                return Optional.of(previous);
             }
         }
         stored.add(preset);
+        syncShared(playerUuid, null, preset);
         return Optional.empty();
+    }
+
+    /**
+     * Publica ou despublica o preset conforme a flag, depois de uma gravacao.
+     *
+     * <p><b>Por que o anterior importa:</b> desmarcar a flag de um preset que era
+     * compartilhado tem que tirar ele da mesa. Sem olhar o valor anterior, o preset
+     * continuaria publicado para todo mundo, invisivel para quem o editou.
+     */
+    private static void syncShared(UUID owner, RollPreset previous, RollPreset current) {
+        if (current.openRoll()) {
+            publishShared(owner, current);
+        } else if (previous != null && previous.openRoll()) {
+            unpublishShared(owner, current.key());
+        }
     }
 
     /** @return o preset removido, ou {@link Optional#empty()} se nao havia nenhum */
@@ -190,6 +312,7 @@ public final class RollPresetStore {
         }
         RollPreset removed = stored.remove(index);
         prune(playerUuid, stored);
+        unpublishShared(playerUuid, removed.key());
         return Optional.of(removed);
     }
 
@@ -226,6 +349,7 @@ public final class RollPresetStore {
         }
         if (loaded == null || loaded.isEmpty()) {
             PRESETS.remove(playerUuid);
+            unpublishedAll(playerUuid);
             return;
         }
         List<RollPreset> clean = new ArrayList<>();
@@ -238,9 +362,42 @@ public final class RollPresetStore {
         }
         if (clean.isEmpty()) {
             PRESETS.remove(playerUuid);
+            unpublishedAll(playerUuid);
             return;
         }
         PRESETS.put(playerUuid, clean);
+        republish(playerUuid, clean);
+    }
+
+    /**
+     * Republica os presets com a flag depois da carga do NBT.
+     *
+     * <p>O compartilhamento vive em memoria, entao a carga da ficha e o momento em
+     * que o preset volta a mesa. O que estava publicado e deixou de estar (a
+     * jogadora desmarcou a flag antes de sair) sai daqui.
+     */
+    private static void republish(UUID owner, List<RollPreset> clean) {
+        List<String> published = new ArrayList<>();
+        for (RollPreset preset : clean) {
+            if (preset.openRoll()) {
+                published.add(preset.key());
+                publishShared(owner, preset);
+            }
+        }
+        for (SharedPreset shared : new ArrayList<>(SHARED.values())) {
+            if (owner.equals(shared.owner()) && !published.contains(shared.preset().key())) {
+                unpublishShared(owner, shared.preset().key());
+            }
+        }
+    }
+
+    /** Tira da mesa tudo que o dono tinha publicado. */
+    private static void unpublishedAll(UUID owner) {
+        for (SharedPreset shared : new ArrayList<>(SHARED.values())) {
+            if (owner.equals(shared.owner())) {
+                unpublishShared(owner, shared.preset().key());
+            }
+        }
     }
 
     /** Solta o cache de quem saiu. O NBT ja foi gravado pelo proprio logout do vanilla. */

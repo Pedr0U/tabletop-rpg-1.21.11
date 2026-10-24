@@ -3900,7 +3900,6 @@ esta correta. O que faltava e a **corolaria de calendario**: build verde ao fim 
 nenhum launch e nao um descuido de validacao, e um **processo** - adiar o jogo e o que faz a
 validacao virar uma Shooting gallery de 7 feedbacks.
 
-<<<<<<< Updated upstream
 ## 07/10/2026 - Licoes do Bug C (fichas/copias)
 
 - **`git apply --check` no PowerShell precisa de `cmd /c`.** O pipeline nativo do PowerShell
@@ -4161,89 +4160,6 @@ validacao virar uma Shooting gallery de 7 feedbacks.
   escapadas dentro de `cmd /c` quebra: o cmd trata cada palavra da mensagem como
   pathspec. (FATO.)
 
-=======
-## 2026-10-17 - Bug: mobs invocados ausentes no cliente do jogador reconectado (carrossel V)
-
-Contexto: jogador reconecta em modo Investigation/Combat (congelado, `canPlayerAct=false`,
-nao e o turno dele). O carrossel V nao encontra os mobs invocados (`/rpg insert enemy`).
-
-FATO verificado (DIAG no cliente, sessao anterior):
-- Os mobs existem no servidor, no `minecraft:overworld`, a ~4-20 blocos do jogador.
-- O cliente do jogador reconectado NAO tem as entidades no `ClientLevel`:
-  `client.level.getEntity(entityId)` -> null. Nao e so render: a entidade nao esta no level.
-- A rede esta correta: `SpectatorTargetsPayload` chega (serverList 3-5 alvos) e o filtro do
-  proprio jogador funciona. `TargetData.entityId` usa `ByteBufCodecs.VAR_INT` (nao ha
-  truncamento de id).
-- O MESTRE (e quem nao reconectou) VE os mobs invocados renderizados no mundo.
-- Contradicao resolvida: o report `2026-10-17_bug-reconexao-espectacao-mobs.md` (hipotese
-  "chunks nao carregados") esta REFUTADO: entidades vizinhas existem no cliente, so os mobs
-  invocados faltam.
-
-FATO verificado (codigo):
-- `SpectatorCameraController.tick` so ativa a camera quando `locked==true`:
-  `if (!locked && !freeCamSelected) { deactivate(client); return; }`. Dar o turno (locked=false)
-  desativa a camera de espectador.
-- `giveTurn` (MasterCommands:276) NAO teleporta e NAO reenvia entidades: so muda estado e
-  chama `sendToAll` (lock+active), `sendAuraStateToAll`, `refreshChatMenu`. Mesmo padrao do
-  `setMode`.
-- `tickControlledMonsters`/`selfHealInsertedMobs` e `selfHealCameraMobs` rodam todo tick
-  independentemente de existir jogador ativo -> nao sao o gatilho do "aparecer ao dar o turno".
-- `insertEnemy` usa caminho vanilla normal: `create(...)`, `setPos`, `addFreshEntity`.
-
-FATO verificado (usuario, 2026-10-17):
-- Os mobs aparecem IMEDIATAMENTE ao receber o turno (destravar), SEM andar. Enquanto congelado
-  (nao e o turno dele) o jogador nao ve os mobs de jeito nenhum.
-
-HIPOTESE (nao verificada): a entidade nao e (re)enviada ao cliente reconectado enquanto ele
-esta congelado; o destravar coincide com o envio. Falta instrumentacao no cliente para saber
-QUANDO a entidade chega -> adicionado `diagPollPresence` (log-only, 1x/seg) em
-`SpectatorCameraController.tick`.
-
-Nota operacional: o log DIAG `String.format("%.1f,%.1f,%.1f", ...)` usa o locale pt-BR e imprime
-decimais com virgula (ex.: `pos=(-16,5,65,0,37,5)` = -16.5,65.0,37.5). Nao e bug, so formato.
-
-Nota tecnica: `getSpectatorTargets` pode rodar em thread Netty quando chamado de um receiver de
-payload; `selfHealCameraMobs` entao itera `server.getAllLevels()`/`getAllEntities()` cross-thread
-(risco latente).
-
-## 2026-10-17 (continuacao) - CAUSA RAIZ achada e fix aplicado: o freeze suprimia o entity-tracking
-
-FATO verificado (bytecode vanilla via javap + teste em jogo, 2026-10-17):
-- CAUSA RAIZ: `ServerGamePacketListenerImplMixin.tabletopRpg$cancelMoveIfLocked` cancela
-  `handleMovePlayer` no HEAD quando `!SessionManager.canPlayerAct`. Mas o vanilla, dentro do
-  proprio `handleMovePlayer`, chama `player.level().getChunkSource().move(player)`
-  (`ServerLevel.getChunkSource()` -> `ServerChunkCache.move(ServerPlayer)`; `move` e public).
-  Com o cancel, o jogador congelado nunca reavalia sua secao -> a view de chunks/entidades nunca
-  e (re)estabelecida -> o servidor nao envia os spawn packets das entidades proximas (os mobs da
-  camera). Ao destravar, o 1o `ServerboundMovePlayerPacket` roda `move(player)` e elas aparecem.
-- Prova empirica (poll `diagPollPresence` log-only, 1x/seg): congelado `targets=[5- 32- 4- ]` por
-  ~30s; em `Turn granted` (locked=false) -> `targets=[5+ 32+ 4+ ]` no mesmo instante.
-- A lista `SpectatorTargetsPayload` chegava corretamente mesmo antes; o problema era so o
-  entity-tracking. Hipoteses antigas REFUTADAS: "chunks nao carregados no JOIN" e "id truncado".
-
-FIX (aplicado; validado em jogo, 2026-10-17):
-- `ServerGamePacketListenerImplMixin.java`, em `tabletopRpg$cancelMoveIfLocked`, antes de
-  `ci.cancel()`: `this.player.level().getChunkSource().move(this.player);`. Mantem o cancel
-  (jogador continua parado). `move()` faz early-return quando a secao nao muda (barato).
-  Rollback = remover a linha.
-- Validacao: `.\gradlew.bat build --no-daemon --console=plain` BUILD SUCCESSFUL; teste do usuario
-  OK, log `pollPresence locked=true ... targets=[27+ 38+ 26+ ]` logo apos reconectar congelado.
-
-DECISAO do usuario (2026-10-17): manter SOMENTE o fix do mixin. Revertidas ao HEAD as mudancas
-especulativas da sessao anterior (nao eram a causa): `pendingSpectatorRefresh` em RpgNetworking e
-a remocao do early-return de `selfHealCameraMobs` em CombatController (esta varria todas as
-entidades de todos os levels a cada chamada -> custo de performance, e nao resolvia o bug).
-Diff final = 1 arquivo de codigo (mixin) + a memoria.
-
-LIMPEZA: a instrumentacao `[DIAG]` (server em RpgNetworking + client em TabletopRpgClient/
-SpectatorCameraController) era so working-tree, nunca commitada; ao removê-la, `src/client`
-voltou identico ao HEAD (confirmado: `git diff -- src/client` vazio e HEAD sem DIAG).
-
-LICAO DURAVEL: cancelar `handleMovePlayer` num mixin NAO isola so "a posicao". O vanilla usa o
-mesmo metodo para reavaliar o entity-tracking do jogador (`getChunkSource().move(player)`), entao
-qualquer cancel ali precisa reproduzir essa chamada, senao o jogador deixa de receber entidades
-proximas. E: `gradlew build` NAO valida injecao de mixin; so a carga real do cliente valida.
->>>>>>> Stashed changes
 
 ---
 
@@ -4293,3 +4209,101 @@ linhas para este arquivo, que tem 4246 (a contagem real vem do rodape do `read`)
 LICAO de processo: as Javadocs orfas eram a unica fonte do *porque* de varios numeros (18 pericias
 com scroll, teto de 16 migalhas de pao, ids legados do NBT). Ao remover codigo morto, registrar no
 relatorio o que saiu antes de apagar - o git guarda o texto, nao a intencao.
+
+## 22/10/2026 - Sessao "16 mudancas" (Parte 1: multi-mestre + 3 configs do mestre)
+
+FATO verificado (API 1.21.11 / mappings Mojang, checado com `javap` + `jar tf`):
+- `GameRules` NAO esta mais em `net.minecraft.world.level.GameRules`: o pacote mudou para
+  `net.minecraft.world.level.gamerules` (`GameRules`, `GameRule`, `GameRuleMap`, `GameRuleType`).
+  `ServerLevel.getGameRules()` retorna `net.minecraft.world.level.gamerules.GameRules`.
+- Nova API de gamerule: a chave e `GameRule<T>` (ex.: `GameRules.SPAWN_MOBS`, `GameRules.SPAWN_MONSTERS`,
+  ambos `GameRule<Boolean>`) e o valor se le/escreve com `level.getGameRules().get(rule)` e
+  `.set(rule, valor, server)`. Nao existe mais `BooleanValue` interno nem `getRule(Key)`.
+- `Entity.setInvulnerable(boolean)` e `Entity.discard()` existem em `net.minecraft.world.entity.Entity`
+  (Mob herda ambos).
+- Fabric API 3.1.1 (`fabric-entity-events-v1`) NAO tem evento de spawn: `ServerLivingEntityEvents`
+  expoe apenas `ALLOW_DAMAGE`, `AFTER_DAMAGE`, `ALLOW_DEATH`, `AFTER_DEATH`
+  (afterDeath(Entity, DamageSource)) e `MOB_CONVERSION`. Para bloquear spawn natural sem mixin,
+  a via e o gamerule `doMobSpawning` (`SPAWN_MOBS`) + `SPAWN_MONSTERS` em todas as dimensoes.
+
+FATO verificado (implementado nesta sessao, build EXIT:0 / BUILD SUCCESSFUL):
+- Multi-mestre: `SessionManager.masterUuids` (LinkedHashSet<UUID>), `masterNames`, `maxMasters`
+  (clamp 1..5; REDUZIR o limite NAO expulsa mestres ja no cargo), `releaseMaster(ServerPlayer)`
+  libera um e `releaseMaster()` libera todos; `MasterCommands` so reseta `CombatController` quando o
+  ULTIMO mestre sai; `RpgNetworking` (handler DISCONNECT) avisa "Another Game Master is still in charge."
+  quando resta outro mestre. `getMasterName()` devolve o primeiro da lista (mestre principal).
+- 3 configs do mestre, no padrao de payload de `BlockBreakSetting` (C2S alterar + C2S query + S2C state):
+  `max_masters_setting*` (int 1..5), `mob_spawn_setting*` (boolean, default true; aplica
+  `GameRules.SPAWN_MOBS` + `SPAWN_MONSTERS` em `server.getAllLevels()`), `mob_damage_setting*`
+  (boolean, default false; libera dano em mobs e tira a invulnerabilidade dos mobs inseridos).
+- `DamageControlHandler`: `ALLOW_DAMAGE` agora consulta `SessionManager.canMobsBeDamaged()` para mobs
+  (jogadores seguem imunes, exceto void/`/kill`); `AFTER_DEATH` remove com `discard()` o mob INSERIDO
+  que morre, desliga o vinculo da ficha (`ThreatSheetBinding.unbind`) e avisa no chat.
+  Mobs naturais seguem o vanilla: so mob INVOCADO desaparece.
+- `CombatController`: helpers `getInsertedMobs()`, `isInsertedMob(UUID)`, `forgetInsertedMob(UUID)` e
+  `applyInvulnerabilityToInsertedMobs(server, invulnerable)`.
+
+PENDENTE (NAO validado em jogo): as 3 configs do mestre e a morte definitiva do mob invocado foram
+validadas apenas por build (EXIT:0).
+
+PENDENTE (achado, nao tocado): o detector de drift do catalogo (`check-catalogo.ps1`) acusa 20
+divergencias PRE-EXISTENTES em `FUNCIONALIDADES-E-COMANDOS.md` (comandos `/rpg/mob/*` e `/rpg/preset/*`
+nao documentados, entradas obsoletas e 9 telas ausentes). Decisao do usuario pendente.
+
+LICAO: `javap` contra o jar `minecraft-common-...-loom.mappings...jar` + `jar tf` para achar o pacote
+real e a forma da API - em 1.21.11 o pacote de `GameRules` mudou e a intuicao de quem conhece 1.20
+erraria. Filtrar sempre a saida do `javap` (o dump inteiro satura o contexto).
+
+## 23/10/2026 - Sessao "16 mudancas": Partes 2 a 7 (estado + pendencias)
+
+FATO verificado (implementado e com build EXIT:0; 240 testes verdes na validacao final):
+- **Parte 2**: `CombatController.isMonsterMovementFree()` (modo FREE). O limite de 15 blocos NUNCA
+  foi aplicado por tick - ele vive SO na validacao de destino em `moveSelectedMonster`; em FREE o
+  destino e aceito a qualquer distancia. `/rpg remove enemy` aceita `@e[name="Nome"]` via argumento
+  `greedyString` + parser proprio de `name=` (nao usa seletor vanilla, porque `@e` exigiria op do
+  mestre). Filtro por nome exato + `CombatController.isRpgMob`.
+- **Parte 3**: camera de espectador do Mestre na tecla **B** (`SpectatorCameraController
+  .toggleMasterSpectator`) - trava LOCAL no cliente (`locked`), carrossel sem o slot "self", V cicla,
+  F5 engolido; `isMaster` no cliente vem de `MenuDataPayload` (menu R) e `BlockLocksPayload`.
+  `CameraToolManager` congela o mob (`setNoAi(true)`) e so religa se
+  `!CombatController.isFrozenByTable(uuid)`. Hover de entidade SO em COMBAT; ao sair envia
+  `HoverPayload(-1)` no mesmo tick (destaque de ficha preservado).
+- **Parte 4**: `ThreatSheet.hordeMode` (`optionalFieldOf("horde_mode", false)` no NBT,
+  `ByteBufCodecs.BOOL` no stream); `ThreatSheetBinding.BY_SHEET` virou `Map<String, Set<UUID>>` e
+  `bind` so rouba a ficha quando `hordeMode=false`; `ThreatSheetStore.BY_ID` + `findAnyById`
+  (a tag do mob so guarda o id da ficha, sem dono). HP<=0 na ficha ->
+  `CombatController.tickDownedThreatMobs` aplica pose `SWIMMING` + `setNoAi(true)` + tag
+  `tabletoprpg_downed` (NAO descarta); `clearDowned` levanta e religa a IA salvo se outra regra
+  congelar.
+- **Parte 5**: `RollPreset.openRoll` + `RollPresetStore.SHARED` (publicado por chave normalizada;
+  `find` procura o proprio e depois o compartilhado). O ITEM `roll_preset` guarda `openRoll` no NBT
+  e `ModItems.refreshRollPresetItems` atualiza os stacks existentes ao editar.
+- **Parte 6**: `SheetModel.defaultInitiative` + checkbox "Usar iniciativa padrao" no `StatusScreen`
+  via `SheetFieldPayload(targetName, "useDefaultInitiative", ...)`. Copias da ficha de ameaca
+  recolhidas por padrao (`copiesExpanded=false`).
+- **Parte 7**: 238 chaves no `en_us.json` (65 do servidor + 79 do cliente + 94 antigas) e
+  `pt_br.json` novo com 238/238. `PtBrLangTest` garante paridade de chaves, `%s`/`%d`/`%%` e
+  sequencia de `§`. **Cores `§` ficam DENTRO do valor da chave** (decisao: preserva a saida visual
+  identica sem dividir Components).
+
+PENDENTE de correcao (aprovado pela validacao, tarefa cancelada pelo usuario):
+1. BUG: apos `/rpg master claim`/`release`, `TabletopRpgClient.isMaster` fica defasado porque
+   `RpgNetworking.sendToAll` manda so `PlayerLockPayload`+`ActivePlayerPayload` - falta
+   `BlockLockManager.sendSnapshotTo(player)` nos dois caminhos. Sintoma: tecla B recusa o mestre
+   recem-empossado ate abrir o menu R.
+2. `SessionManager.mobsCanSpawn` nao e lido do gamerule no start do servidor (UI mostra "Yes" com
+   `SPAWN_MOBS=false` persistido no mundo). Ler no SERVER_STARTED, sem reescrever o gamerule, e
+   resetar o flag estatico `healed` de `ThreatSheetBinding` no mesmo ponto.
+3. `applyInvulnerabilityToInsertedMobs` percorre so a lista em memoria (vazia apos restart): varrer
+   os niveis por mobs com tag `tabletoprpg_inserted`.
+4. Broadcasts de claim/release hardcoded em ingles, fora do par de idiomas.
+5. Cosmetico: `clearDowned` forca `STANDING` mesmo se o mob nadava.
+6. Layout: `RpgSettingsScreen` com 3 botoes novos pode empurrar o Back para fora da tela com altura
+   logica < ~300 px (precisa de teste em jogo).
+
+NAO VALIDADO EM JOGO: todo o pacote (multi-mestre com 2 clientes, tecla B, camera tool, hover,
+Modo Horda, HP 0 deitando, presets Open Roll, iniciativa, pt_br).
+
+LICAO: subagente cancelado no meio DEIXA codigo no working tree (a Parte 5 ja estava quase toda
+implementada quando a tarefa foi relancada). Antes de redelegar, checar `git diff --stat` e ler os
+arquivos-alvo.

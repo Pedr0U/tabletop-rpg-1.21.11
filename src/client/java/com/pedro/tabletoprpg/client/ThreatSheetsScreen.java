@@ -80,7 +80,7 @@ public class ThreatSheetsScreen extends Screen {
     private int statusColor = COL_MUTED;
 
     public ThreatSheetsScreen(Screen parentScreen) {
-        super(Component.literal("Fichas de Ameaça"));
+        super(Component.translatable("screen.tabletoprpg.threat_sheets.title"));
         this.parentScreen = parentScreen;
     }
 
@@ -136,9 +136,9 @@ public class ThreatSheetsScreen extends Screen {
 
     private void rebuildFooter() {
         int btnW = Math.max(50, (panelW - 2 * PAD - GAP) / 2);
-        addRenderableWidget(Button.builder(Component.literal("Nova Ficha"), b -> createNew())
+        addRenderableWidget(Button.builder(Component.translatable("screen.tabletoprpg.threat_sheets.new_sheet"), b -> createNew())
                 .bounds(panelX + PAD, footerY, btnW, FOOTER_H).build());
-        addRenderableWidget(Button.builder(Component.literal("< Voltar"), b -> onClose())
+        addRenderableWidget(Button.builder(Component.translatable("screen.tabletoprpg.threat_sheets.back"), b -> onClose())
                 .bounds(panelX + panelW - PAD - btnW, footerY, btnW, FOOTER_H).build());
     }
 
@@ -217,11 +217,11 @@ public class ThreatSheetsScreen extends Screen {
      */
     private Tooltip sheetTooltip(ThreatSheet sheet) {
         return Tooltip.create(
-                Component.literal("Tipo: " + sheet.identity().type()
-                        + "   Tamanho: " + sheet.identity().size()),
-                Component.literal("Deslocamento: " + sheet.identity().speed()
-                        + "   HP: " + sheet.vitals().hp() + " / " + sheet.vitals().hpMax()
-                        + "   CA: " + sheet.vitals().ca()));
+                Component.translatable("screen.tabletoprpg.threat_sheets.tooltip_identity",
+                        sheet.identity().type(), sheet.identity().size()),
+                Component.translatable("screen.tabletoprpg.threat_sheets.tooltip_vitals",
+                        sheet.identity().speed(), sheet.vitals().hp(), sheet.vitals().hpMax(),
+                        sheet.vitals().ca()));
     }
 
     private void open(ThreatSheet sheet) {

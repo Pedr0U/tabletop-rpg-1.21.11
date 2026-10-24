@@ -28,7 +28,7 @@ public class PlayerListScreen extends Screen {
 
     public PlayerListScreen(List<String> playerNames, String activePlayerName,
                             String sessionName, boolean isMaster, Screen returnTo) {
-        super(Component.literal("Players"));
+        super(Component.translatable("screen.tabletoprpg.player_list.title"));
         this.playerNames = playerNames;
         this.activePlayerName = activePlayerName;
         this.sessionName = sessionName;
@@ -48,7 +48,7 @@ public class PlayerListScreen extends Screen {
         int y = 40;
 
         if (playerNames.isEmpty()) {
-            this.addRenderableWidget(Button.builder(Component.literal("(No players connected)"), b -> {})
+            this.addRenderableWidget(Button.builder(Component.translatable("screen.tabletoprpg.player_list.empty"), b -> {})
                 .bounds(x, y, buttonWidth, 20).build());
             y += 30;
         } else {
@@ -70,7 +70,7 @@ public class PlayerListScreen extends Screen {
 
         // Botão Back posicionado com margem inferior de 20px da base calculada.
         // Usamos y em vez de y + 12 para posicionamento mais consistente.
-        this.addRenderableWidget(Button.builder(Component.literal("Back"), b -> {
+        this.addRenderableWidget(Button.builder(Component.translatable("screen.tabletoprpg.player_list.back"), b -> {
             if (this.minecraft != null) {
                 this.minecraft.setScreen(returnTo != null ? returnTo : null);
             }

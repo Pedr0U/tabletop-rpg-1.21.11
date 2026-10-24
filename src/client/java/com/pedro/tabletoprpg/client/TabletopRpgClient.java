@@ -46,6 +46,20 @@ public class TabletopRpgClient implements ClientModInitializer {
      */
     public static KeyMapping rpgCameraModeKey;
 
+    /**
+     * Tecla do Mestre: liga/desliga o <b>modo de câmera de espectador</b>.
+     *
+     * <p>O jogador comum nao precisa dela: a câmera de espectador dele liga
+     * sozinha quando ele fica travado (o turno e de outra pessoa). O Mestre
+     * nunca e travado pelo servidor, entao precisa de um jeito proprio de
+     * entrar no mesmo modo -- e e esta tecla.
+     *
+     * <p>Uma vez dentro, o comportamento e <b>igual ao do jogador travado</b>:
+     * a tecla V cicla os quatro modos de câmera e o clique direito troca de
+     * alvo (ver {@link SpectatorCameraController}).
+     */
+    public static KeyMapping rpgSpectatorKey;
+
     /** Categoria do mod na tela de Controles (aba propria, fora de "Miscellaneous"). */
     private static KeyMapping.Category rpgCategory = null;
 
@@ -91,6 +105,30 @@ public class TabletopRpgClient implements ClientModInitializer {
     public static boolean isFreeMode() {
         return gameModeOrdinal == 0; // SessionManager.GameMode.FREE
     }
+
+    /**
+     * true quando a sessao esta no modo <b>Combate</b>.
+     *
+     * <p>Ordinal 2 de {@link com.pedro.tabletoprpg.SessionManager.GameMode}.
+     * O hover de entidade (o contorno de mira) so existe neste modo.
+     */
+    public static boolean isCombatMode() {
+        return gameModeOrdinal == 2; // SessionManager.GameMode.COMBAT
+    }
+
+    /**
+     * true quando o jogador local e o <b>Mestre</b> da sessao.
+     *
+     * <p>O servidor e a unica parte que sabe quem e o Mestre, entao a flag
+     * chega por payload e nunca e deduzida aqui: o retrato das trancas
+     * ({@link RpgNetworking.BlockLocksPayload}, enviado no JOIN) e o menu da
+     * sessao ({@link RpgNetworking.MenuDataPayload}, enviado quando o Mestre
+     * aperta R). Os dois carregam o {@code isMaster} do proprio jogador.
+     *
+     * <p>Usado para liberar a tecla de câmera de espectador (so o Mestre entra
+     * no carrossel de alvos) e o item da Camera Tool.
+     */
+    public static volatile boolean isMaster = false;
 
     /**
      * True quando o personagem está <b>deitado</b> (HP da ficha &lt;= 0).
@@ -160,6 +198,30 @@ public class TabletopRpgClient implements ClientModInitializer {
     public static volatile boolean playersCanPlaceBlocks = false;
 
     /**
+     * Limite de mestres da sessão (1..5) conhecido pelo cliente. Atualizado via
+     * {@link RpgNetworking.MaxMastersSettingStatePayload} quando o mestre abre
+     * as Settings ou muda o limite. Usado para o botão da tela de
+     * configurações refletir o estado real do servidor.
+     */
+    public static volatile int maxMasters = 1;
+
+    /**
+     * Se os mobs podem spawnar sozinhos no mundo. Atualizado via
+     * {@link RpgNetworking.MobSpawnSettingStatePayload} quando o mestre abre
+     * as Settings ou muda a opção. Usado para o botão da tela de configurações
+     * refletir o estado real do servidor.
+     */
+    public static volatile boolean mobsCanSpawn = true;
+
+    /**
+     * Se os mobs podem levar dano. Atualizado via
+     * {@link RpgNetworking.MobDamageSettingStatePayload} quando o mestre abre
+     * as Settings ou muda a opção. Usado para o botão da tela de configurações
+     * refletir o estado real do servidor.
+     */
+    public static volatile boolean mobsCanBeDamaged = false;
+
+    /**
      * Clima atual do mundo conhecido pelo cliente (0=sol, 1=chuva,
      * 2=tempestade). Atualizado via {@link RpgNetworking.WeatherStatePayload}
      * quando o mestre abre as Settings ou muda o clima. Usado para o botão da
@@ -189,7 +251,10 @@ public class TabletopRpgClient implements ClientModInitializer {
      * do mob hoverado por qualquer jogador).
      */
     public static int getHoveredEntityId() {
-        return lastHoveredId;
+        // Fora do modo COMBATE nao existe hover: o EntityRendererMixin usa
+        // este id para desenhar o contorno, entao ele e zerado aqui para o
+        // contorno sumir no mesmo tick da troca de modo.
+        return isCombatMode() ? lastHoveredId : -1;
     }
 
     /**
@@ -248,6 +313,9 @@ public class TabletopRpgClient implements ClientModInitializer {
             // derruba a camera livre sem o jogador ter ganho turno.
             locked = false;
             activePlayerUuid = "";
+            // O papel de Mestre tambem e estado do mundo anterior: so o
+            // servidor sabe quem e o Mestre, e ele reenvia no JOIN.
+            isMaster = false;
             // -1 e sentinela de "sem sessao": o SpectatorCameraController compara
             // este ordinal com o anterior para saber se o turno comecou ou o modo
             // da sessao mudou. Zerar aqui faria o JOIN parecer troca de turno.
@@ -262,6 +330,9 @@ public class TabletopRpgClient implements ClientModInitializer {
             dayNightCycleEnabled = true;
             playersCanBreakBlocks = false;
             playersCanPlaceBlocks = false;
+            maxMasters = 1;
+            mobsCanSpawn = true;
+            mobsCanBeDamaged = false;
             weatherState = 0;
             // O modelo da ficha tambem e estado do servidor anterior. Sem isto,
             // quem sai de um mundo e entra em outro ve os rotulos, atributos e
@@ -322,6 +393,15 @@ public class TabletopRpgClient implements ClientModInitializer {
                 rpgCategory
             ));
             LOGGER.info("[TabletopRPG-Client] Camera mode keybinding registered successfully: {}", rpgCameraModeKey.getName());
+
+            // Tecla do Mestre: liga/desliga o modo de câmera de espectador.
+            rpgSpectatorKey = KeyBindingHelper.registerKeyBinding(new KeyMapping(
+                "key.tabletoprpg.spectator",
+                InputConstants.Type.KEYSYM,
+                GLFW.GLFW_KEY_B,
+                rpgCategory
+            ));
+            LOGGER.info("[TabletopRPG-Client] Spectator keybinding registered successfully: {}", rpgSpectatorKey.getName());
         } catch (Throwable t) {
             LOGGER.error("[TabletopRPG-Client] FAILED to register keybinding!", t);
         }
@@ -361,6 +441,16 @@ public class TabletopRpgClient implements ClientModInitializer {
                     SpectatorCameraController.cycleMode();
                 }
             }
+
+            // Tecla do Mestre: liga/desliga o modo de câmera de espectador.
+            // O jogador travado não precisa dela (a câmera dele liga sozinha
+            // quando o turno é de outra pessoa); o Mestre nunca é travado pelo
+            // servidor, então é esta tecla que o coloca no mesmo modo.
+            if (rpgSpectatorKey != null) {
+                while (rpgSpectatorKey.consumeClick()) {
+                    SpectatorCameraController.toggleMasterSpectator();
+                }
+            }
         });
 
         LOGGER.info("[TabletopRPG-Client] onInitializeClient() finished.");
@@ -375,6 +465,9 @@ public class TabletopRpgClient implements ClientModInitializer {
                     return;
                 }
                 LOGGER.info("[TabletopRPG] MenuDataPayload recebido -> abrindo RpgMenuScreen.");
+                // O menu sabe se quem abriu e o Mestre: e uma das fontes da
+                // flag local (a outra e o retrato das trancas, no JOIN).
+                isMaster = payload.isMaster();
                 RpgMenuScreen screen = new RpgMenuScreen(
                     payload.isMaster(),
                     payload.isMyTurn(),
@@ -408,7 +501,7 @@ public class TabletopRpgClient implements ClientModInitializer {
                 (payload, context) -> context.client().execute(() -> {
                     if (payload.ok() && context.client().player != null && payload.message() != null) {
                         context.client().player.displayClientMessage(
-                                Component.literal("§6[Preset] §f" + payload.message()), false);
+                                Component.translatable("message.tabletoprpg.preset_prefix", payload.message()), false);
                     }
                 }));
 
@@ -432,7 +525,7 @@ public class TabletopRpgClient implements ClientModInitializer {
                             payload.presets().size(),
                             context.client().screen instanceof PresetsScreen);
                     if (context.client().screen instanceof PresetsScreen presetsScreen) {
-                        presetsScreen.applyResult(true, "", payload.presets());
+                        presetsScreen.applyResult(true, "", payload.presets(), payload.sharedKeys());
                     }
                 }));
 
@@ -535,13 +628,14 @@ public class TabletopRpgClient implements ClientModInitializer {
                         // Tela aberta: a resposta aparece na propria linha de status.
                         // Mandar tambem para o chat mostraria a mesma frase duas vezes
                         // -- uma na tela que a jogadora esta olhando e outra no log.
-                        presetsScreen.applyResult(payload.ok(), payload.message(), payload.presets());
+                        presetsScreen.applyResult(payload.ok(), payload.message(), payload.presets(),
+                                payload.sharedKeys());
                     } else if (context.client().player != null
                             && payload.message() != null && !payload.message().isEmpty()) {
                         // Sem tela (a jogadora fechou no meio do caminho): o aviso vai
                         // so para o chat, senao a recusa sumiria sem ela ver.
                         context.client().player.displayClientMessage(
-                                Component.literal("\u00a76[Preset] \u00a7f" + payload.message()), false);
+                                Component.translatable("message.tabletoprpg.preset_prefix", payload.message()), false);
                     }
                 }));
 
@@ -568,7 +662,13 @@ public class TabletopRpgClient implements ClientModInitializer {
         // livre pode ser escolhida.
         ClientPlayNetworking.registerGlobalReceiver(RpgNetworking.PlayerLockPayload.TYPE, (payload, context) -> {
             context.client().execute(() -> {
-                locked = payload.locked();
+                // A trava do servidor E a trava manual do Mestre (tecla de
+                // câmera de espectador) valem para os controles de espectador
+                // do cliente (carrossel de cliques e modos de câmera). O
+                // Mestre nunca e travado pelo servidor, entao a segunda parte
+                // e o que mantem a camera dele ligada quando o servidor
+                // reenvia o estado (troca de modo, troca de turno).
+                locked = payload.locked() || SpectatorCameraController.isMasterSpectator();
                 // Indice invalido cai em Livre: e' o unico modo em que nada
                 // fica travado, entao e' o fallback que menos prende o jogador.
                 int ordinal = payload.modeOrdinal();
@@ -584,7 +684,13 @@ public class TabletopRpgClient implements ClientModInitializer {
         // ELE e o Mestre: e o unico lugar onde essa decisao e feita, e ela e
         // feita no servidor, que e a unica parte que conhece quem e o Mestre.
         ClientPlayNetworking.registerGlobalReceiver(RpgNetworking.BlockLocksPayload.TYPE, (payload, context) -> {
-            context.client().execute(() -> BlockLockAura.setState(payload.isMaster(), payload.locks()));
+            context.client().execute(() -> {
+                // O retrato das trancas chega no JOIN e traz o `isMaster` deste
+                // jogador: e a fonte da flag local de Mestre (a outra e o
+                // menu da sessao, tecla R).
+                isMaster = payload.isMaster();
+                BlockLockAura.setState(payload.isMaster(), payload.locks());
+            });
         });
 
         // Estado do ciclo dia/noite -> atualiza o campo e a tela de Settings aberta.
@@ -623,6 +729,36 @@ public class TabletopRpgClient implements ClientModInitializer {
                 weatherState = payload.weather();
                 if (context.client().screen instanceof RpgSettingsScreen settings) {
                     settings.onWeatherStateReceived(payload.weather());
+                }
+            });
+        });
+
+        // Limite de mestres -> atualiza o campo e a tela de Settings aberta.
+        ClientPlayNetworking.registerGlobalReceiver(RpgNetworking.MaxMastersSettingStatePayload.TYPE, (payload, context) -> {
+            context.client().execute(() -> {
+                maxMasters = payload.value();
+                if (context.client().screen instanceof RpgSettingsScreen settings) {
+                    settings.onMaxMastersSettingReceived(payload.value());
+                }
+            });
+        });
+
+        // Spawn de mobs -> atualiza o campo e a tela de Settings aberta.
+        ClientPlayNetworking.registerGlobalReceiver(RpgNetworking.MobSpawnSettingStatePayload.TYPE, (payload, context) -> {
+            context.client().execute(() -> {
+                mobsCanSpawn = payload.enabled();
+                if (context.client().screen instanceof RpgSettingsScreen settings) {
+                    settings.onMobSpawnSettingReceived(payload.enabled());
+                }
+            });
+        });
+
+        // Dano nos mobs -> atualiza o campo e a tela de Settings aberta.
+        ClientPlayNetworking.registerGlobalReceiver(RpgNetworking.MobDamageSettingStatePayload.TYPE, (payload, context) -> {
+            context.client().execute(() -> {
+                mobsCanBeDamaged = payload.enabled();
+                if (context.client().screen instanceof RpgSettingsScreen settings) {
+                    settings.onMobDamageSettingReceived(payload.enabled());
                 }
             });
         });
@@ -739,6 +875,17 @@ public class TabletopRpgClient implements ClientModInitializer {
     private static void tickHover(Minecraft client) {
         if (client.getConnection() == null || client.level == null || client.player == null) {
             return; // não está em um mundo (menu/loading) -> não pode enviar pacotes
+        }
+        // O hover (contorno de mira) so existe no modo COMBATE (PARTE 3): nos
+        // modos Livre e Investigacao nao ha destaque de entidade. O envio para
+        // fora do combate parava, mas o contorno ja desenhado ficaria na tela
+        // ate o proximo clique: por isso o hover anterior e limpo (-1) aqui.
+        if (!isCombatMode()) {
+            if (lastHoveredId != -1) {
+                lastHoveredId = -1;
+                ClientPlayNetworking.send(new RpgNetworking.HoverPayload(-1));
+            }
+            return;
         }
         // No modo espectador o highlight (Glowing) é desnecessário: limpa o
         // hover anterior (envia -1) e não envia novos (feedback do usuário).

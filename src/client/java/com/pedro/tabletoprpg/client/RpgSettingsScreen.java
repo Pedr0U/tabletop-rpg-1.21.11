@@ -22,6 +22,12 @@ import net.minecraft.network.chat.Component;
  *   <li>Botão de clima que cicla Sol -> Chuva -> Tempestade, enviando um
  *       {@code WeatherSetPayload} ao servidor. O estado do botão é
  *       sincronizado com o clima real do mundo (query + broadcast).</li>
+ *   <li>Botão que cicla o limite de mestres (1 -> 5), enviando um
+ *       {@code MaxMastersSettingPayload} ao servidor.</li>
+ *   <li>Botão para ligar/desligar o spawn natural de mobs, enviando um
+ *       {@code MobSpawnSettingPayload} ao servidor.</li>
+ *   <li>Botão para ligar/desligar o dano nos mobs, enviando um
+ *       {@code MobDamageSettingPayload} ao servidor.</li>
  *   <li>Botão "Voltar" para retornar ao menu principal.</li>
  * </ul>
  *
@@ -51,17 +57,26 @@ public class RpgSettingsScreen extends Screen {
     private static final int BUTTON_WIDTH = 200;
     private static final int BUTTON_HEIGHT = 20;
 
+    /** Teto do limite de mestres (o mesmo {@code SessionManager.MAX_MASTERS}). */
+    private static final int MAX_MASTERS_LIMIT = 5;
+
     private final Screen parent;
     private final boolean isMaster;
     private boolean cycleEnabled = true;
     private boolean breakBlocksEnabled = false;
     private boolean placeBlocksEnabled = false;
     private int weatherState = 0; // 0=sol, 1=chuva, 2=tempestade
+    private int maxMastersValue = 1; // quantos jogadores podem clamar o cargo de mestre
+    private boolean mobSpawnEnabled = true; // mobs podem spawnar sozinhos (padrão: sim)
+    private boolean mobDamageEnabled = false; // mobs podem levar dano (padrão: não)
 
     private Button cycleButton;
     private Button breakBlocksButton;
     private Button placeBlocksButton;
     private Button weatherButton;
+    private Button maxMastersButton;
+    private Button mobSpawnButton;
+    private Button mobDamageButton;
     private Button orbitalButton;
     private Button cameraModeButton;
     private RpgSlider topDownZoomSlider;
@@ -69,7 +84,7 @@ public class RpgSettingsScreen extends Screen {
     private TimeSlider timeSlider;
 
     public RpgSettingsScreen(Screen parent, boolean isMaster) {
-        super(Component.literal("RPG Settings"));
+        super(Component.translatable("screen.tabletoprpg.settings.title"));
         this.parent = parent;
         this.isMaster = isMaster;
     }
@@ -173,6 +188,60 @@ public class RpgSettingsScreen extends Screen {
 
             this.addRenderableWidget(this.weatherButton);
 
+            // Estado inicial do limite de mestres: último valor conhecido pelo
+            // cliente. A query abaixo atualiza com o valor real do servidor.
+            this.maxMastersValue = TabletopRpgClient.maxMasters;
+
+            // Botão que cicla o limite de mestres: 1 -> 2 -> 3 -> 4 -> 5 -> 1.
+            this.maxMastersButton = Button.builder(
+                            Component.literal(maxMastersLabel()),
+                            btn -> {
+                                this.maxMastersValue = (this.maxMastersValue % MAX_MASTERS_LIMIT) + 1;
+                                ClientPlayNetworking.send(new RpgNetworking.MaxMastersSettingPayload(this.maxMastersValue));
+                                btn.setMessage(Component.literal(maxMastersLabel()));
+                            }
+                    )
+                    .bounds(centerX - (BUTTON_WIDTH / 2), startY + 140, BUTTON_WIDTH, BUTTON_HEIGHT)
+                    .build();
+
+            this.addRenderableWidget(this.maxMastersButton);
+
+            // Estado inicial do spawn de mobs: último valor conhecido pelo
+            // cliente. A query abaixo atualiza com o valor real do servidor.
+            this.mobSpawnEnabled = TabletopRpgClient.mobsCanSpawn;
+
+            // Botão para ligar/desligar o spawn natural de mobs.
+            this.mobSpawnButton = Button.builder(
+                            Component.literal(mobSpawnLabel()),
+                            btn -> {
+                                this.mobSpawnEnabled = !this.mobSpawnEnabled;
+                                ClientPlayNetworking.send(new RpgNetworking.MobSpawnSettingPayload(this.mobSpawnEnabled));
+                                btn.setMessage(Component.literal(mobSpawnLabel()));
+                            }
+                    )
+                    .bounds(centerX - (BUTTON_WIDTH / 2), startY + 168, BUTTON_WIDTH, BUTTON_HEIGHT)
+                    .build();
+
+            this.addRenderableWidget(this.mobSpawnButton);
+
+            // Estado inicial do dano nos mobs: último valor conhecido pelo
+            // cliente. A query abaixo atualiza com o valor real do servidor.
+            this.mobDamageEnabled = TabletopRpgClient.mobsCanBeDamaged;
+
+            // Botão para ligar/desligar o dano nos mobs.
+            this.mobDamageButton = Button.builder(
+                            Component.literal(mobDamageLabel()),
+                            btn -> {
+                                this.mobDamageEnabled = !this.mobDamageEnabled;
+                                ClientPlayNetworking.send(new RpgNetworking.MobDamageSettingPayload(this.mobDamageEnabled));
+                                btn.setMessage(Component.literal(mobDamageLabel()));
+                            }
+                    )
+                    .bounds(centerX - (BUTTON_WIDTH / 2), startY + 196, BUTTON_WIDTH, BUTTON_HEIGHT)
+                    .build();
+
+            this.addRenderableWidget(this.mobDamageButton);
+
             // Pede o estado real do ciclo ao servidor; a resposta chega via
             // DayNightCycleStatePayload e atualiza o botão (onCycleStateReceived).
             ClientPlayNetworking.send(new RpgNetworking.DayNightCycleQueryPayload());
@@ -188,6 +257,18 @@ public class RpgSettingsScreen extends Screen {
             // Pede o clima real do mundo ao servidor; a resposta chega via
             // WeatherStatePayload e atualiza o botão (onWeatherStateReceived).
             ClientPlayNetworking.send(new RpgNetworking.WeatherQueryPayload());
+
+            // Pede o estado do limite de mestres ao servidor; a resposta chega via
+            // MaxMastersSettingStatePayload e atualiza o botão (onMaxMastersSettingReceived).
+            ClientPlayNetworking.send(new RpgNetworking.MaxMastersSettingQueryPayload());
+
+            // Pede o estado do spawn de mobs ao servidor; a resposta chega via
+            // MobSpawnSettingStatePayload e atualiza o botão (onMobSpawnSettingReceived).
+            ClientPlayNetworking.send(new RpgNetworking.MobSpawnSettingQueryPayload());
+
+            // Pede o estado do dano nos mobs ao servidor; a resposta chega via
+            // MobDamageSettingStatePayload e atualiza o botão (onMobDamageSettingReceived).
+            ClientPlayNetworking.send(new RpgNetworking.MobDamageSettingQueryPayload());
         }
 
         // Opções da câmera de espectador (FASE 2) — apenas para NÃO-mestres.
@@ -254,9 +335,9 @@ public class RpgSettingsScreen extends Screen {
         }
 
         // Botão Voltar para o menu anterior
-        int backY = this.isMaster ? startY + 140 : startY + 112;
+        int backY = this.isMaster ? startY + 224 : startY + 112;
         Button backButton = Button.builder(
-                        Component.literal("Back"),
+                        Component.translatable("screen.tabletoprpg.settings.back"),
                         btn -> {
                             if (this.minecraft != null) {
                                 this.minecraft.setScreen(this.parent);
@@ -301,6 +382,21 @@ public class RpgSettingsScreen extends Screen {
         };
     }
 
+    /** Rótulo do botão de limite de mestres conforme o estado atual. */
+    private String maxMastersLabel() {
+        return "Max Masters: " + this.maxMastersValue;
+    }
+
+    /** Rótulo do botão de spawn de mobs conforme o estado atual. */
+    private String mobSpawnLabel() {
+        return this.mobSpawnEnabled ? "Mobs can spawn: Yes" : "Mobs can spawn: No";
+    }
+
+    /** Rótulo do botão de dano nos mobs conforme o estado atual. */
+    private String mobDamageLabel() {
+        return this.mobDamageEnabled ? "Mobs can be damaged: Yes" : "Mobs can be damaged: No";
+    }
+
     /** Rótulo do botão de órbita automática da câmera 3ª pessoa. */
     private String orbitalLabel() {
         return SpectatorCameraController.isOrbitalEnabled() ? "Orbital Camera: Yes" : "Orbital Camera: No";
@@ -335,6 +431,30 @@ public class RpgSettingsScreen extends Screen {
         }
     }
 
+    /** Atualiza o limite de mestres quando a resposta do servidor chega (S2C). */
+    public void onMaxMastersSettingReceived(int value) {
+        this.maxMastersValue = value;
+        if (this.maxMastersButton != null) {
+            this.maxMastersButton.setMessage(Component.literal(maxMastersLabel()));
+        }
+    }
+
+    /** Atualiza o spawn de mobs quando a resposta do servidor chega (S2C). */
+    public void onMobSpawnSettingReceived(boolean enabled) {
+        this.mobSpawnEnabled = enabled;
+        if (this.mobSpawnButton != null) {
+            this.mobSpawnButton.setMessage(Component.literal(mobSpawnLabel()));
+        }
+    }
+
+    /** Atualiza o dano nos mobs quando a resposta do servidor chega (S2C). */
+    public void onMobDamageSettingReceived(boolean enabled) {
+        this.mobDamageEnabled = enabled;
+        if (this.mobDamageButton != null) {
+            this.mobDamageButton.setMessage(Component.literal(mobDamageLabel()));
+        }
+    }
+
     @Override
     public void render(GuiGraphics guiGraphics, int mouseX, int mouseY, float partialTick) {
         // Escurece o fundo
@@ -352,7 +472,7 @@ public class RpgSettingsScreen extends Screen {
         if (!this.isMaster) {
             guiGraphics.drawCenteredString(
                     this.font,
-                    Component.literal("Only the Game Master can change world settings."),
+                    Component.translatable("screen.tabletoprpg.settings.master_only"),
                     this.width / 2,
                     (this.height / 4) + 140,
                     0xAAAAAA

@@ -56,7 +56,7 @@ public class RpgMenuScreen extends Screen {
 
     public RpgMenuScreen(boolean isMaster, boolean isMyTurn, String sessionName,
                          String modeName, String activePlayerName, List<String> playerNames) {
-        super(Component.literal("TableTop RPG Menu"));
+        super(Component.translatable("screen.tabletoprpg.menu.title"));
         this.isMaster = isMaster;
         this.isMyTurn = isMyTurn;
         this.sessionName = sessionName;

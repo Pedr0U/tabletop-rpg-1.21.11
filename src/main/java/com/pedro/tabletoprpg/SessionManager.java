@@ -4,7 +4,10 @@ import net.minecraft.server.level.ServerPlayer;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 public class SessionManager {
@@ -27,8 +30,24 @@ public class SessionManager {
 
     private static String sessionName = "Session Name";
     private static GameMode currentMode = GameMode.FREE;
-    private static UUID masterUuid = null;
-    private static String masterName = "None";
+
+    /**
+     * Mestres da sessão. Pode haver mais de um (decisão do usuário em 22/10/2026):
+     * o limite é {@link #maxMasters} (1..5) e TODOS têm os mesmos poderes —
+     * menu de configurações, turnos, mover monstros, fichas de ameaça.
+     *
+     * <p>A ordem de inserção importa: o primeiro a clamar é o mestre principal
+     * (é o nome exibido no chat e nos menus).
+     */
+    private static final Set<UUID> masterUuids = new LinkedHashSet<>();
+    private static final Map<UUID, String> masterNames = new HashMap<>();
+
+    /** Quantos jogadores podem clamar o cargo de mestre ao mesmo tempo (1..5). */
+    private static int maxMasters = 1;
+
+    /** Teto do número de mestres permitidos na sessão. */
+    public static final int MAX_MASTERS = 5;
+
     private static UUID activePlayerUuid = null;
     private static String activePlayerName = "None";
 
@@ -50,6 +69,24 @@ public class SessionManager {
      * Configurável pelo mestre no menu de configurações (Settings).
      */
     private static boolean playersCanPlaceBlocks = false;
+
+    /**
+     * Se os mobs podem spawnar sozinhos no mundo. Padrão: TRUE (o comportamento
+     * vanilla). Quando o mestre desliga, o servidor aplica o gamerule vanilla
+     * de spawn em TODAS as dimensões (o Fabric API 3.1.1 não tem evento de
+     * spawn, e o gamerule é o caminho oficial).
+     *
+     * <p>Configurável pelo mestre no menu de configurações (Settings).
+     */
+    private static boolean mobsCanSpawn = true;
+
+    /**
+     * Se os mobs podem levar dano (de jogadores e do mestre). Padrão: FALSE --
+     * hoje os mobs são imunes a dano físico (ver {@code DamageControlHandler}).
+     *
+     * <p>Configurável pelo mestre no menu de configurações (Settings).
+     */
+    private static boolean mobsCanBeDamaged = false;
 
     /**
      * Clima ALVO escolhido pelo mestre (0=sol, 1=chuva, 2=tempestade).
@@ -93,30 +130,102 @@ public class SessionManager {
     }
 
     public static boolean hasMaster() {
-        return masterUuid != null;
+        return !masterUuids.isEmpty();
     }
 
     public static boolean isMaster(ServerPlayer player) {
-        return masterUuid != null && masterUuid.equals(player.getUUID());
+        return player != null && masterUuids.contains(player.getUUID());
     }
 
+    /**
+     * Tenta dar o cargo de mestre ao jogador.
+     *
+     * <p>22/10/2026: pode haver mais de um mestre. As vagas do cargo são
+     * limitadas por {@link #maxMasters}; quem já é mestre continua sendo,
+     * sem consumir vaga.
+     *
+     * @return true se o jogador é mestre depois da chamada
+     */
     public static boolean setMaster(ServerPlayer player) {
-        // Bloqueia duplicidade: só atribui se não houver mestre ou se for o próprio mestre
-        if (hasMaster() && !isMaster(player)) {
+        if (player == null) {
             return false;
         }
-        masterUuid = player.getUUID();
-        masterName = player.getName().getString();
+        if (isMaster(player)) {
+            return true;
+        }
+        if (masterUuids.size() >= maxMasters) {
+            return false;
+        }
+        masterUuids.add(player.getUUID());
+        masterNames.put(player.getUUID(), player.getName().getString());
         return true;
     }
 
-    public static void releaseMaster() {
-        masterUuid = null;
-        masterName = "None";
+    /**
+     * Libera o cargo de mestre de UM jogador.
+     *
+     * <p>Usado por {@code /rpg master release} e pela desconexão: com vários
+     * mestres, sair um não pode derrubar a sessão. Quem chama decide o que
+     * fazer quando sobrou nenhum mestre.
+     *
+     * @return true se o jogador era mestre e foi removido
+     */
+    public static boolean releaseMaster(ServerPlayer player) {
+        if (player == null) {
+            return false;
+        }
+        masterNames.remove(player.getUUID());
+        return masterUuids.remove(player.getUUID());
     }
 
+    /** Libera TODOS os cargos de mestre (fim de sessão). */
+    public static void releaseMaster() {
+        masterUuids.clear();
+        masterNames.clear();
+    }
+
+    /** Nome do mestre principal (o primeiro a clamar). */
     public static String getMasterName() {
-        return masterName;
+        for (UUID id : masterUuids) {
+            String name = masterNames.get(id);
+            if (name != null) {
+                return name;
+            }
+        }
+        return "None";
+    }
+
+    /** Nomes de todos os mestres, na ordem em que clamaram. */
+    public static List<String> getMasterNames() {
+        List<String> names = new ArrayList<>();
+        for (UUID id : masterUuids) {
+            String name = masterNames.get(id);
+            if (name != null) {
+                names.add(name);
+            }
+        }
+        return names;
+    }
+
+    /** Quantos jogadores ocupam o cargo de mestre agora. */
+    public static int getMasterCount() {
+        return masterUuids.size();
+    }
+
+    /** Quantos jogadores PODEM ocupar o cargo de mestre (1..5). */
+    public static int getMaxMasters() {
+        return maxMasters;
+    }
+
+    /**
+     * Define quantos jogadores podem clamar o cargo de mestre.
+     *
+     * <p>22/10/2026: o valor é limitado a {@link #MAX_MASTERS} (5). Baixar o
+     * limite NÃO expulsa ninguém: os mestres que já estão no cargo continuam,
+     * e a vaga liberada só passa a valer para novos claimantes.
+     */
+    public static void setMaxMasters(int value) {
+        maxMasters = Math.max(1, Math.min(value, MAX_MASTERS));
     }
 
     public static boolean isActivePlayer(ServerPlayer player) {
@@ -167,6 +276,24 @@ public class SessionManager {
 
     public static void setPlayersCanPlaceBlocks(boolean value) {
         playersCanPlaceBlocks = value;
+    }
+
+    /** Os mobs podem spawnar sozinhos no mundo? (padrão: TRUE) */
+    public static boolean canMobsSpawn() {
+        return mobsCanSpawn;
+    }
+
+    public static void setMobsCanSpawn(boolean value) {
+        mobsCanSpawn = value;
+    }
+
+    /** Os mobs podem levar dano? (padrão: FALSE = mobs imunes) */
+    public static boolean canMobsBeDamaged() {
+        return mobsCanBeDamaged;
+    }
+
+    public static void setMobsCanBeDamaged(boolean value) {
+        mobsCanBeDamaged = value;
     }
 
     public static int getWeatherTarget() {

@@ -98,13 +98,13 @@ public class InventoryItemScreen extends Screen {
         descriptionBox = MultiLineEditBox.builder()
                 .setX(boxX)
                 .setY(descTop)
-                .setPlaceholder(Component.literal("description"))
+                .setPlaceholder(Component.translatable("screen.tabletoprpg.inventory_item.description_placeholder"))
                 .setTextColor(CharacterSheetScreen.COL_BOX_TEXT)
                 .setTextShadow(false)
                 .setCursorColor(CharacterSheetScreen.COL_BOX_TEXT)
                 .setShowBackground(true)
                 .setShowDecorations(true)
-                .build(this.font, boxW, descBottom - descTop, Component.literal("Description"));
+                .build(this.font, boxW, descBottom - descTop, Component.translatable("screen.tabletoprpg.inventory_item.description"));
         descriptionBox.setCharacterLimit(SheetData.MAX_TEXT);
         descriptionBox.setValue(current.description());
         // **OBRIGATORIO**: sem `addRenderableWidget` a caixa nao entra em
@@ -113,10 +113,10 @@ public class InventoryItemScreen extends Screen {
 
         int buttonW = (panelW - 24) / 2;
         int buttonY = this.height - FOOTER_H;
-        addRenderableWidget(Button.builder(Component.literal("Save"), b -> save())
+        addRenderableWidget(Button.builder(Component.translatable("screen.tabletoprpg.inventory_item.save"), b -> save())
                 .bounds(panelX + 8, buttonY, buttonW, 20)
                 .build());
-        addRenderableWidget(Button.builder(Component.literal("Cancel"), b -> onClose())
+        addRenderableWidget(Button.builder(Component.translatable("screen.tabletoprpg.inventory_item.cancel"), b -> onClose())
                 .bounds(panelX + panelW - 8 - buttonW, buttonY, buttonW, 20)
                 .build());
 

@@ -51,6 +51,15 @@ import java.util.UUID;
  *   <li>{@link PlaceBlockSettingPayload} (C2S): mestre libera/bloqueia a colocação de blocos pelos players.</li>
  *   <li>{@link PlaceBlockSettingQueryPayload} (C2S): cliente pede o estado da permissão de colocação (ao abrir as Settings).</li>
  *   <li>{@link PlaceBlockSettingStatePayload} (S2C): estado atual da permissão de colocação (resposta/broadcast).</li>
+ *   <li>{@link MaxMastersSettingPayload} (C2S): mestre define quantos jogadores podem clamar o cargo de mestre.</li>
+ *   <li>{@link MaxMastersSettingQueryPayload} (C2S): cliente pede o limite de mestres (ao abrir as Settings).</li>
+ *   <li>{@link MaxMastersSettingStatePayload} (S2C): limite de mestres da sessão (resposta/broadcast).</li>
+ *   <li>{@link MobSpawnSettingPayload} (C2S): mestre liga/desliga o spawn natural de mobs.</li>
+ *   <li>{@link MobSpawnSettingQueryPayload} (C2S): cliente pede o estado do spawn de mobs (ao abrir as Settings).</li>
+ *   <li>{@link MobSpawnSettingStatePayload} (S2C): estado do spawn de mobs (resposta/broadcast).</li>
+ *   <li>{@link MobDamageSettingPayload} (C2S): mestre liga/desliga o dano nos mobs.</li>
+ *   <li>{@link MobDamageSettingQueryPayload} (C2S): cliente pede o estado do dano nos mobs (ao abrir as Settings).</li>
+ *   <li>{@link MobDamageSettingStatePayload} (S2C): estado do dano nos mobs (resposta/broadcast).</li>
  *   <li>{@link WeatherSetPayload} (C2S): mestre define o clima (0=sol, 1=chuva, 2=tempestade).</li>
  *   <li>{@link WeatherQueryPayload} (C2S): cliente pede o clima atual (ao abrir as Settings).</li>
  *   <li>{@link WeatherStatePayload} (S2C): clima atual do mundo (resposta/broadcast).</li>
@@ -420,6 +429,126 @@ public final class RpgNetworking {
         public static final StreamCodec<FriendlyByteBuf, BlockBreakSettingStatePayload> STREAM_CODEC = StreamCodec.composite(
                 ByteBufCodecs.BOOL, BlockBreakSettingStatePayload::enabled,
                 BlockBreakSettingStatePayload::new
+        );
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
+    /** Cliente -> Servidor: o mestre define quantos jogadores podem clamar o cargo de mestre (1..5). */
+    public record MaxMastersSettingPayload(int value) implements CustomPacketPayload {
+        public static final Type<MaxMastersSettingPayload> TYPE = new Type<>(TabletopRpg.id("max_masters_setting"));
+        public static final StreamCodec<FriendlyByteBuf, MaxMastersSettingPayload> STREAM_CODEC = StreamCodec.composite(
+                ByteBufCodecs.VAR_INT, MaxMastersSettingPayload::value,
+                MaxMastersSettingPayload::new
+        );
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
+    /** Cliente -> Servidor: pede o estado atual do limite de mestres (ao abrir as Settings). */
+    public record MaxMastersSettingQueryPayload() implements CustomPacketPayload {
+        public static final Type<MaxMastersSettingQueryPayload> TYPE = new Type<>(TabletopRpg.id("max_masters_setting_query"));
+        public static final StreamCodec<FriendlyByteBuf, MaxMastersSettingQueryPayload> STREAM_CODEC =
+                StreamCodec.unit(new MaxMastersSettingQueryPayload());
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
+    /** Servidor -> Cliente: limite de mestres da sessão (resposta à query / broadcast). */
+    public record MaxMastersSettingStatePayload(int value) implements CustomPacketPayload {
+        public static final Type<MaxMastersSettingStatePayload> TYPE = new Type<>(TabletopRpg.id("max_masters_setting_state"));
+        public static final StreamCodec<FriendlyByteBuf, MaxMastersSettingStatePayload> STREAM_CODEC = StreamCodec.composite(
+                ByteBufCodecs.VAR_INT, MaxMastersSettingStatePayload::value,
+                MaxMastersSettingStatePayload::new
+        );
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
+    /** Cliente -> Servidor: o mestre liga (true) ou desliga (false) o spawn natural de mobs. */
+    public record MobSpawnSettingPayload(boolean enabled) implements CustomPacketPayload {
+        public static final Type<MobSpawnSettingPayload> TYPE = new Type<>(TabletopRpg.id("mob_spawn_setting"));
+        public static final StreamCodec<FriendlyByteBuf, MobSpawnSettingPayload> STREAM_CODEC = StreamCodec.composite(
+                ByteBufCodecs.BOOL, MobSpawnSettingPayload::enabled,
+                MobSpawnSettingPayload::new
+        );
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
+    /** Cliente -> Servidor: pede o estado atual do spawn de mobs (ao abrir as Settings). */
+    public record MobSpawnSettingQueryPayload() implements CustomPacketPayload {
+        public static final Type<MobSpawnSettingQueryPayload> TYPE = new Type<>(TabletopRpg.id("mob_spawn_setting_query"));
+        public static final StreamCodec<FriendlyByteBuf, MobSpawnSettingQueryPayload> STREAM_CODEC =
+                StreamCodec.unit(new MobSpawnSettingQueryPayload());
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
+    /** Servidor -> Cliente: estado atual do spawn de mobs (resposta à query / broadcast). */
+    public record MobSpawnSettingStatePayload(boolean enabled) implements CustomPacketPayload {
+        public static final Type<MobSpawnSettingStatePayload> TYPE = new Type<>(TabletopRpg.id("mob_spawn_setting_state"));
+        public static final StreamCodec<FriendlyByteBuf, MobSpawnSettingStatePayload> STREAM_CODEC = StreamCodec.composite(
+                ByteBufCodecs.BOOL, MobSpawnSettingStatePayload::enabled,
+                MobSpawnSettingStatePayload::new
+        );
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
+    /** Cliente -> Servidor: o mestre liga (true) ou desliga (false) o dano nos mobs. */
+    public record MobDamageSettingPayload(boolean enabled) implements CustomPacketPayload {
+        public static final Type<MobDamageSettingPayload> TYPE = new Type<>(TabletopRpg.id("mob_damage_setting"));
+        public static final StreamCodec<FriendlyByteBuf, MobDamageSettingPayload> STREAM_CODEC = StreamCodec.composite(
+                ByteBufCodecs.BOOL, MobDamageSettingPayload::enabled,
+                MobDamageSettingPayload::new
+        );
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
+    /** Cliente -> Servidor: pede o estado atual do dano nos mobs (ao abrir as Settings). */
+    public record MobDamageSettingQueryPayload() implements CustomPacketPayload {
+        public static final Type<MobDamageSettingQueryPayload> TYPE = new Type<>(TabletopRpg.id("mob_damage_setting_query"));
+        public static final StreamCodec<FriendlyByteBuf, MobDamageSettingQueryPayload> STREAM_CODEC =
+                StreamCodec.unit(new MobDamageSettingQueryPayload());
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
+    /** Servidor -> Cliente: estado atual do dano nos mobs (resposta à query / broadcast). */
+    public record MobDamageSettingStatePayload(boolean enabled) implements CustomPacketPayload {
+        public static final Type<MobDamageSettingStatePayload> TYPE = new Type<>(TabletopRpg.id("mob_damage_setting_state"));
+        public static final StreamCodec<FriendlyByteBuf, MobDamageSettingStatePayload> STREAM_CODEC = StreamCodec.composite(
+                ByteBufCodecs.BOOL, MobDamageSettingStatePayload::enabled,
+                MobDamageSettingStatePayload::new
         );
 
         @Override
@@ -993,7 +1122,7 @@ public final class RpgNetworking {
      * do record corta no mesmo numero: se divergissem, o valor gravado seria rejeitado
      * na leitura do outro lado do pacote.
      */
-    public record PresetCreatePayload(String name, String formula, String colorId)
+    public record PresetCreatePayload(String name, String formula, String colorId, boolean openRoll)
             implements CustomPacketPayload {
         public static final Type<PresetCreatePayload> TYPE = new Type<>(TabletopRpg.id("preset_create"));
         public static final StreamCodec<FriendlyByteBuf, PresetCreatePayload> STREAM_CODEC =
@@ -1001,6 +1130,7 @@ public final class RpgNetworking {
                         ByteBufCodecs.stringUtf8(64), PresetCreatePayload::name,
                         ByteBufCodecs.stringUtf8(128), PresetCreatePayload::formula,
                         ByteBufCodecs.stringUtf8(32), PresetCreatePayload::colorId,
+                        ByteBufCodecs.BOOL, PresetCreatePayload::openRoll,
                         PresetCreatePayload::new
                 );
 
@@ -1027,7 +1157,8 @@ public final class RpgNetworking {
      *
      * <p>Vem logo apos abrir a tela, entao a lista que ela mostra e a do servidor.
      */
-    public record PresetListPayload(List<RollPreset> presets) implements CustomPacketPayload {
+    public record PresetListPayload(List<RollPreset> presets, List<String> sharedKeys)
+            implements CustomPacketPayload {
         public static final Type<PresetListPayload> TYPE = new Type<>(TabletopRpg.id("preset_list"));
         public static final StreamCodec<FriendlyByteBuf, PresetListPayload> STREAM_CODEC =
                 new StreamCodec<>() {
@@ -1038,7 +1169,12 @@ public final class RpgNetworking {
                         for (int i = 0; i < size; i++) {
                             presets.add(RollPreset.STREAM_CODEC.decode(buf));
                         }
-                        return new PresetListPayload(presets);
+                        int sharedSize = buf.readVarInt();
+                        List<String> sharedKeys = new ArrayList<>();
+                        for (int i = 0; i < sharedSize; i++) {
+                            sharedKeys.add(ByteBufCodecs.stringUtf8(64).decode(buf));
+                        }
+                        return new PresetListPayload(presets, sharedKeys);
                     }
 
                     @Override
@@ -1048,11 +1184,17 @@ public final class RpgNetworking {
                         for (RollPreset preset : presets) {
                             RollPreset.STREAM_CODEC.encode(buf, preset);
                         }
+                        List<String> sharedKeys = payload.sharedKeys();
+                        buf.writeVarInt(sharedKeys.size());
+                        for (String key : sharedKeys) {
+                            ByteBufCodecs.stringUtf8(64).encode(buf, key);
+                        }
                     }
                 };
 
         public PresetListPayload {
             presets = presets == null ? List.of() : List.copyOf(presets);
+            sharedKeys = sharedKeys == null ? List.of() : List.copyOf(sharedKeys);
         }
 
         @Override
@@ -1074,8 +1216,8 @@ public final class RpgNetworking {
      * com os dados novos por baixo da etiqueta antiga. E o que faz o item antigo ficar
      * orfao quando a jogadora renomeia.
      */
-    public record PresetSavePayload(String originalName, String name, String formula, String colorId)
-            implements CustomPacketPayload {
+    public record PresetSavePayload(String originalName, String name, String formula, String colorId,
+            boolean openRoll) implements CustomPacketPayload {
         public static final Type<PresetSavePayload> TYPE = new Type<>(TabletopRpg.id("preset_save"));
         public static final StreamCodec<FriendlyByteBuf, PresetSavePayload> STREAM_CODEC =
                 StreamCodec.composite(
@@ -1083,6 +1225,7 @@ public final class RpgNetworking {
                         ByteBufCodecs.stringUtf8(64), PresetSavePayload::name,
                         ByteBufCodecs.stringUtf8(128), PresetSavePayload::formula,
                         ByteBufCodecs.stringUtf8(32), PresetSavePayload::colorId,
+                        ByteBufCodecs.BOOL, PresetSavePayload::openRoll,
                         PresetSavePayload::new
                 );
 
@@ -1154,8 +1297,8 @@ public final class RpgNetworking {
      * nome repetido) e carregar a lista nova para a tela se atualizar. Uma resposta so
      * reduz o numero de registros de pacote e deixa o tratame umto na tela.
      */
-    public record PresetResultPayload(boolean ok, String message, List<RollPreset> presets)
-            implements CustomPacketPayload {
+    public record PresetResultPayload(boolean ok, String message, List<RollPreset> presets,
+            List<String> sharedKeys) implements CustomPacketPayload {
         public static final Type<PresetResultPayload> TYPE =
                 new Type<>(TabletopRpg.id("preset_result"));
         public static final StreamCodec<FriendlyByteBuf, PresetResultPayload> STREAM_CODEC =
@@ -1169,7 +1312,12 @@ public final class RpgNetworking {
                         for (int i = 0; i < size; i++) {
                             presets.add(RollPreset.STREAM_CODEC.decode(buf));
                         }
-                        return new PresetResultPayload(ok, message, presets);
+                        int sharedSize = buf.readVarInt();
+                        List<String> sharedKeys = new ArrayList<>();
+                        for (int i = 0; i < sharedSize; i++) {
+                            sharedKeys.add(ByteBufCodecs.stringUtf8(64).decode(buf));
+                        }
+                        return new PresetResultPayload(ok, message, presets, sharedKeys);
                     }
 
                     @Override
@@ -1181,12 +1329,18 @@ public final class RpgNetworking {
                         for (RollPreset preset : presets) {
                             RollPreset.STREAM_CODEC.encode(buf, preset);
                         }
+                        List<String> sharedKeys = payload.sharedKeys();
+                        buf.writeVarInt(sharedKeys.size());
+                        for (String key : sharedKeys) {
+                            ByteBufCodecs.stringUtf8(64).encode(buf, key);
+                        }
                     }
                 };
 
         public PresetResultPayload {
             message = clamp(message, 512);
             presets = presets == null ? List.of() : List.copyOf(presets);
+            sharedKeys = sharedKeys == null ? List.of() : List.copyOf(sharedKeys);
         }
 
         @Override
@@ -1475,6 +1629,18 @@ public final class RpgNetworking {
         PayloadTypeRegistry.playC2S().register(PlaceBlockSettingPayload.TYPE, PlaceBlockSettingPayload.STREAM_CODEC);
         PayloadTypeRegistry.playC2S().register(PlaceBlockSettingQueryPayload.TYPE, PlaceBlockSettingQueryPayload.STREAM_CODEC);
         PayloadTypeRegistry.playS2C().register(PlaceBlockSettingStatePayload.TYPE, PlaceBlockSettingStatePayload.STREAM_CODEC);
+        // 22/10/2026: as três configurações do mestre da PARTE 1 (limite de
+        // mestres, spawn de mobs e dano nos mobs). Mesmo padrão das outras:
+        // C2S para mudar, C2S para perguntar e S2C com o estado.
+        PayloadTypeRegistry.playC2S().register(MaxMastersSettingPayload.TYPE, MaxMastersSettingPayload.STREAM_CODEC);
+        PayloadTypeRegistry.playC2S().register(MaxMastersSettingQueryPayload.TYPE, MaxMastersSettingQueryPayload.STREAM_CODEC);
+        PayloadTypeRegistry.playS2C().register(MaxMastersSettingStatePayload.TYPE, MaxMastersSettingStatePayload.STREAM_CODEC);
+        PayloadTypeRegistry.playC2S().register(MobSpawnSettingPayload.TYPE, MobSpawnSettingPayload.STREAM_CODEC);
+        PayloadTypeRegistry.playC2S().register(MobSpawnSettingQueryPayload.TYPE, MobSpawnSettingQueryPayload.STREAM_CODEC);
+        PayloadTypeRegistry.playS2C().register(MobSpawnSettingStatePayload.TYPE, MobSpawnSettingStatePayload.STREAM_CODEC);
+        PayloadTypeRegistry.playC2S().register(MobDamageSettingPayload.TYPE, MobDamageSettingPayload.STREAM_CODEC);
+        PayloadTypeRegistry.playC2S().register(MobDamageSettingQueryPayload.TYPE, MobDamageSettingQueryPayload.STREAM_CODEC);
+        PayloadTypeRegistry.playS2C().register(MobDamageSettingStatePayload.TYPE, MobDamageSettingStatePayload.STREAM_CODEC);
         PayloadTypeRegistry.playC2S().register(WeatherSetPayload.TYPE, WeatherSetPayload.STREAM_CODEC);
         PayloadTypeRegistry.playC2S().register(WeatherQueryPayload.TYPE, WeatherQueryPayload.STREAM_CODEC);
         PayloadTypeRegistry.playS2C().register(WeatherStatePayload.TYPE, WeatherStatePayload.STREAM_CODEC);
@@ -1618,14 +1784,28 @@ public final class RpgNetworking {
             }
             boolean changed = false;
             if (SessionManager.isMaster(player)) {
-                SessionManager.releaseMaster();
-                SessionManager.setMode(SessionManager.GameMode.FREE);
-                CombatController.reset(server);
+                // Com vários mestres, a sessão continua enquanto sobrar um
+                // (22/10/2026). Só o ÚLTIMO mestre que sai pausa a sessão.
+                boolean lastMaster = SessionManager.getMasterCount() <= 1;
+                SessionManager.releaseMaster(player);
                 changed = true;
-                // Avisa todos que o mestre saiu (ninguém fica sem saber por
-                // que a sessão "pausou").
-                server.getPlayerList().broadcastSystemMessage(
-                        Component.literal("§c[RPG] The master left the session. Mode set to FREE."), false);
+                if (lastMaster) {
+                    SessionManager.setMode(SessionManager.GameMode.FREE);
+                    CombatController.reset(server);
+                    // Avisa todos que o mestre saiu (ninguém fica sem saber por
+                    // que a sessão "pausou").
+                    server.getPlayerList().broadcastSystemMessage(
+                            Component.translatable("message.tabletoprpg.master_left_mode_free"), false);
+                } else {
+                    server.getPlayerList().broadcastSystemMessage(
+                            Component.translatable("message.tabletoprpg.master_left_others_in_charge",
+                                    player.getName().getString()), false);
+                    for (ServerPlayer master : server.getPlayerList().getPlayers()) {
+                        if (SessionManager.isMaster(master)) {
+                            BlockLockManager.sendSnapshotTo(master);
+                        }
+                    }
+                }
             }
             // Limpa o hover deste jogador (entrada do mapa por jogador).
             CombatController.clearHoveredEntity(player.getUUID());
@@ -1634,8 +1814,8 @@ public final class RpgNetworking {
             // 27/09/2026).
             if (!SessionManager.isMaster(player) && SessionManager.isActivePlayer(player)) {
                 server.getPlayerList().broadcastSystemMessage(
-                        Component.literal("§6[RPG] §e" + player.getName().getString()
-                                + " §fdisconnected. Their turn is reserved; the Master can skip it with /rpg turn revoke."), false);
+                        Component.translatable("message.tabletoprpg.player_disconnected_turn_reserved",
+                                player.getName().getString()), false);
             }
             if (changed) {
                 sendToAll(server);
@@ -1737,6 +1917,67 @@ public final class RpgNetworking {
         ServerPlayNetworking.registerGlobalReceiver(PlaceBlockSettingQueryPayload.TYPE, (payload, context) -> {
             ServerPlayer player = context.player();
             ServerPlayNetworking.send(player, new PlaceBlockSettingStatePayload(SessionManager.canPlayersPlaceBlocks()));
+        });
+
+        // Mestre define quantos jogadores podem clamar o cargo de mestre (1..5).
+        // Baixar o limite NÃO expulsa os mestres que já estão no cargo.
+        ServerPlayNetworking.registerGlobalReceiver(MaxMastersSettingPayload.TYPE, (payload, context) -> {
+            ServerPlayer player = context.player();
+            if (!SessionManager.isMaster(player)) {
+                return; // só o mestre pode mudar
+            }
+            SessionManager.setMaxMasters(payload.value());
+            sendMaxMastersSettingStateToAll(player.level().getServer());
+        });
+
+        // Cliente pede o estado atual do limite de mestres (ao abrir as Settings).
+        ServerPlayNetworking.registerGlobalReceiver(MaxMastersSettingQueryPayload.TYPE, (payload, context) -> {
+            ServerPlayer player = context.player();
+            ServerPlayNetworking.send(player, new MaxMastersSettingStatePayload(SessionManager.getMaxMasters()));
+        });
+
+        // Mestre liga/desliga o spawn natural de mobs (menu de configurações).
+        ServerPlayNetworking.registerGlobalReceiver(MobSpawnSettingPayload.TYPE, (payload, context) -> {
+            ServerPlayer player = context.player();
+            if (!SessionManager.isMaster(player)) {
+                return; // só o mestre pode mudar
+            }
+            MinecraftServer server = player.level().getServer();
+            SessionManager.setMobsCanSpawn(payload.enabled());
+            applyMobSpawnGameRule(server, payload.enabled());
+            sendMobSpawnSettingStateToAll(server);
+        });
+
+        // Cliente pede o estado atual do spawn de mobs (ao abrir as Settings).
+        ServerPlayNetworking.registerGlobalReceiver(MobSpawnSettingQueryPayload.TYPE, (payload, context) -> {
+            ServerPlayer player = context.player();
+            ServerPlayNetworking.send(player, new MobSpawnSettingStatePayload(SessionManager.canMobsSpawn()));
+        });
+
+        // Mestre liga/desliga o dano nos mobs (menu de configurações).
+        ServerPlayNetworking.registerGlobalReceiver(MobDamageSettingPayload.TYPE, (payload, context) -> {
+            ServerPlayer player = context.player();
+            if (!SessionManager.isMaster(player)) {
+                return; // só o mestre pode mudar
+            }
+            MinecraftServer server = player.level().getServer();
+            boolean enabled = payload.enabled();
+            SessionManager.setMobsCanBeDamaged(enabled);
+            // Os mobs invocados pelo mestre nascem invulneráveis ("peça" da
+            // mesa). Com a opção LIGADA eles perdem a invulnerabilidade; com a
+            // opção DESLIGADA, ela volta.
+            CombatController.applyInvulnerabilityToInsertedMobs(server, !enabled);
+            if (enabled) {
+                server.getPlayerList().broadcastSystemMessage(
+                        Component.translatable("message.tabletoprpg.mobs_can_be_damaged"), false);
+            }
+            sendMobDamageSettingStateToAll(server);
+        });
+
+        // Cliente pede o estado atual do dano nos mobs (ao abrir as Settings).
+        ServerPlayNetworking.registerGlobalReceiver(MobDamageSettingQueryPayload.TYPE, (payload, context) -> {
+            ServerPlayer player = context.player();
+            ServerPlayNetworking.send(player, new MobDamageSettingStatePayload(SessionManager.canMobsBeDamaged()));
         });
 
         // Cliente informa qual entidade está sob o crosshair (hover). O
@@ -2187,7 +2428,9 @@ public final class RpgNetworking {
             MinecraftServer server = level.getServer();
             if (server != null) {
                 level.getGameRules().set(GameRules.ADVANCE_TIME, payload.enabled(), server);
-                player.sendSystemMessage(Component.literal("§6Day/night cycle §e" + (payload.enabled() ? "resumed" : "paused")));
+                player.sendSystemMessage(Component.translatable(payload.enabled()
+                        ? "message.tabletoprpg.day_night_resumed"
+                        : "message.tabletoprpg.day_night_paused"));
             }
         });
     }
@@ -2228,7 +2471,7 @@ public final class RpgNetworking {
             // Reenvia a lista: a seta muda a ordem, e a tela que mandou o clique so
             // tem a lista antiga. Sem este envio, a seta mexeria no servidor e a
             // tela mostraria a ordem antiga ate fechar e abrir de novo.
-            ServerPlayNetworking.send(player, new PresetListPayload(RollPresetStore.list(player.getUUID())));
+            ServerPlayNetworking.send(player, presetListPayload(player.getUUID()));
         });
     }
 
@@ -2258,7 +2501,27 @@ public final class RpgNetworking {
         if (player == null || player.connection == null) {
             return;
         }
-        ServerPlayNetworking.send(player, new PresetListPayload(RollPresetStore.list(player.getUUID())));
+        ServerPlayNetworking.send(player, presetListPayload(player.getUUID()));
+    }
+
+    /**
+     * A lista de presets que a tela mostra: os da jogadora e os compartilhados da mesa.
+     *
+     * <p><b>Por que os dois na mesma lista:</b> a tela e o lugar onde a jogadora ve o
+     * que tem para rolar. Um preset compartilhado que so aparecesse no comando seria
+     * um preset que a mesa nao ve.
+     */
+    private static List<RollPreset> presetListForScreen(UUID uuid) {
+        List<RollPreset> out = new ArrayList<>(RollPresetStore.list(uuid));
+        for (RollPresetStore.SharedPreset shared : RollPresetStore.listShared(uuid)) {
+            out.add(shared.preset());
+        }
+        return out;
+    }
+
+    /** O pacote de lista, com os presets e a marca de quais sao compartilhados. */
+    private static PresetListPayload presetListPayload(UUID uuid) {
+        return new PresetListPayload(presetListForScreen(uuid), RollPresetStore.sharedKeys(uuid));
     }
 
     // ------------------------------------------------------------------
@@ -2351,11 +2614,16 @@ public final class RpgNetworking {
         // Recem-salva: o mob amarrado precisa receber o nome novo, senao o Mestre edita
         // "Goblin Chefe" e o @e[name=...] continua achando o antigo. Vale para os dois
         // botoes -- salvar pelo menu tambem renomeia o mob.
+        //
+        // Modo Horda (22/10/2026): a ficha pode valer para VARIOS mobs, e TODOS eles
+        // precisam do nome novo.
         MinecraftServer server = player.level().getServer();
         ThreatSheetBinding.selfHeal(server);
-        UUID bound = ThreatSheetBinding.mobOf(server, saved.id());
-        if (bound != null && player.level().getEntity(bound) instanceof Mob linked) {
-            ThreatSheetBinding.applyDisplayName(linked, saved);
+        for (UUID bound : ThreatSheetBinding.mobsOf(server, saved.id())) {
+            Mob linked = ThreatSheetBinding.mobEntity(server, bound);
+            if (linked != null) {
+                ThreatSheetBinding.applyDisplayName(linked, saved);
+            }
         }
 
         if (!payload.deliverItem()) {
@@ -2904,7 +3172,7 @@ public final class RpgNetworking {
 
         RollPreset preset;
         try {
-            preset = RollPreset.create(name, payload.formula(), payload.colorId());
+            preset = RollPreset.create(name, payload.formula(), payload.colorId(), payload.openRoll());
         } catch (RollPreset.PresetException e) {
             // Formula ou cor invalida: se acusa aqui, com o texto do RollPreset, que
             // e o mesmo que o comando mostraria.
@@ -2914,19 +3182,23 @@ public final class RpgNetworking {
         UUID uuid = player.getUUID();
         boolean editing = payload.originalName() != null && !payload.originalName().isBlank();
         String originalKey = editing ? RollPreset.normalizeKey(payload.originalName()) : "";
+        // Editar e ato de DONO: a busca e so entre os presets da propria jogadora.
         RollPreset original = editing
-                ? RollPresetStore.find(uuid, payload.originalName()).orElse(null) : null;
+                ? RollPresetStore.findOwn(uuid, payload.originalName()).orElse(null) : null;
 
         if (editing && original == null) {
             // A tela tinha um preset na tela e o servidor nao tem mais (deletado por
             // comando, por exemplo). Dizer isso e melhor que criar um preset novo
             // sem a jogadora pedir.
+            if (RollPresetStore.findShared(payload.originalName()).isPresent()) {
+                return presetRefuse(player, "message.tabletoprpg.preset_not_owner", payload.originalName());
+            }
             return presetRefuse(player, "message.tabletoprpg.preset_not_found", payload.originalName());
         }
 
         // Colisao de nome: so recusa se o dono da chave for OUTRO preset. Editar sem
         // mudar o nome tem que funcionar, e e o caso comum de arrumar a cor.
-        RollPreset conflict = RollPresetStore.find(uuid, preset.key()).orElse(null);
+        RollPreset conflict = RollPresetStore.findOwn(uuid, preset.key()).orElse(null);
         if (conflict != null && (original == null || !conflict.key().equals(original.key()))) {
             return presetRefuse(player, "message.tabletoprpg.preset_already_exists", conflict.name());
         }
@@ -2944,9 +3216,14 @@ public final class RpgNetworking {
         RollPresetStore.put(uuid, preset);
 
         // Item: sempre no save. Criar precisa (o comando cria e entrega), e renomear
-        // precisa porque o item antigo mostra o nome velho. Editar sem renomear
-        // entrega tambem, para o item pegar a cor nova.
-        boolean gaveItem = ModItems.giveRollPreset(player, preset) != null;
+        // precisa porque o item antigo mostra o nome velho.
+        //
+        // Editar atualiza o item NO LUGAR (22/10/2026): o item carrega a flag de
+        // rolagem publica, e um item velho sem a flag rolaria em segredo quando o
+        // preset ja e publico. Se a jogadora nao tem item do preset, ela recebe um.
+        boolean refreshed = original != null
+                && ModItems.refreshRollPresetItems(player, preset, original.key());
+        boolean gaveItem = refreshed || ModItems.giveRollPreset(player, preset) != null;
 
         if (!gaveItem) {
             // Sem espaco: o preset foi SALVO, so o item nao coube. Recusa com o aviso
@@ -2954,7 +3231,7 @@ public final class RpgNetworking {
             // achando que perdeu o preset.
             return new PresetResultPayload(false,
                     translatableText("message.tabletoprpg.preset_no_room"),
-                    RollPresetStore.list(uuid));
+                    presetListForScreen(uuid), RollPresetStore.sharedKeys(uuid));
         }
 
         String message = original != null && !original.key().equals(preset.key())
@@ -2965,7 +3242,8 @@ public final class RpgNetworking {
                         preset.name(), preset.formula(), preset.color().displayName())
                 : translatableText("message.tabletoprpg.preset_created",
                         preset.name(), preset.formula(), preset.color().displayName());
-        return new PresetResultPayload(true, message, RollPresetStore.list(uuid));
+        return new PresetResultPayload(true, message, presetListForScreen(uuid),
+                RollPresetStore.sharedKeys(uuid));
     }
 
     /**
@@ -2980,11 +3258,16 @@ public final class RpgNetworking {
         UUID uuid = player.getUUID();
         RollPreset removed = RollPresetStore.remove(uuid, payload.name()).orElse(null);
         if (removed == null) {
+            // Apagar e ato de DONO: um preset compartilhado de outra pessoa nao pode
+            // ser apagado por quem nao o criou.
+            if (RollPresetStore.findShared(payload.name()).isPresent()) {
+                return presetRefuse(player, "message.tabletoprpg.preset_not_owner", payload.name());
+            }
             return presetRefuse(player, "message.tabletoprpg.preset_not_found", payload.name());
         }
         return new PresetResultPayload(true,
                 translatableText("message.tabletoprpg.preset_deleted", removed.name()),
-                RollPresetStore.list(uuid));
+                presetListForScreen(uuid), RollPresetStore.sharedKeys(uuid));
     }
 
     /**
@@ -3006,8 +3289,9 @@ public final class RpgNetworking {
 
     /** Recusa com a lista atual: a tela recobra o estado sem reabrir. */
     private static PresetResultPayload presetRefuse(ServerPlayer player, String key, Object... args) {
+        UUID uuid = player.getUUID();
         return new PresetResultPayload(false, translatableText(key, args),
-                RollPresetStore.list(player.getUUID()));
+                presetListForScreen(uuid), RollPresetStore.sharedKeys(uuid));
     }
 
     /**
@@ -3027,14 +3311,16 @@ public final class RpgNetworking {
 
         RollPreset preset;
         try {
-            preset = RollPreset.create(name, payload.formula(), payload.colorId());
+            preset = RollPreset.create(name, payload.formula(), payload.colorId(), payload.openRoll());
         } catch (RollPreset.PresetException e) {
             // Formula nao reconhecida: e agora que a tela acusa, ao salvar.
             return refuse("message.tabletoprpg.preset_create_failed", e.getMessage());
         }
 
         UUID uuid = player.getUUID();
-        RollPreset existing = RollPresetStore.find(uuid, preset.key()).orElse(null);
+        // A busca e SO entre os presets da propria jogadora: um preset compartilhado
+        // de outra pessoa nao impede a jogadora de ter um preset com o mesmo nome.
+        RollPreset existing = RollPresetStore.findOwn(uuid, preset.key()).orElse(null);
         if (existing != null) {
             // Mesma decisao do comando: create nao sobrescreve.
             return refuse("message.tabletoprpg.preset_already_exists", existing.name());
@@ -3315,6 +3601,57 @@ public final class RpgNetworking {
         PlaceBlockSettingStatePayload payload = new PlaceBlockSettingStatePayload(SessionManager.canPlayersPlaceBlocks());
         for (ServerPlayer player : server.getPlayerList().getPlayers()) {
             ServerPlayNetworking.send(player, payload);
+        }
+    }
+
+    /** Envia o limite de mestres da sessão para todos os jogadores. */
+    public static void sendMaxMastersSettingStateToAll(MinecraftServer server) {
+        if (server == null) {
+            return;
+        }
+        MaxMastersSettingStatePayload payload = new MaxMastersSettingStatePayload(SessionManager.getMaxMasters());
+        for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+            ServerPlayNetworking.send(player, payload);
+        }
+    }
+
+    /** Envia o estado atual do spawn de mobs para todos os jogadores. */
+    public static void sendMobSpawnSettingStateToAll(MinecraftServer server) {
+        if (server == null) {
+            return;
+        }
+        MobSpawnSettingStatePayload payload = new MobSpawnSettingStatePayload(SessionManager.canMobsSpawn());
+        for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+            ServerPlayNetworking.send(player, payload);
+        }
+    }
+
+    /** Envia o estado atual do dano nos mobs para todos os jogadores. */
+    public static void sendMobDamageSettingStateToAll(MinecraftServer server) {
+        if (server == null) {
+            return;
+        }
+        MobDamageSettingStatePayload payload = new MobDamageSettingStatePayload(SessionManager.canMobsBeDamaged());
+        for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+            ServerPlayNetworking.send(player, payload);
+        }
+    }
+
+    /**
+     * Aplica o gamerule vanilla de spawn de mobs em TODAS as dimensões.
+     *
+     * <p><b>Por que o gamerule e nao um evento:</b> o Fabric API 3.1.1 não tem
+     * ALLOW_SPAWN, e o spawn natural acontece dentro do vanilla, sem ponto de
+     * veto do mod. O gamerule é o caminho oficial: o {@code doMobSpawning} do
+     * vanilla exige {@code SPAWN_MOBS} E {@code SPAWN_MONSTERS} ligadas.
+     */
+    private static void applyMobSpawnGameRule(MinecraftServer server, boolean allowSpawn) {
+        if (server == null) {
+            return;
+        }
+        for (ServerLevel level : server.getAllLevels()) {
+            level.getGameRules().set(GameRules.SPAWN_MOBS, allowSpawn, server);
+            level.getGameRules().set(GameRules.SPAWN_MONSTERS, allowSpawn, server);
         }
     }
 

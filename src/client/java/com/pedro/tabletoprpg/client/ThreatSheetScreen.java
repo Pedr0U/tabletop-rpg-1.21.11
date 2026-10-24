@@ -177,7 +177,8 @@ public class ThreatSheetScreen extends Screen {
     private static final int CHECKBOX_H = 20;
     /**
      * Soma dos blocos da coluna esquerda que nunca encolhem: nome/ND, nome de
-     * exibicao + caixa, tipo/tamanho/deslocamento e o bloco de HP de 3 linhas.
+     * exibicao + caixa, modo horda + caixa, tipo/tamanho/deslocamento e o bloco de
+     * HP de 3 linhas.
      *
      * <p><b>Por que e uma constante e nao a posicao do ultimo bloco:</b> a altura
      * da coluna precisa ser conhecida ANTES de qualquer widget existir, porque o
@@ -186,6 +187,7 @@ public class ThreatSheetScreen extends Screen {
      */
     private static final int COL_FIXED_H = (LABEL_H + FIELD_H + GAP)
             + (LABEL_H + FIELD_H + CHECKBOX_H + GAP)
+            + (CHECKBOX_H + GAP)
             + (LABEL_H + FIELD_H + GAP)
             + (SECTION_H + 2 * (FIELD_H + GAP));
     /** Rotulo da descricao + folga antes do bloco de atributos. */
@@ -265,6 +267,8 @@ public class ThreatSheetScreen extends Screen {
 
     private int hp;
     private boolean showDisplayName;
+    /** A ficha vale para varios mobs ao mesmo tempo (1:N). 22/10/2026. */
+    private boolean hordeMode;
     private int activeTab;
     /** Quantos px da coluna esquerda estao rolados para cima. */
     private int colOffset;
@@ -343,6 +347,12 @@ public class ThreatSheetScreen extends Screen {
     private final ListRegion copiesRegion = new ListRegion(KIND_COPIES);
     private final List<AbstractWidget> copiesWidgets = new ArrayList<>();
     private boolean copiesVisible;
+    /**
+     * O subgrupo de copias comeca recolhido (22/10/2026, PARTE 6): o cabecalho
+     * continua visivel e clicavel, mas as linhas so aparecem quando o Mestre
+     * abre o grupo.
+     */
+    private boolean copiesExpanded;
     private int copiesX;
     private int copiesRowsTop;
 
@@ -395,6 +405,7 @@ public class ThreatSheetScreen extends Screen {
             values.put("description", sheet.description());
             this.hp = sheet.vitals().hp();
             this.showDisplayName = sheet.identity().showDisplayName();
+            this.hordeMode = sheet.hordeMode();
             this.features.addAll(sheet.features());
             this.passives.addAll(sheet.passives());
             this.actions.addAll(sheet.actions());
@@ -419,6 +430,7 @@ public class ThreatSheetScreen extends Screen {
             pericias.clear();
             pericias.addAll(draft.pericias());
             this.showDisplayName = draft.showDisplayName();
+            this.hordeMode = draft.hordeMode();
             this.hp = draft.hp();
         }
         // A base da bolinha e o estado da ABERTURA (ou do ultimo save aceito).
@@ -541,12 +553,12 @@ public class ThreatSheetScreen extends Screen {
         if (activeTab == 0) {
             addRenderableWidget(Button.builder(Component.literal("\u25B6"), b -> setTab(1))
                     .bounds(panelX + panelW - size - 6, y, size, size)
-                    .tooltip(Tooltip.create(Component.literal("Ir para Habilidades")))
+                    .tooltip(Tooltip.create(Component.translatable("screen.tabletoprpg.threat_sheet.go_abilities")))
                     .build());
         } else {
             addRenderableWidget(Button.builder(Component.literal("\u25C0"), b -> setTab(0))
                     .bounds(panelX + 6, y, size, size)
-                    .tooltip(Tooltip.create(Component.literal("Voltar para a ficha")))
+                    .tooltip(Tooltip.create(Component.translatable("screen.tabletoprpg.threat_sheet.back_to_sheet")))
                     .build());
         }
     }
@@ -714,7 +726,7 @@ public class ThreatSheetScreen extends Screen {
                     colW, ThreatSheet.MAX_DISPLAY_NAME);
             colWidgets.add(displayNameBox);
             Checkbox checkbox = Checkbox.builder(
-                            Component.literal("Exibir nome em cima da ameaça?"), this.font)
+                            Component.translatable("screen.tabletoprpg.threat_sheet.show_name"), this.font)
                     // 6 px de folga abaixo do campo: antes a caixa nascia colada na borda de baixo do
             // "Nome de Exibicao" (relato do Mestre em 02/10/2026).
                     .pos(leftX + 2, y + LABEL_H + FIELD_H + 6)
@@ -733,6 +745,24 @@ public class ThreatSheetScreen extends Screen {
             // coisa que nao tem nada a ver com poder digitar nele.
         }
         y += LABEL_H + FIELD_H + CHECKBOX_H + 6 + GAP;
+
+        // 2b) Modo Horda: a MESMA ficha vale para varios monstros (1:N). Fora
+        // dela, a regra e a antiga: uma ficha, no maximo, um monstro.
+        if (inColumn(y, CHECKBOX_H + GAP)) {
+            Checkbox horde = Checkbox.builder(
+                            Component.translatable("screen.tabletoprpg.threat_sheet.horde_mode"), this.font)
+                    .pos(leftX + 2, y)
+                    .maxWidth(colW - 4)
+                    .selected(hordeMode)
+                    .onValueChange((cb, checked) -> {
+                        pushUndo(); // um clique e um passo: o estado de antes vira o Reverter
+                        hordeMode = checked;
+                    })
+                    .build();
+            horde.setSize(colW - 4, CHECKBOX_H);
+            addColWidget(horde);
+        }
+        y += CHECKBOX_H + GAP;
 
         // 3) tipo, tamanho e deslocamento.
         if (inColumn(y, LABEL_H + FIELD_H)) {
@@ -792,7 +822,7 @@ public class ThreatSheetScreen extends Screen {
                     .setCursorColor(CharacterSheetScreen.COL_BOX_TEXT)
                     .setShowBackground(true)
                     .setShowDecorations(true)
-                    .build(this.font, colW, descH, Component.literal("Descrição"));
+                    .build(this.font, colW, descH, Component.translatable("screen.tabletoprpg.threat_sheet.description"));
             box.setCharacterLimit(ThreatSheet.MAX_DESCRIPTION);
             box.setValue(values.getOrDefault("description", ""));
             addColWidget(box);
@@ -830,7 +860,7 @@ public class ThreatSheetScreen extends Screen {
         // Pericias: somente leitura aqui. A edicao mora na tela propria porque
         // sao varias linhas, e esta coluna ja tem CA e caracteristicas.
         addTabsLabel("Perícias", rightX, y);
-        addRenderableWidget(Button.builder(Component.literal("Editar"), b -> editPericias())
+        addRenderableWidget(Button.builder(Component.translatable("screen.tabletoprpg.threat_sheet.edit_pericias"), b -> editPericias())
                 .bounds(rightX + colW - 56, y - 3, 56, SMALL_BTN_H).build());
         // Titulo e botao dividem a faixa do cabecalho e a lista comeca DEPOIS dela, com
         // folga: o botao tem 16 px de altura em uma faixa de 10 px, entao antes ele
@@ -853,7 +883,7 @@ public class ThreatSheetScreen extends Screen {
         y = periciaRegion.y + periciaRegion.h + GAP;
 
         addTabsLabel("Características", rightX, y);
-        addRenderableWidget(Button.builder(Component.literal("+ Característica"), b -> addFeature())
+        addRenderableWidget(Button.builder(Component.translatable("screen.tabletoprpg.threat_sheet.add_feature"), b -> addFeature())
                 .bounds(rightX + colW - 110, y - 3, 110, SMALL_BTN_H).build());
         y += SECTION_H + SMALL_BTN_H + 4;
         featureRegion.set(rightX, y, colW, Math.max(FEATURE_ROW_H, contentBottom - y),
@@ -880,7 +910,7 @@ public class ThreatSheetScreen extends Screen {
     private void buildAbilitiesTab() {
         int y = contentTop;
         addTabsLabel("Habilidades Passivas", leftX, y, colW - 105);
-        addRenderableWidget(Button.builder(Component.literal("+ Habilidade"), b -> addPassive())
+        addRenderableWidget(Button.builder(Component.translatable("screen.tabletoprpg.threat_sheet.add_ability"), b -> addPassive())
                 .bounds(leftX + colW - 100, y - 3, 100, SMALL_BTN_H).build());
         y += SECTION_H + SMALL_BTN_H + 4;
         passiveRegion.set(leftX, y, colW, Math.max(PASSIVE_ROW_H, contentBottom - y),
@@ -893,7 +923,7 @@ public class ThreatSheetScreen extends Screen {
         // quando o painel era estreito; com o painel de 600 px os dois cabem lado a
         // lado sem se tocar.
         addTabsLabel("Ataques e Habilidades Ativas", rightX, y2, colW - 105);
-        addRenderableWidget(Button.builder(Component.literal("+ Habilidade"), b -> addAction())
+        addRenderableWidget(Button.builder(Component.translatable("screen.tabletoprpg.threat_sheet.add_ability"), b -> addAction())
                 .bounds(rightX + colW - 100, y2 - 3, 100, SMALL_BTN_H).build());
         y2 += SECTION_H + SMALL_BTN_H + 4;
         actionRegion.set(rightX, y2, colW, Math.max(ACTION_ROW_H, contentBottom - y2),
@@ -1064,7 +1094,7 @@ public class ThreatSheetScreen extends Screen {
         List<ListRegion> base = activeTab == 0
                 ? List.of(attrRegion, periciaRegion, featureRegion)
                 : List.of(passiveRegion, actionRegion);
-        if (!copiesVisible) {
+        if (!copiesVisible || !copiesExpanded) {
             return base;
         }
         List<ListRegion> all = new ArrayList<>(base);
@@ -1325,7 +1355,7 @@ public class ThreatSheetScreen extends Screen {
      */
     private void rebuildFooter() {
         int btnW = Math.max(50, (panelW - 2 * PAD - 2 * GAP) / 3);
-        reverterButton = Button.builder(Component.literal("Reverter"), b -> undo())
+        reverterButton = Button.builder(Component.translatable("screen.tabletoprpg.threat_sheet.revert"), b -> undo())
                 .bounds(panelX + PAD, footerY, btnW, FOOTER_H).build();
         addRenderableWidget(reverterButton);
         saveButton = Button.builder(
@@ -1337,7 +1367,7 @@ public class ThreatSheetScreen extends Screen {
         // widgets, e uma bolinha pintada ali sumiria atras do botao).
         addRenderableOnly(new DotWidget(saveButton.getX() + btnW - 8,
                 saveButton.getY() + FOOTER_H / 2 - 2, () -> dirty));
-        addRenderableWidget(Button.builder(Component.literal("< Voltar"), b -> onClose())
+        addRenderableWidget(Button.builder(Component.translatable("screen.tabletoprpg.threat_sheet.back"), b -> onClose())
                 .bounds(panelX + panelW - PAD - btnW, footerY, btnW, FOOTER_H).build());
     }
 
@@ -1358,7 +1388,7 @@ public class ThreatSheetScreen extends Screen {
     private ThreatSheetDraft capture() {
         syncFromWidgets();
         return new ThreatSheetDraft(values, features, passives, actions, pericias,
-                showDisplayName, hp);
+                showDisplayName, hordeMode, hp);
     }
 
     /**
@@ -1405,6 +1435,7 @@ public class ThreatSheetScreen extends Screen {
         pericias.clear();
         pericias.addAll(step.pericias());
         this.showDisplayName = step.showDisplayName();
+        this.hordeMode = step.hordeMode();
         this.hp = step.hp();
         for (String key : values.keySet()) {
             EditBox box = boxes.get(key);
@@ -1561,7 +1592,11 @@ String name = values.getOrDefault("name", "");
                 actions,
                 // O copyOf e vinculo com a mae, como o id e com o mob: o servidor e dono,
                 // e o cliente devolve o que recebeu para nao desancorar a copia num save.
-                sheet == null ? "" : sheet.copyOf());
+                sheet == null ? "" : sheet.copyOf(),
+                // Modo Horda: a ficha vale para varios monstros ao mesmo tempo. O
+                // servidor e quem decide o efeito do vinculo; o cliente so manda o
+                // que o Mestre marcou na tela.
+                hordeMode);
 
         if (this.minecraft == null || this.minecraft.getConnection() == null) {
             return;
@@ -1700,6 +1735,21 @@ String name = values.getOrDefault("name", "");
     }
 
     /**
+     * Abre ou fecha o subgrupo de copias (22/10/2026, PARTE 6).
+     *
+     * <p>O cabecalho continua no lugar; so as linhas somem. Ao fechar, o "Del?"
+     * pendente e desarmado, porque a linha que ele confirmava deixou de existir
+     * na tela.
+     */
+    private void toggleCopies() {
+        copiesExpanded = !copiesExpanded;
+        if (!copiesExpanded) {
+            pendingCopyDelete = -1;
+        }
+        rebuildCopiesColumn();
+    }
+
+    /**
      * Monta a coluna da direita: cabecalho (o titulo da MAE, clicavel, quando a
      * ficha aberta e uma copia; "Copias" + botao Copiar quando ela e a mae) e as
      * linhas das copias com a rolagem propria do projeto (a roda e a barra).
@@ -1716,26 +1766,43 @@ String name = values.getOrDefault("name", "");
 
         ThreatSheet mother = copiesMother();
         List<ThreatSheet> copies = copiesList();
+        int rowW = COPIES_W - BAR_W - 3;
         int headerH = GAP;
         if (sheet.isCopy()) {
             if (mother != null) {
                 headerH = ROW_H + GAP;
+                Button toggle = Button.builder(
+                                Component.literal(copiesExpanded ? "\u25BC" : "\u25B6"),
+                                b -> toggleCopies())
+                        .bounds(copiesX, contentTop, 18, ROW_H).build();
+                copiesWidgets.add(toggle);
+                addRenderableWidget(toggle);
                 Button titulo = Button.builder(
                                 Component.literal(font.plainSubstrByWidth(
-                                        mother.identity().name(), COPIES_W - 6)),
+                                        mother.identity().name(), rowW - 20)),
                                 b -> openSheet(mother))
-                        .bounds(copiesX, contentTop, COPIES_W - BAR_W - 3, ROW_H).build();
+                        .bounds(copiesX + 20, contentTop, rowW - 20, ROW_H).build();
                 copiesWidgets.add(titulo);
                 addRenderableWidget(titulo);
             }
         } else if (sheet.hasId()) {
             headerH = ROW_H + GAP;
-            this.copiarButton = Button.builder(Component.literal("Copiar"), b -> copyThis())
-                    .bounds(copiesX + COPIES_W - BAR_W - 3 - 48, contentTop, 48, ROW_H).build();
+            Button toggle = Button.builder(
+                            Component.literal((copiesExpanded ? "\u25BC " : "\u25B6 ") + "Copias"),
+                            b -> toggleCopies())
+                    .bounds(copiesX, contentTop, Math.max(20, rowW - 48 - GAP), ROW_H).build();
+            copiesWidgets.add(toggle);
+            addRenderableWidget(toggle);
+            this.copiarButton = Button.builder(Component.translatable("screen.tabletoprpg.threat_sheet.copy"), b -> copyThis())
+                    .bounds(copiesX + rowW - 48, contentTop, 48, ROW_H).build();
             copiesWidgets.add(copiarButton);
             addRenderableWidget(copiarButton);
         }
         copiesRowsTop = contentTop + headerH;
+        if (!copiesExpanded) {
+            pendingCopyDelete = -1;
+            return;
+        }
 
         int rowsH = contentBottom - copiesRowsTop;
         copiesRegion.set(copiesX, copiesRowsTop, COPIES_W, rowsH, ROW_H, copies.size());
@@ -1748,7 +1815,6 @@ String name = values.getOrDefault("name", "");
         for (int i = copiesRegion.offset; i < copiesRegion.lastIndex() && i < copies.size(); i++) {
             ThreatSheet copia = copies.get(i);
             int y = copiesRegion.rowY(i);
-            int rowW = COPIES_W - BAR_W - 3;
             if (copia.hasId() && copia.id().equals(sheet.id())) {
                 // A ficha aberta: o nome sai apagado do render e a linha so tem o
                 // Del -- nunca um botao que reabriria a ficha sobre ela mesma.
@@ -1838,11 +1904,8 @@ String name = values.getOrDefault("name", "");
      * e a FICHA ABERTA (quando ela e copia) como linha apagada na lista.
      */
     private void drawCopiesColumnTexts(GuiGraphics graphics) {
-        if (!copiesVisible || sheet == null) {
+        if (!copiesVisible || !copiesExpanded || sheet == null) {
             return;
-        }
-        if (!sheet.isCopy() && sheet.hasId()) {
-            graphics.drawString(this.font, "Copias", copiesX + 2, contentTop + 4, COL_SECTION, false);
         }
         List<ThreatSheet> copies = copiesList();
         for (int i = copiesRegion.offset; i < copiesRegion.lastIndex() && i < copies.size(); i++) {
