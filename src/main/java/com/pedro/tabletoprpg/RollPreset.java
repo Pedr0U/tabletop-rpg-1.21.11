@@ -5,6 +5,7 @@ import com.mojang.serialization.codecs.RecordCodecBuilder;
 import net.minecraft.network.codec.ByteBufCodecs;
 import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.FriendlyByteBuf;
+import net.minecraft.network.chat.Component;
 
 import java.text.Normalizer;
 import java.util.Locale;
@@ -165,20 +166,24 @@ public record RollPreset(String name, String formula, String colorId, boolean op
 
         String name = rawName == null ? "" : rawName.trim().replaceAll("\\s+", " ");
         if (name.isEmpty()) {
-            throw new PresetException("preset name is empty");
+            throw new PresetException("preset name is empty",
+                    "message.tabletoprpg.preset.error.name_empty");
         }
         if (name.length() > MAX_NAME) {
             throw new PresetException("preset name must be at most " + MAX_NAME
-                    + " characters (got " + name.length() + ")");
+                    + " characters (got " + name.length() + ")",
+                    "message.tabletoprpg.preset.error.name_too_long", MAX_NAME, name.length());
         }
 
         String formula = rawFormula == null ? "" : rawFormula.replaceAll("[ \\t]", "");
         if (formula.isEmpty()) {
-            throw new PresetException("formula is empty");
+            throw new PresetException("formula is empty",
+                    "message.tabletoprpg.preset.error.formula_empty");
         }
         if (formula.length() > MAX_FORMULA) {
             throw new PresetException("formula must be at most " + MAX_FORMULA
-                    + " characters (got " + formula.length() + ")");
+                    + " characters (got " + formula.length() + ")",
+                    "message.tabletoprpg.preset.error.formula_too_long", MAX_FORMULA, formula.length());
         }
 
         // Nomes de atributo e pericia sao conferidos AQUI, e nao na hora da rolagem.
@@ -197,7 +202,7 @@ public record RollPreset(String name, String formula, String colorId, boolean op
             // desconhecido e devolve a formula com os nomes trocados por 0.
             forParsing = FormulaResolver.placeholderFormula(formula, SheetModelHolder.current());
         } catch (FormulaResolver.ResolveException e) {
-            throw new PresetException(e.getMessage());
+            throw new PresetException(e.getMessage(), e.getKey(), e.getArgs());
         }
 
         // A estrutura da formula passa pelo MESMO parser que a rolagem usa, mas
@@ -220,7 +225,12 @@ public record RollPreset(String name, String formula, String colorId, boolean op
             // veja "unexpected '+' ... in '1d6+0+'" e fique procurando um zero que
             // ela nunca digitou. Quando a formula nao tem nome nenhum, as duas
             // strings sao iguais e a troca nao muda nada.
-            throw new PresetException(e.getMessage().replace(forParsing, formula));
+            Object[] args = e.getArgs();
+            Object[] shown = new Object[args.length];
+            for (int i = 0; i < args.length; i++) {
+                shown[i] = args[i] instanceof String s ? s.replace(forParsing, formula) : args[i];
+            }
+            throw new PresetException(e.getMessage().replace(forParsing, formula), e.getKey(), shown);
         }
 
         // Cor ausente cai em WHITE: a opcao "default" saiu em 01/10/2026 porque marrom
@@ -229,15 +239,39 @@ public record RollPreset(String name, String formula, String colorId, boolean op
                 ? RollPresetColor.WHITE.id()
                 : RollPresetColor.byId(rawColorId).orElseThrow(
                         () -> new PresetException("unknown color '" + rawColorId
-                                + "'. Valid colors: " + String.join(", ", RollPresetColor.ids()))).id();
+                                + "'. Valid colors: " + String.join(", ", RollPresetColor.ids()),
+                                "message.tabletoprpg.preset.error.unknown_color",
+                                rawColorId, String.join(", ", RollPresetColor.ids()))).id();
 
         return new RollPreset(name, formula, colorId, openRoll);
     }
 
-    /** Erro de criacao com frase ja pronta para o chat (sem prefixo de cor). */
+    /**
+     * Erro de criacao. {@link #getMessage()} segue em ingles (logs e testes);
+     * {@link #toComponent()} devolve a mesma mensagem traduzida pela chave, para o
+     * chat seguir o idioma de quem recebe. Sem chave, cai no texto literal.
+     */
     public static class PresetException extends Exception {
+        private final String key;
+        private final Object[] args;
+
         public PresetException(String message) {
             super(message);
+            this.key = null;
+            this.args = new Object[0];
+        }
+
+        public PresetException(String message, String key, Object... args) {
+            super(message);
+            this.key = key;
+            this.args = args;
+        }
+
+        public Component toComponent() {
+            if (key == null) {
+                return Component.literal(getMessage());
+            }
+            return Component.translatable(key, args);
         }
     }
 

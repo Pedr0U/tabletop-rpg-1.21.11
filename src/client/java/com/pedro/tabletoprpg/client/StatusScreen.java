@@ -948,7 +948,7 @@ public class StatusScreen extends CharacterSheetScreen {
     }
 
     public StatusScreen(String targetName, Screen returnTo) {
-        super("Character Status", targetName, returnTo);
+        super(Component.translatable("screen.tabletoprpg.status.title_character").getString(), targetName, returnTo);
     }
 
     /**
@@ -1066,7 +1066,7 @@ public class StatusScreen extends CharacterSheetScreen {
         // `listBottom == listTop`: altura zero, barra aparecendo e nenhuma lista
         // atras. O cabecalho de magias sofre do mesmo mal com 5 linhas em vez de
         // 1, entao as duas colunas agora se comportam igual.
-        int y = addSection("Skills", x, top, w);
+        int y = addSection(Component.translatable("screen.tabletoprpg.status.section.skills").getString(), x, top, w);
 
         // 01/10/2026 (bug do usuario): a marcacao do Del NAO e zerada aqui. O
         // `rebuildWidgets` e justamente o que o primeiro clique no Del dispara
@@ -1376,7 +1376,7 @@ public class StatusScreen extends CharacterSheetScreen {
      * usuario escolheu (01/10/2026): ele pediu que a parte de cima DESCESSE.
      */
     private void addSpellColumn(int x, int w, int top, int bottom) {
-        int y = addSection("Spells", x, top, w);
+        int y = addSection(Component.translatable("screen.tabletoprpg.status.section.spells").getString(), x, top, w);
 
         // Mesma razao da coluna de skills: a marcacao do Del sobrevive ao
         // `rebuildWidgets` do primeiro clique (01/10/2026). Estas tres linhas
@@ -2125,7 +2125,7 @@ public class StatusScreen extends CharacterSheetScreen {
         rightListTop = top;
         rightListBottom = bottom;
 
-        int y = addSection("Inventory", x, top, w);
+        int y = addSection(Component.translatable("screen.tabletoprpg.status.section.inventory").getString(), x, top, w);
 
         // Linha do Max Weight: o rotulo a esquerda e a caixa encostada na
         // direita. A caixa e pequena (o valor tem 2 casas) e fica a direita
@@ -2684,7 +2684,7 @@ public class StatusScreen extends CharacterSheetScreen {
         // secao. Agora e literal como os outros. O que continua vindo do modelo e
         // o rotulo do CAMPO (`SheetData.labelOf`), que e o que o Mestre renomeia
         // no Sheet Editor: sao coisas diferentes.
-        addSection("Identity", x0, drawY(y), leftW);
+        addSection(Component.translatable("screen.tabletoprpg.status.section.identity").getString(), x0, drawY(y), leftW);
         y += rowH;
         // 29/09/2026: primeiro campo do bloco, na frente do nome do personagem.
         addField("playerName", x0, drawY(y), boxX, playerBoxW, labelW, false);
@@ -2722,7 +2722,7 @@ public class StatusScreen extends CharacterSheetScreen {
         }
 
         // ---------------- Progress ----------------
-        addSection("Progress", x0, drawY(y), leftW);
+        addSection(Component.translatable("screen.tabletoprpg.status.section.progress").getString(), x0, drawY(y), leftW);
         y += rowH;
         // Level e CA dividem a MESMA linha (01/10/2026, por pedido do usuario).
         // Cada metade tem o seu rotulo ("Level" e o rotulo do CA, que o Mestre
@@ -2749,7 +2749,7 @@ public class StatusScreen extends CharacterSheetScreen {
         // Decisao do usuario: atributos sao botoes -/+ (passo 1), sem caixa de
         // texto e sem barra, começando em 0, com teto 30 e PISO -30 (podem ser
         // negativos, decisao do usuario em 27/09/2026).
-        addSection("Attributes", x0, drawY(y), leftW);
+        addSection(Component.translatable("screen.tabletoprpg.status.section.attributes").getString(), x0, drawY(y), leftW);
         y += rowH;
         List<SheetModel.AttributeDef> attrs = model.attributes();
         if (twoColumns) {
@@ -2773,7 +2773,7 @@ public class StatusScreen extends CharacterSheetScreen {
         // cabiam; agora o Mestre pode por 30, e o que nao couber e alcancavel
         // pela roda do mouse sobre a coluna. Nao ha botao de adicionar nem de
         // remover aqui: quem cria e remove pericia e o editor do Mestre.
-        textLines.add(new TextLine("Skill Checks", perX, topY + perLabelOffset(), COL_SECTION));
+        textLines.add(new TextLine(Component.translatable("screen.tabletoprpg.status.section.skill_checks").getString(), perX, topY + perLabelOffset(), COL_SECTION));
         perScroll = clampPerScroll(perScroll);
         int visible = perVisibleCount();
         for (int i = 0; i < visible; i++) {
@@ -3520,7 +3520,7 @@ public class StatusScreen extends CharacterSheetScreen {
             return;
         }
         PericiaRow first = periciaRows.get(0);
-        String label = "Bonus";
+        String label = Component.translatable("screen.tabletoprpg.status.section.bonus").getString();
         int w = this.font.width(label);
         int x = first.valueX() + (first.valueW() - w) / 2;
         int y = topY + perTitleH - 9;

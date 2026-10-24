@@ -299,7 +299,7 @@ public class MasterCommands {
             // Fim do encontro: limpa seleção, âncoras e monstros controlados.
             CombatController.reset(ctx.getSource().getServer());
         }
-        broadcast(ctx, "§6Game Mode changed to: §e" + mode.getDisplayName());
+        broadcast(ctx, Component.translatable("message.tabletoprpg.mode_changed", mode.getDisplayName()));
         RpgNetworking.sendToAll(ctx.getSource().getServer());
         RpgNetworking.sendAuraStateToAll(ctx.getSource().getServer());
         // Se o reset limpou os mobs com câmera, atualiza o carrossel.
@@ -316,7 +316,7 @@ public class MasterCommands {
             SessionManager.setActivePlayer(target);
             // Âncora do jogador ativo: onde ele começou o turno (limite da aura).
             CombatController.setPlayerAnchor(target);
-            broadcast(ctx, "§6§aTurn granted to §e" + target.getName().getString() + "§a!");
+            broadcast(ctx, Component.translatable("message.tabletoprpg.turn_granted", target.getName().getString()));
             target.sendSystemMessage(Component.translatable("message.tabletoprpg.turn_your_turn"));
             RpgNetworking.sendToAll(ctx.getSource().getServer());
             RpgNetworking.sendAuraStateToAll(ctx.getSource().getServer());
@@ -337,7 +337,7 @@ public class MasterCommands {
         if (prevUuid != null) {
             CombatController.clearPlayerAnchor(prevUuid);
         }
-        broadcast(ctx, "§6§cTurn for §e" + prevPlayer + " §chas been revoked by the Master.");
+        broadcast(ctx, Component.translatable("message.tabletoprpg.turn_revoked", prevPlayer));
         RpgNetworking.sendToAll(ctx.getSource().getServer());
         RpgNetworking.sendAuraStateToAll(ctx.getSource().getServer());
         refreshChatMenu(ctx);
@@ -358,7 +358,7 @@ public class MasterCommands {
             if (prevUuid != null) {
                 CombatController.clearPlayerAnchor(prevUuid);
             }
-            broadcast(ctx, "§6§e" + player.getName().getString() + " §fhas finished their turn.");
+            broadcast(ctx, Component.translatable("message.tabletoprpg.turn_finished", player.getName().getString()));
             RpgNetworking.sendToAll(ctx.getSource().getServer());
             RpgNetworking.sendAuraStateToAll(ctx.getSource().getServer());
             refreshChatMenu(ctx);
@@ -383,7 +383,7 @@ public class MasterCommands {
         }
 
         SessionManager.setSessionName(name);
-        broadcast(ctx, "§6Session name set to: §e\"" + name + "\"");
+        broadcast(ctx, Component.translatable("message.tabletoprpg.session_name_set", name));
         RpgNetworking.sendToAll(ctx.getSource().getServer());
         refreshChatMenu(ctx);
         return 1;
@@ -481,7 +481,7 @@ public class MasterCommands {
             }
 
             // Mensagem de confirmação
-            broadcast(ctx, "§6§e" + type + " §fsummoned by the Master at spawn position.");
+            broadcast(ctx, Component.translatable("message.tabletoprpg.enemy_summoned_broadcast", type));
             master.sendSystemMessage(Component.translatable("message.tabletoprpg.enemy_summoned"));
 
             return 1;
@@ -655,7 +655,7 @@ public class MasterCommands {
 
             String name = selected.getName().getString();
             CombatController.removeSelectedMonster(serverLevel);
-            broadcast(ctx, "§6§e" + name + " §fremoved by the Master.");
+            broadcast(ctx, Component.translatable("message.tabletoprpg.enemy_removed_broadcast", name));
             RpgNetworking.sendAuraStateToAll(ctx.getSource().getServer());
             RpgNetworking.sendSpectatorTargetsToAll(ctx.getSource().getServer());
             return 1;
@@ -717,8 +717,8 @@ public class MasterCommands {
             for (Mob mob : targets) {
                 CombatController.removeMob(mob);
             }
-            broadcast(ctx, "§6§e" + name + " §fremoved by the Master ("
-                    + targets.size() + ").");
+            broadcast(ctx, Component.translatable("message.tabletoprpg.enemy_removed_selector_broadcast",
+                    name, targets.size()));
             RpgNetworking.sendAuraStateToAll(ctx.getSource().getServer());
             RpgNetworking.sendSpectatorTargetsToAll(ctx.getSource().getServer());
             return 1;
@@ -1006,7 +1006,7 @@ public class MasterCommands {
             try {
                 outcome = DiceFormula.parse(tail).evaluate(sides -> RANDOM.nextInt(sides) + 1);
             } catch (DiceFormula.SyntaxException e) {
-                ctx.getSource().sendFailure(Component.literal("§c" + e.getMessage()));
+                ctx.getSource().sendFailure(Component.empty().append(e.toComponent()).withStyle(ChatFormatting.RED));
                 return 0;
             }
         }
@@ -1018,22 +1018,29 @@ public class MasterCommands {
         int die = roll.die();
         String attrLabel = SheetModelHolder.current().attributeLabel(pericia.attributeId());
 
-        String message = "§6§l" + player.getName().getString() + " §frolled §6" + pericia.name() + "§f: "
-                + "§7d20 §f(§e" + die + "§f) + §7" + pericia.value()
+        String breakdown = "§7d20 §f(§e" + die + "§f) + §7" + pericia.value()
                 + " + §7" + attrLabel + " " + attrValue;
 
         if (outcome != null) {
-            message += tailText(outcome);
+            breakdown += tailText(outcome);
             total += outcome.total();
-            if (outcome.critical() && !hasGrid(outcome)) {
-            message += " §c§l CRIT";
-            }
         }
 
-        message += outcome != null && hasGrid(outcome) ? "\n§6§eTOTAL §f= §l§a" + total : " = §e§l" + total;
+        MutableComponent message = Component.translatable("message.tabletoprpg.roll.skill",
+                "§6§l" + player.getName().getString(), "§6" + pericia.name(), breakdown);
+        if (outcome != null && outcome.critical() && !hasGrid(outcome)) {
+            message.append(Component.translatable("message.tabletoprpg.roll.crit"));
+        }
+        if (outcome != null && hasGrid(outcome)) {
+            message.append(Component.literal("\n"))
+                    .append(Component.translatable("message.tabletoprpg.roll.total").withStyle(ChatFormatting.YELLOW))
+                    .append(Component.literal(" §f= §l§a" + total));
+        } else {
+            message.append(Component.literal(" = §e§l" + total));
+        }
 
         if (SessionManager.isMaster(player)) {
-            player.sendSystemMessage(Component.literal(message));
+            player.sendSystemMessage(message);
         } else {
             broadcast(ctx, message);
         }
@@ -1179,14 +1186,14 @@ public class MasterCommands {
             return 0;
         }
 
-        String message = rollDice(ctx, rawFormula);
+        Component message = rollDice(ctx, rawFormula);
         if (message == null) {
             return 0;
         }
 
         if (SessionManager.isMaster(player)) {
             // Rolagem secreta do mestre: aparece apenas para ele.
-            player.sendSystemMessage(Component.literal(message));
+            player.sendSystemMessage(message);
         } else {
             // Rolagem do jogador: visível para todos.
             broadcast(ctx, message);
@@ -1198,7 +1205,7 @@ public class MasterCommands {
     private static int openRoll(CommandContext<CommandSourceStack> ctx, String rawFormula) {
         if (!verifyMasterPermission(ctx)) return 0;
 
-        String message = rollDice(ctx, rawFormula);
+        Component message = rollDice(ctx, rawFormula);
         if (message == null) {
             return 0;
         }
@@ -1238,14 +1245,14 @@ public class MasterCommands {
      */
     private static int rollAndPublish(CommandContext<CommandSourceStack> ctx, ServerPlayer player,
                                       String rawFormula, boolean open) {
-        String message = rollDice(ctx, rawFormula);
+        Component message = rollDice(ctx, rawFormula);
         if (message == null) {
             return 0;
         }
         if (open || !SessionManager.isMaster(player)) {
             broadcast(ctx, message);
         } else {
-            player.sendSystemMessage(Component.literal(message));
+            player.sendSystemMessage(message);
         }
         return 1;
     }
@@ -1283,7 +1290,7 @@ public class MasterCommands {
             // A mensagem do DiceFormula chega aqui crua e é a mesma que a jogadora
             // veria num /rpg roll inválido. É ela que diz onde a fórmula está errada.
             ctx.getSource().sendFailure(Component.translatable("message.tabletoprpg.preset_create_failed",
-                    e.getMessage()));
+                    e.toComponent()));
             return 0;
         }
 
@@ -1359,7 +1366,7 @@ public class MasterCommands {
                     existing.openRoll());
         } catch (RollPreset.PresetException e) {
             ctx.getSource().sendFailure(Component.translatable("message.tabletoprpg.preset_create_failed",
-                    e.getMessage()));
+                    e.toComponent()));
             return 0;
         }
 
@@ -1597,7 +1604,7 @@ public class MasterCommands {
             int time = IntegerArgumentType.getInteger(ctx, "value");
             ServerLevel level = (ServerLevel) master.level();
             level.setDayTime(time);
-            broadcast(ctx, "§6World time set to: §e" + time);
+            broadcast(ctx, Component.translatable("message.tabletoprpg.world_time_set", time));
             return 1;
         } catch (Exception e) {
             TabletopRpg.LOGGER.error("[TabletopRPG] Error setting world time: {}", e.getMessage());
@@ -1619,7 +1626,7 @@ public class MasterCommands {
 
         int distance = IntegerArgumentType.getInteger(ctx, "value");
         SessionManager.setHoverDistance(distance);
-        broadcast(ctx, "§6Player hover distance set to: §e" + SessionManager.getHoverDistance() + " blocks");
+        broadcast(ctx, Component.translatable("message.tabletoprpg.hover_distance_set", SessionManager.getHoverDistance()));
         RpgNetworking.sendHoverConfigToAll(ctx.getSource().getServer());
         return 1;
     }
@@ -1633,7 +1640,7 @@ public class MasterCommands {
      * do chat. A mensagem da {@link DiceFormula.SyntaxException} ja sai no
      * formato do chat, por isso nao recebe prefixo de "formula invalida".
      */
-    private static String rollDice(CommandContext<CommandSourceStack> ctx, String rawFormula) {
+    private static Component rollDice(CommandContext<CommandSourceStack> ctx, String rawFormula) {
         ServerPlayer player;
         try {
             player = ctx.getSource().getPlayerOrException();
@@ -1645,7 +1652,7 @@ public class MasterCommands {
         try {
             return rollMessageFor(player, rawFormula);
         } catch (DiceFormula.SyntaxException e) {
-            ctx.getSource().sendFailure(Component.literal("§c" + e.getMessage()));
+            ctx.getSource().sendFailure(Component.empty().append(e.toComponent()).withStyle(ChatFormatting.RED));
             return null;
         }
     }
@@ -1679,22 +1686,22 @@ public class MasterCommands {
      *         (a recusa ja foi enviada para quem rollou)
      */
     public static int rollForPlayer(ServerPlayer player, String rawFormula, boolean open) {
-        String message;
+        Component message;
         try {
             message = rollMessageFor(player, rawFormula);
         } catch (DiceFormula.SyntaxException e) {
-            player.displayClientMessage(Component.literal("§c" + e.getMessage()), false);
+            player.displayClientMessage(Component.empty().append(e.toComponent()).withStyle(ChatFormatting.RED), false);
             return 0;
         }
         if (open || !SessionManager.isMaster(player)) {
             MinecraftServer server = player.level().getServer();
             if (server != null) {
-                server.getPlayerList().broadcastSystemMessage(Component.literal(message), false);
+                server.getPlayerList().broadcastSystemMessage(message, false);
             } else {
-                player.sendSystemMessage(Component.literal(message));
+                player.sendSystemMessage(message);
             }
         } else {
-            player.sendSystemMessage(Component.literal(message));
+            player.sendSystemMessage(message);
         }
         return 1;
     }
@@ -1705,7 +1712,7 @@ public class MasterCommands {
      * @throws DiceFormula.SyntaxException se a fórmula não for reconhecida; a mensagem
      *         da exceção já é uma frase pronta para o chat
      */
-    private static String rollMessageFor(ServerPlayer player, String rawFormula)
+    private static Component rollMessageFor(ServerPlayer player, String rawFormula)
             throws DiceFormula.SyntaxException {
         String formula = rawFormula.replace(" ", "");
         if (formula.isEmpty()) {
@@ -1726,7 +1733,7 @@ public class MasterCommands {
         } catch (FormulaResolver.ResolveException e) {
             // A SyntaxException e checked e este metodo ja promete uma; reaproveitar o
             // tipo mantem a assinatura sem inventar uma excecao nova para o chamador.
-            throw new DiceFormula.SyntaxException(e.getMessage());
+            throw new DiceFormula.SyntaxException(e.getMessage(), e.getKey(), e.getArgs());
         }
 
         DiceFormula.Outcome outcome;
@@ -1736,12 +1743,17 @@ public class MasterCommands {
 
         // Com '#' o total vai para a linha propria: colado no fim da ultima volta
         // ele se confunde com o subtotal dela (30/09/2026, pedido do jogador).
-        String totalPrefix = hasGrid(outcome) ? "\n§6§eTOTAL §f= §l§a" : " §f= §l§a";
-        String message = "§6§e" + player.getName().getString()
-                + " §frolled a: §b" + joinParts(outcome) + totalPrefix + outcome.total();
-        if (outcome.critical() && !hasGrid(outcome)) {
+        String name = "§6§e" + player.getName().getString();
+        String parts = "§b" + joinParts(outcome);
+        String total = "§l§a" + outcome.total();
+        if (hasGrid(outcome)) {
+            return Component.translatable("message.tabletoprpg.roll.result_grid", name, parts,
+                    Component.translatable("message.tabletoprpg.roll.total").withStyle(ChatFormatting.YELLOW), total);
+        }
+        MutableComponent message = Component.translatable("message.tabletoprpg.roll.result", name, parts, total);
+        if (outcome.critical()) {
             // O critico e so um marcador: o total ja saiu da somatoria.
-            message += " §c§l CRIT";
+            message.append(Component.translatable("message.tabletoprpg.roll.crit"));
         }
         return message;
     }
@@ -1943,11 +1955,11 @@ public class MasterCommands {
             
             // Seção de Modos
             menu.append(Component.translatable("message.tabletoprpg.menu_modes"));
-            menu.append(createBtn("[FREE]", ChatFormatting.GREEN, "/rpg mode free", "Set mode to Free (everyone moves)"));
+            menu.append(createBtn(Component.translatable("message.tabletoprpg.menu.free"), ChatFormatting.GREEN, "/rpg mode free", Component.translatable("message.tabletoprpg.menu.hover.free")));
             menu.append(Component.literal(" "));
-            menu.append(createBtn("[INVESTIGATION]", ChatFormatting.YELLOW, "/rpg mode investigation", "Set mode to Investigation"));
+            menu.append(createBtn(Component.translatable("message.tabletoprpg.menu.investigation"), ChatFormatting.YELLOW, "/rpg mode investigation", Component.translatable("message.tabletoprpg.menu.hover.investigation")));
             menu.append(Component.literal(" "));
-            menu.append(createBtn("[COMBAT]", ChatFormatting.RED, "/rpg mode combat", "Set mode to Combat"));
+            menu.append(createBtn(Component.translatable("message.tabletoprpg.menu.combat"), ChatFormatting.RED, "/rpg mode combat", Component.translatable("message.tabletoprpg.menu.hover.combat")));
             menu.append(Component.translatable("message.tabletoprpg.menu_current_mode",
                     SessionManager.getMode().getDisplayName()));
 
@@ -1955,9 +1967,9 @@ public class MasterCommands {
             menu.append(Component.translatable("message.tabletoprpg.menu_active_turn",
                     SessionManager.getActivePlayerName()));
             menu.append(Component.translatable("message.tabletoprpg.menu_turn_control"));
-            menu.append(createSuggestBtn("[Give Turn]", ChatFormatting.LIGHT_PURPLE, "/rpg turn give ", "Click to choose a player for turn"));
+            menu.append(createSuggestBtn(Component.translatable("message.tabletoprpg.menu.give_turn"), ChatFormatting.LIGHT_PURPLE, "/rpg turn give ", Component.translatable("message.tabletoprpg.menu.hover.give_turn")));
             menu.append(Component.literal(" "));
-            menu.append(createBtn("[Revoke Turn]", ChatFormatting.DARK_RED, "/rpg turn revoke", "Revoke active player's turn"));
+            menu.append(createBtn(Component.translatable("message.tabletoprpg.menu.revoke_turn"), ChatFormatting.DARK_RED, "/rpg turn revoke", Component.translatable("message.tabletoprpg.menu.hover.revoke_turn")));
             menu.append(Component.literal("\n\n"));
 
             // Ações Gerais
@@ -1966,9 +1978,9 @@ public class MasterCommands {
             // comando `/rpg block_lock` e o item ja cobrem, e o botao seria uma
             // terceira via para a mesma acao.
             menu.append(Component.translatable("message.tabletoprpg.menu_actions"));
-            menu.append(createSuggestBtn("[Roll]", ChatFormatting.AQUA, "/rpg roll ", "Type a dice formula, ex: d20, 2d6+3"));
+            menu.append(createSuggestBtn(Component.translatable("message.tabletoprpg.menu.roll"), ChatFormatting.AQUA, "/rpg roll ", Component.translatable("message.tabletoprpg.menu.hover.roll")));
             menu.append(Component.literal(" "));
-            menu.append(createBtn("[Step Down]", ChatFormatting.GRAY, "/rpg master release", "Release Master role"));
+            menu.append(createBtn(Component.translatable("message.tabletoprpg.menu.step_down"), ChatFormatting.GRAY, "/rpg master release", Component.translatable("message.tabletoprpg.menu.hover.step_down")));
             menu.append(Component.literal("\n"));
 
         } else {
@@ -1987,14 +1999,14 @@ public class MasterCommands {
 
             menu.append(Component.translatable("message.tabletoprpg.menu_actions_player"));
             if (isMyTurn) {
-                menu.append(createBtn("[Finish Turn]", ChatFormatting.GREEN, "/rpg turn finish", "Click to end your turn"));
+                menu.append(createBtn(Component.translatable("message.tabletoprpg.menu.finish_turn"), ChatFormatting.GREEN, "/rpg turn finish", Component.translatable("message.tabletoprpg.menu.hover.finish_turn")));
                 menu.append(Component.literal(" "));
             }
             if (!SessionManager.hasMaster()) {
-                menu.append(createBtn("[Claim Master]", ChatFormatting.GOLD, "/rpg master claim", "Claim Game Master role"));
+                menu.append(createBtn(Component.translatable("message.tabletoprpg.menu.claim_master"), ChatFormatting.GOLD, "/rpg master claim", Component.translatable("message.tabletoprpg.menu.hover.claim_master")));
                 menu.append(Component.literal(" "));
             }
-            menu.append(createSuggestBtn("[Roll]", ChatFormatting.AQUA, "/rpg roll ", "Type a dice formula, ex: d20, 2d6+3"));
+            menu.append(createSuggestBtn(Component.translatable("message.tabletoprpg.menu.roll"), ChatFormatting.AQUA, "/rpg roll ", Component.translatable("message.tabletoprpg.menu.hover.roll")));
             menu.append(Component.literal("\n"));
         }
 
@@ -2002,21 +2014,21 @@ public class MasterCommands {
         return menu;
     }
 
-    private static Component createBtn(String text, ChatFormatting color, String command, String hover) {
-        return Component.literal(text)
+    private static Component createBtn(Component text, ChatFormatting color, String command, Component hover) {
+        return Component.empty().append(text)
             .setStyle(Style.EMPTY
                 .withColor(color)
                 .withBold(true)
                 .withClickEvent(new ClickEvent.RunCommand(command))
-                .withHoverEvent(new HoverEvent.ShowText(Component.literal(hover))));
+                .withHoverEvent(new HoverEvent.ShowText(hover)));
     }
 
-    private static Component createSuggestBtn(String text, ChatFormatting color, String command, String hover) {
-        return Component.literal(text)
+    private static Component createSuggestBtn(Component text, ChatFormatting color, String command, Component hover) {
+        return Component.empty().append(text)
             .setStyle(Style.EMPTY
                 .withColor(color)
                 .withBold(true)
                 .withClickEvent(new ClickEvent.SuggestCommand(command))
-                .withHoverEvent(new HoverEvent.ShowText(Component.literal(hover))));
+                .withHoverEvent(new HoverEvent.ShowText(hover)));
     }
 }

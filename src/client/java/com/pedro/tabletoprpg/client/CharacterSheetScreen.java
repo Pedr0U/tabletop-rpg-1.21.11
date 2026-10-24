@@ -1031,7 +1031,7 @@ public abstract class CharacterSheetScreen extends Screen {
      */
     protected static void drawNameWarningIfBlank(GuiGraphics graphics, Font font, EditBox nameBox) {
         if (nameBox.getValue().isBlank()) {
-            graphics.drawString(font, "Name required", nameBox.getX(),
+            graphics.drawString(font, Component.translatable("screen.tabletoprpg.character_sheet.name_required"), nameBox.getX(),
                     nameBox.getY() + nameBox.getHeight() + 3, COL_NAME_WARN, false);
         }
     }
@@ -1051,7 +1051,7 @@ public abstract class CharacterSheetScreen extends Screen {
         super.render(graphics, mouseX, mouseY, delta);
 
         // Estado de edicao explicito: responde a duvida "da para editar?".
-        String state = canEdit ? "Editable" : "Read-only";
+        String state = Component.translatable(canEdit ? "screen.tabletoprpg.character_sheet.editable" : "screen.tabletoprpg.character_sheet.read_only").getString();
         graphics.drawString(this.font, state,
                 panelX + panelW - this.font.width(state) - 4, 24,
                 canEdit ? COL_EDITABLE : COL_READONLY, false);
@@ -1063,8 +1063,9 @@ public abstract class CharacterSheetScreen extends Screen {
         renderTopLeft(graphics);
 
         if (sheet == null) {
-            graphics.drawString(this.font, "Loading...",
-                    (this.width - this.font.width("Loading...")) / 2, 48, COL_MUTED, false);
+            String loading = Component.translatable("screen.tabletoprpg.character_sheet.loading").getString();
+            graphics.drawString(this.font, loading,
+                    (this.width - this.font.width(loading)) / 2, 48, COL_MUTED, false);
             return;
         }
 
@@ -1077,7 +1078,8 @@ public abstract class CharacterSheetScreen extends Screen {
 
     /** Titulo da tela (quem e o dono da ficha). */
     protected String titleText() {
-        return "Sheet: " + (targetName.isEmpty() ? "me" : targetName);
+        String who = targetName.isEmpty() ? Component.translatable("screen.tabletoprpg.character_sheet.me").getString() : targetName;
+        return Component.translatable("screen.tabletoprpg.character_sheet.title", who).getString();
     }
 
     /**

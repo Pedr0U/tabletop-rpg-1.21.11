@@ -62,7 +62,7 @@ public class InventoryItemScreen extends Screen {
     private MultiLineEditBox descriptionBox;
 
     public InventoryItemScreen(Screen parent, String targetName, int index, SheetData.InventoryItem original) {
-        super(Component.literal(index < 0 ? "New Item" : "Edit Item"));
+        super(Component.translatable(index < 0 ? "screen.tabletoprpg.inventory_item.title_new" : "screen.tabletoprpg.inventory_item.title_edit"));
         this.parent = parent;
         this.targetName = targetName == null ? "" : targetName;
         this.index = index;
@@ -147,10 +147,10 @@ public class InventoryItemScreen extends Screen {
      * caixa que ele nomeia.
      */
     private void renderLabels(GuiGraphics graphics) {
-        CharacterSheetScreen.drawLabel(graphics, this.font, nameBox.getX(), "Name", nameBox.getY());
-        CharacterSheetScreen.drawLabel(graphics, this.font, nameBox.getX(), "Type", typeBox.getY());
-        CharacterSheetScreen.drawLabel(graphics, this.font, nameBox.getX(), "Weight", weightBox.getY());
-        CharacterSheetScreen.drawLabel(graphics, this.font, nameBox.getX(), "Description", descriptionBox.getY());
+        CharacterSheetScreen.drawLabel(graphics, this.font, nameBox.getX(), Component.translatable("screen.tabletoprpg.sheet_editor.name").getString(), nameBox.getY());
+        CharacterSheetScreen.drawLabel(graphics, this.font, nameBox.getX(), Component.translatable("screen.tabletoprpg.inventory_item.type").getString(), typeBox.getY());
+        CharacterSheetScreen.drawLabel(graphics, this.font, nameBox.getX(), Component.translatable("screen.tabletoprpg.inventory_item.weight").getString(), weightBox.getY());
+        CharacterSheetScreen.drawLabel(graphics, this.font, nameBox.getX(), Component.translatable("screen.tabletoprpg.inventory_item.description").getString(), descriptionBox.getY());
     }
 
     /**
@@ -161,7 +161,7 @@ public class InventoryItemScreen extends Screen {
      * correto mesmo se a fonte mudar.
      */
     private int labelW() {
-        return Math.max(LABEL_W, this.font.width("Description") + 6);
+        return Math.max(LABEL_W, this.font.width(Component.translatable("screen.tabletoprpg.inventory_item.description").getString()) + 6);
     }
 
     @Override

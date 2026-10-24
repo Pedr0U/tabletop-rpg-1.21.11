@@ -1,6 +1,9 @@
 package com.pedro.tabletoprpg;
 
+import net.minecraft.network.chat.Component;
+
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.function.IntUnaryOperator;
@@ -75,10 +78,40 @@ public final class DiceFormula {
     private DiceFormula() {
     }
 
-    /** Formula invalida, com a raza em texto pronto para o chat. */
+    /**
+     * Formula invalida. {@link #getMessage()} segue em ingles (logs e testes);
+     * {@link #toComponent()} devolve a mesma mensagem traduzida pela chave, para
+     * o chat seguir o idioma de quem recebe.
+     */
     public static final class SyntaxException extends Exception {
+        private final String key;
+        private final Object[] args;
+
         public SyntaxException(String message) {
             super(message);
+            this.key = null;
+            this.args = new Object[0];
+        }
+
+        public SyntaxException(String message, String key, Object... args) {
+            super(message);
+            this.key = key;
+            this.args = args;
+        }
+
+        public String getKey() {
+            return key;
+        }
+
+        public Object[] getArgs() {
+            return args;
+        }
+
+        public Component toComponent() {
+            if (key == null) {
+                return Component.literal(getMessage());
+            }
+            return Component.translatable(key, args);
         }
     }
 
@@ -583,18 +616,19 @@ public final class DiceFormula {
      */
     public static Formula parse(String raw) throws SyntaxException {
         if (raw == null) {
-            throw new SyntaxException("empty formula");
+            throw new SyntaxException("empty formula", "message.tabletoprpg.formula.error.empty");
         }
         String source = stripSpaces(raw);
         if (source.isEmpty()) {
-            throw new SyntaxException("empty formula");
+            throw new SyntaxException("empty formula", "message.tabletoprpg.formula.error.empty");
         }
 
         Cursor cursor = new Cursor(source);
         List<Term> terms = parseTerms(cursor, false);
         if (!cursor.atEnd()) {
             throw new SyntaxException("unexpected '" + cursor.peek() + "' at position " + (cursor.i + 1)
-                    + " in '" + source + "'");
+                    + " in '" + source + "'", "message.tabletoprpg.formula.error.unexpected_char",
+                    cursor.peek(), cursor.i + 1, source);
         }
 
         Formula formula = new Formula(source, terms);
@@ -658,7 +692,8 @@ public final class DiceFormula {
             }
             if (next != '+' && next != '-') {
                 throw new SyntaxException("unexpected '" + next + "' at position " + (cursor.i + 1)
-                        + " in '" + cursor.text() + "'");
+                        + " in '" + cursor.text() + "'", "message.tabletoprpg.formula.error.unexpected_char",
+                        next, cursor.i + 1, cursor.text());
             }
             // O sinal do proximo termo NAO e consumido aqui: o topo do laco e
             // quem le '+' ou '-' e monta o sinal do Term. Consumir aqui
@@ -694,12 +729,14 @@ public final class DiceFormula {
         List<Term> terms = parseTerms(cursor, true);
         if (cursor.peek() != ')') {
             throw new SyntaxException("missing ')' for the '(' at position " + (openMark + 1)
-                    + " in '" + cursor.text() + "'");
+                    + " in '" + cursor.text() + "'", "message.tabletoprpg.formula.error.missing_close_paren",
+                    openMark + 1, cursor.text());
         }
         cursor.next();
         if (terms.isEmpty()) {
             throw new SyntaxException("nothing to roll between the parentheses at position "
-                    + (openMark + 1) + " in '" + cursor.text() + "'");
+                    + (openMark + 1) + " in '" + cursor.text() + "'",
+                    "message.tabletoprpg.formula.error.empty_parentheses", openMark + 1, cursor.text());
         }
         return terms;
     }
@@ -713,7 +750,8 @@ public final class DiceFormula {
             repeat = repeatDigits;
             cursor.next();
             if (repeat < 1 || repeat > MAX_REPEAT) {
-                throw new SyntaxException("repetition must be 1-" + MAX_REPEAT + " (got " + repeat + ")");
+                throw new SyntaxException("repetition must be 1-" + MAX_REPEAT + " (got " + repeat + ")",
+                        "message.tabletoprpg.formula.error.repeat_range", MAX_REPEAT, repeat);
             }
         } else {
             cursor.i = repeatMark;
@@ -733,7 +771,8 @@ public final class DiceFormula {
             List<Term> terms = parseTerms(cursor, true);
             if (terms.isEmpty()) {
                 throw new SyntaxException("'" + repeat
-                        + "#' must be followed by dice or a formula, like 6#4d6dl1");
+                        + "#' must be followed by dice or a formula, like 6#4d6dl1",
+                        "message.tabletoprpg.formula.error.repeat_needs_body", repeat);
             }
             return new Group(repeat, null, 0L, cursor.slice(groupMark, cursor.i), terms);
         }
@@ -745,12 +784,15 @@ public final class DiceFormula {
         if (next == 'd' || next == 'D') {
             cursor.next();
             int diceCount = count == null ? 1 : count;
-            int sides = cursor.requireInt("the number of faces after 'd'");
+            int sides = cursor.requireInt("the number of faces after 'd'",
+                    "message.tabletoprpg.formula.error.expected_faces");
             if (diceCount < 1 || diceCount > MAX_DICE) {
-                throw new SyntaxException("dice count must be 1-" + MAX_DICE + " (got " + diceCount + ")");
+                throw new SyntaxException("dice count must be 1-" + MAX_DICE + " (got " + diceCount + ")",
+                        "message.tabletoprpg.formula.error.dice_count_range", MAX_DICE, diceCount);
             }
             if (sides < 1 || sides > MAX_SIDES) {
-                throw new SyntaxException("dice sides must be 1-" + MAX_SIDES + " (got " + sides + ")");
+                throw new SyntaxException("dice sides must be 1-" + MAX_SIDES + " (got " + sides + ")",
+                        "message.tabletoprpg.formula.error.dice_sides_range", MAX_SIDES, sides);
             }
             Dice dice = new Dice(diceCount, sides);
             parseSuffixes(cursor, dice);
@@ -758,7 +800,8 @@ public final class DiceFormula {
         }
 
         cursor.i = countMark;
-        return new Group(1, null, cursor.requireInt("a number or a dice term"));
+        return new Group(1, null, cursor.requireInt("a number or a dice term",
+                "message.tabletoprpg.formula.error.expected_number_or_dice"));
     }
 
     /**
@@ -831,30 +874,36 @@ public final class DiceFormula {
         for (Suffix existing : dice.suffixes) {
             if (existing.name().equals(name)) {
                 throw new SyntaxException("suffix '" + name + "' was repeated in '"
-                        + dice.label() + "'");
+                        + dice.label() + "'", "message.tabletoprpg.formula.error.suffix_repeated",
+                        name, dice.label());
             }
         }
         dice.suffixes.add(new Suffix(name, value));
     }
 
     private static int readKeep(Cursor cursor, String suffix) throws SyntaxException {
-        int n = cursor.requireInt("a number after '" + suffix + "'");
+        int n = cursor.requireInt("a number after '" + suffix + "'",
+                "message.tabletoprpg.formula.error.expected_number_after", suffix);
         if (n < 1) {
-            throw new SyntaxException("'" + suffix + "' needs at least 1 (got " + n + ")");
+            throw new SyntaxException("'" + suffix + "' needs at least 1 (got " + n + ")",
+                    "message.tabletoprpg.formula.error.keep_min", suffix, n);
         }
         return n;
     }
 
     private static int readThreshold(Cursor cursor, String suffix) throws SyntaxException {
-        int n = cursor.requireInt("a number after '" + suffix + "'");
+        int n = cursor.requireInt("a number after '" + suffix + "'",
+                "message.tabletoprpg.formula.error.expected_number_after", suffix);
         checkThreshold(n, suffix);
         return n;
     }
 
     private static int readLimit(Cursor cursor, String suffix) throws SyntaxException {
-        int n = cursor.requireInt("a number after '" + suffix + "'");
+        int n = cursor.requireInt("a number after '" + suffix + "'",
+                "message.tabletoprpg.formula.error.expected_number_after", suffix);
         if (n < 1 || n > MAX_PER_DIE) {
-            throw new SyntaxException("'" + suffix + "' must be 1-" + MAX_PER_DIE + " (got " + n + ")");
+            throw new SyntaxException("'" + suffix + "' must be 1-" + MAX_PER_DIE + " (got " + n + ")",
+                    "message.tabletoprpg.formula.error.limit_range", suffix, MAX_PER_DIE, n);
         }
         return n;
     }
@@ -862,7 +911,8 @@ public final class DiceFormula {
     private static void checkThreshold(int value, String suffix) throws SyntaxException {
         if (value < 1 || value > MAX_THRESHOLD) {
             throw new SyntaxException("'" + suffix + "' threshold must be 1-" + MAX_THRESHOLD
-                    + " (got " + value + ")");
+                    + " (got " + value + ")", "message.tabletoprpg.formula.error.threshold_range",
+                    suffix, MAX_THRESHOLD, value);
         }
     }
 
@@ -873,10 +923,12 @@ public final class DiceFormula {
      */
     private static void rejectBothCounters(Dice dice, String added) throws SyntaxException {
         if (">>".equals(added) && dice.countLe() >= 0) {
-            throw new SyntaxException("'>>' and '<<' count in opposite directions; use only one");
+            throw new SyntaxException("'>>' and '<<' count in opposite directions; use only one",
+                    "message.tabletoprpg.formula.error.both_counters");
         }
         if ("<<".equals(added) && dice.countGe() >= 0) {
-            throw new SyntaxException("'>>' and '<<' count in opposite directions; use only one");
+            throw new SyntaxException("'>>' and '<<' count in opposite directions; use only one",
+                    "message.tabletoprpg.formula.error.both_counters");
         }
     }
 
@@ -891,7 +943,8 @@ public final class DiceFormula {
     private static void checkExplode(Dice dice, int threshold) throws SyntaxException {
         if (threshold < 2) {
             throw new SyntaxException("'" + dice.label()
-                    + "' explodes 100% of the time and would never stop");
+                    + "' explodes 100% of the time and would never stop",
+                    "message.tabletoprpg.formula.error.explode_forever", dice.label());
         }
     }
 
@@ -935,7 +988,8 @@ public final class DiceFormula {
             long declared = countRolls(terms);
             if (declared > MAX_TOTAL_ROLLS) {
                 throw new SyntaxException("this formula asks for " + declared
-                        + " dice; the limit is " + MAX_TOTAL_ROLLS);
+                        + " dice; the limit is " + MAX_TOTAL_ROLLS,
+                        "message.tabletoprpg.formula.error.too_many_dice", declared, MAX_TOTAL_ROLLS);
             }
         }
 
@@ -1240,12 +1294,14 @@ public final class DiceFormula {
     private static int nextRoll(IntUnaryOperator roller, int sides, Budget budget) throws SyntaxException {
         if (budget.rolls >= MAX_TOTAL_ROLLS) {
             throw new SyntaxException("this formula rolled more than " + MAX_TOTAL_ROLLS
-                    + " dice; the exploding dice did not stop");
+                    + " dice; the exploding dice did not stop",
+                    "message.tabletoprpg.formula.error.explode_budget", MAX_TOTAL_ROLLS);
         }
         budget.rolls++;
         int value = roller.applyAsInt(sides);
         if (value < 1 || value > sides) {
-            throw new SyntaxException("the dice roller returned " + value + " for a d" + sides);
+            throw new SyntaxException("the dice roller returned " + value + " for a d" + sides,
+                    "message.tabletoprpg.formula.error.roller_range", value, sides);
         }
         return value;
     }
@@ -1501,7 +1557,9 @@ public final class DiceFormula {
                 value = value * 10 + (peek() - '0');
                 if (value > Integer.MAX_VALUE) {
                     throw new SyntaxException("number at position " + (start + 1)
-                            + " in '" + source + "' is larger than " + Integer.MAX_VALUE);
+                            + " in '" + source + "' is larger than " + Integer.MAX_VALUE,
+                            "message.tabletoprpg.formula.error.number_too_large",
+                            start + 1, source, Integer.MAX_VALUE);
                 }
                 next();
             }
@@ -1512,11 +1570,14 @@ public final class DiceFormula {
         }
 
         /** Le um inteiro obrigatorio, com mensagem que diz o que faltou. */
-        int requireInt(String what) throws SyntaxException {
+        int requireInt(String what, String key, Object... args) throws SyntaxException {
             Integer value = readIntOrNull();
             if (value == null) {
+                Object[] full = Arrays.copyOf(args, args.length + 2);
+                full[args.length] = i + 1;
+                full[args.length + 1] = source;
                 throw new SyntaxException("expected " + what + " at position " + (i + 1)
-                        + " in '" + source + "'");
+                        + " in '" + source + "'", key, full);
             }
             return value;
         }

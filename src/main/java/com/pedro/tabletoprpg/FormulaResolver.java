@@ -1,5 +1,7 @@
 package com.pedro.tabletoprpg;
 
+import net.minecraft.network.chat.Component;
+
 import java.text.Normalizer;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -50,10 +52,40 @@ public final class FormulaResolver {
     private FormulaResolver() {
     }
 
-    /** Erro de resolucao com frase ja pronta para o chat (sem prefixo de cor). */
+    /**
+     * Erro de resolucao. {@link #getMessage()} segue em ingles (logs e testes);
+     * {@link #toComponent()} devolve a mesma mensagem traduzida pela chave, para o
+     * chat seguir o idioma de quem recebe.
+     */
     public static class ResolveException extends Exception {
+        private final String key;
+        private final Object[] args;
+
         public ResolveException(String message) {
             super(message);
+            this.key = null;
+            this.args = new Object[0];
+        }
+
+        public ResolveException(String message, String key, Object... args) {
+            super(message);
+            this.key = key;
+            this.args = args;
+        }
+
+        public Component toComponent() {
+            if (key == null) {
+                return Component.literal(getMessage());
+            }
+            return Component.translatable(key, args);
+        }
+
+        public String getKey() {
+            return key;
+        }
+
+        public Object[] getArgs() {
+            return args;
         }
     }
 
@@ -75,7 +107,8 @@ public final class FormulaResolver {
             // devolver 0 em cada token: a jogadora veria o resultado errado em vez do
             // aviso.
             throw new ResolveException("cannot use an attribute name in a formula"
-                    + " without a character sheet");
+                    + " without a character sheet",
+                    "message.tabletoprpg.formula.resolve.no_sheet");
         }
 
         Map<String, Token> table = table(model);
@@ -93,18 +126,19 @@ public final class FormulaResolver {
                 // uma busca na ficha. So o `placeholderFormula` nao segurava este
                 // caminho, que e o que roda na rolagem.
                 throw new ResolveException("formula uses more than " + MAX_TOKENS
-                        + " attribute names");
+                        + " attribute names", "message.tabletoprpg.formula.resolve.too_many_names",
+                        MAX_TOKENS);
             }
             String raw = formula.substring(span[0], span[1]);
             Token token = table.get(key(raw));
             if (token == null) {
-                throw new ResolveException("unknown attribute '" + raw + "' in formula."
-                        + validHint(table));
+                throw unknownAttribute(raw, table);
             }
             Integer value = attributeValue(sheet, token.id);
             if (value == null) {
                 throw new ResolveException("this sheet has no '" + token.display
-                        + "' to add to the roll");
+                        + "' to add to the roll", "message.tabletoprpg.formula.resolve.missing_value",
+                        token.display);
             }
             out.append(formula, cursor, span[0]).append(value);
             cursor = span[1];
@@ -145,12 +179,12 @@ public final class FormulaResolver {
         for (int[] span : spans) {
             if (++count > MAX_TOKENS) {
                 throw new ResolveException("formula uses more than " + MAX_TOKENS
-                        + " attribute names");
+                        + " attribute names", "message.tabletoprpg.formula.resolve.too_many_names",
+                        MAX_TOKENS);
             }
             String raw = formula.substring(span[0], span[1]);
             if (table.get(key(raw)) == null) {
-                throw new ResolveException("unknown attribute '" + raw + "' in formula."
-                        + validHint(table));
+                throw unknownAttribute(raw, table);
             }
             out.append(formula, cursor, span[0]).append('0');
             cursor = span[1];
@@ -380,20 +414,27 @@ public final class FormulaResolver {
      * fora da tela do jogo. Cinco ja dizem o formato ("Strength", "Dexterity...") e
      * o jogador acerta o resto sozinho.
      */
-    private static String validHint(Map<String, Token> table) {
+    private static ResolveException unknownAttribute(String raw, Map<String, Token> table) {
         List<String> names = new ArrayList<>();
         for (Token token : table.values()) {
             if (!names.contains(token.display)) {
                 names.add(token.display);
             }
         }
+        String head = "unknown attribute '" + raw + "' in formula";
         if (names.isEmpty()) {
-            return ". This sheet model has no attributes";
+            return new ResolveException(head + ". This sheet model has no attributes",
+                    "message.tabletoprpg.formula.resolve.unknown_attribute_no_model", raw);
         }
         int shown = Math.min(5, names.size());
-        String more = names.size() > shown
-                ? ", ... (" + names.size() + " total)"
-                : "";
-        return ". Valid names: " + String.join(", ", names.subList(0, shown)) + more;
+        String list = String.join(", ", names.subList(0, shown));
+        if (names.size() > shown) {
+            return new ResolveException(head + ". Valid names: " + list
+                            + ", ... (" + names.size() + " total)",
+                    "message.tabletoprpg.formula.resolve.unknown_attribute_more",
+                    raw, list, names.size());
+        }
+        return new ResolveException(head + ". Valid names: " + list,
+                "message.tabletoprpg.formula.resolve.unknown_attribute", raw, list);
     }
 }

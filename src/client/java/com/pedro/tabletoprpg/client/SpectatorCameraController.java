@@ -63,19 +63,19 @@ public final class SpectatorCameraController {
      * seu turno alterna apenas entre a câmera do jogo e a livre.
      */
     public enum Mode {
-        THIRD_PERSON("3rd Person"),
-        FIRST_PERSON("1st Person"),
-        TOP_DOWN("Top-Down"),
-        FREE("Free");
+        THIRD_PERSON("screen.tabletoprpg.camera_mode.third_person"),
+        FIRST_PERSON("screen.tabletoprpg.camera_mode.first_person"),
+        TOP_DOWN("screen.tabletoprpg.camera_mode.top_down"),
+        FREE("screen.tabletoprpg.camera_mode.free");
 
-        private final String displayName;
+        private final String translationKey;
 
-        Mode(String displayName) {
-            this.displayName = displayName;
+        Mode(String translationKey) {
+            this.translationKey = translationKey;
         }
 
         public String getDisplayName() {
-            return displayName;
+            return Component.translatable(translationKey).getString();
         }
     }
 
