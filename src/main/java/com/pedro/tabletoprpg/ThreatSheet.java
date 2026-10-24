@@ -30,6 +30,11 @@ import java.util.UUID;
  * guarda o teto de atributo e de pericia dos JOGADORES (editavel pelo Mestre no Sheet
  * Editor). A ameaca tem regra propria, pedida em 02/10/2026: valor de atributo de -999
  * a 999 em 4 caracteres, em vez dos +-30 dos jogadores.
+ *
+ * <p><b>Modo Horda (22/10/2026):</b> {@link #hordeMode()} faz a ficha valer para
+ * VARIOS mobs ao mesmo tempo (1:N). Fora do modo horda, a regra antiga continua: uma
+ * ficha, no maximo, um mob. O campo e opcional no NBT, entao ficha gravada antes
+ * dele existir carrega como {@code false} (horda desligada).
  */
 public record ThreatSheet(
         String id,
@@ -41,7 +46,8 @@ public record ThreatSheet(
         List<String> features,
         List<Ability> passives,
         List<Action> actions,
-        String copyOf) {
+        String copyOf,
+        boolean hordeMode) {
 
     // ------------------------------------------------------------------
     // LIMITES
@@ -390,7 +396,8 @@ public record ThreatSheet(
                     List<Ability> pass = PASSIVES_STREAM.decode(buf);
                     List<Action> acts = ACTIONS_STREAM.decode(buf);
                     String copy = ByteBufCodecs.stringUtf8(MAX_ID).decode(buf);
-                    return new ThreatSheet(sheetId, id, vit, desc, attrs, per, feats, pass, acts, copy);
+                    boolean horde = ByteBufCodecs.BOOL.decode(buf);
+                    return new ThreatSheet(sheetId, id, vit, desc, attrs, per, feats, pass, acts, copy, horde);
                 }
 
                 @Override
@@ -405,10 +412,11 @@ public record ThreatSheet(
                     PASSIVES_STREAM.encode(buf, value.passives());
                     ACTIONS_STREAM.encode(buf, value.actions());
                     ByteBufCodecs.stringUtf8(MAX_ID).encode(buf, value.copyOf());
+                    ByteBufCodecs.BOOL.encode(buf, value.hordeMode());
                 }
     };
 
-    /** NBT. Nove campos cabem no {@code RecordCodecBuilder} sem gambiarra. */
+    /** NBT. Onze campos cabem no {@code RecordCodecBuilder} sem gambiarra. */
     public static final Codec<ThreatSheet> CODEC = RecordCodecBuilder.create(i -> i.group(
             Codec.STRING.fieldOf("id").forGetter(ThreatSheet::id),
             Identity.CODEC.fieldOf("identity").forGetter(ThreatSheet::identity),
@@ -419,7 +427,10 @@ public record ThreatSheet(
             Codec.STRING.listOf().fieldOf("features").forGetter(ThreatSheet::features),
             Ability.CODEC.listOf().fieldOf("passives").forGetter(ThreatSheet::passives),
             Action.CODEC.listOf().fieldOf("actions").forGetter(ThreatSheet::actions),
-            Codec.STRING.optionalFieldOf("copy_of", "").forGetter(ThreatSheet::copyOf)
+            Codec.STRING.optionalFieldOf("copy_of", "").forGetter(ThreatSheet::copyOf),
+            // Opcional: ficha gravada antes do Modo Horda existir carrega com ele
+            // desligado, sem erro de codec.
+            Codec.BOOL.optionalFieldOf("horde_mode", false).forGetter(ThreatSheet::hordeMode)
     ).apply(i, ThreatSheet::new));
 
     // ------------------------------------------------------------------
@@ -476,7 +487,8 @@ public record ThreatSheet(
                 List.of(),
                 List.of(),
                 List.of(),
-                "");
+                "",
+                false);
     }
 
     /**
@@ -555,7 +567,7 @@ public record ThreatSheet(
             return this;
         }
         return new ThreatSheet(newId, identity, vitals, description, attributes, pericias,
-                features, passives, actions, copyOf);
+                features, passives, actions, copyOf, hordeMode);
     }
 
     /**
@@ -574,7 +586,7 @@ public record ThreatSheet(
             return this;
         }
         return new ThreatSheet(id, identity, vitals, description, attributes, pericias,
-                features, passives, actions, clean);
+                features, passives, actions, clean, hordeMode);
     }
 
     /**
@@ -590,7 +602,24 @@ public record ThreatSheet(
                 new Identity(clean, identity.level(), identity.displayName(),
                         identity.showDisplayName(), identity.type(), identity.size(),
                         identity.speed()),
-                vitals, description, attributes, pericias, features, passives, actions, copyOf);
+                vitals, description, attributes, pericias, features, passives, actions, copyOf,
+                hordeMode);
+    }
+
+    /**
+     * Devolve esta ficha com o Modo Horda ligado ou desligado, mantendo o resto.
+     *
+     * <p><b>Por que existe:</b> o Modo Horda e uma regra do vinculo (a ficha vale
+     * para um mob ou para varios), e nao do conteudo da ficha. Ele viaja junto com a
+     * ficha porque e ela que o Mestre marca na tela, e o save precisa manter o que
+     * foi marcado.
+     */
+    public ThreatSheet withHordeMode(boolean horde) {
+        if (horde == hordeMode) {
+            return this;
+        }
+        return new ThreatSheet(id, identity, vitals, description, attributes, pericias,
+                features, passives, actions, copyOf, horde);
     }
 
     /**
@@ -644,7 +673,7 @@ public record ThreatSheet(
             return this;
         }
         return new ThreatSheet(id, identity, vitals, description, aligned, kept,
-                features, passives, actions, copyOf);
+                features, passives, actions, copyOf, hordeMode);
     }
 
     private static String text(String value, int max) {

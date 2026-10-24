@@ -7,6 +7,7 @@ import com.pedro.tabletoprpg.SheetModelHolder;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
+import net.minecraft.client.gui.components.Checkbox;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.components.MultiLineEditBox;
 import net.minecraft.client.gui.components.Tooltip;
@@ -211,6 +212,18 @@ public class StatusScreen extends CharacterSheetScreen {
     /** Geometria das barras, calculada em buildPanel(). */
     private Bar hpBar;
     private Bar manaBar;
+
+    /**
+     * Checkbox "Usar iniciativa padrão" e a geometria para recriá-la.
+     *
+     * <p>Nesta versão o {@code Checkbox} não tem setter de estado: ele só muda
+     * quando a jogadora clica. O eco do servidor pode trazer a flag diferente
+     * (outra pessoa alterou a ficha), então a caixa é refeita no mesmo lugar,
+     * como em {@code PresetsScreen}.
+     */
+    private Checkbox initiativeCheckbox;
+    private int initiativeCheckboxX, initiativeCheckboxY, initiativeCheckboxW;
+    private boolean initiativeUsesDefault = true;
 
     /**
      * Os 6 botoes de passo de vida/mana, com o <b>campo</b> e o <b>delta</b> de
@@ -1113,9 +1126,9 @@ public class StatusScreen extends CharacterSheetScreen {
         // de uma faixa cortada, senao ele invade o titulo fixo ao rolar.
         int plusH = skillColumn.clippedHeight(rowY, rowH - 2);
         if (plusH > 0) {
-            addRenderableWidget(Button.builder(Component.literal("+ Skill"), b -> openSkillForm(-1, null))
+            addRenderableWidget(Button.builder(Component.translatable("screen.tabletoprpg.status.add_skill"), b -> openSkillForm(-1, null))
                     .bounds(x, Math.max(rowY, skillColumn.listTop), w, plusH)
-                    .tooltip(Tooltip.create(Component.literal("Nova skill")))
+                    .tooltip(Tooltip.create(Component.translatable("screen.tabletoprpg.status.add_skill_tooltip")))
                     .build());
         }
         rowY += headerH;
@@ -1331,7 +1344,7 @@ public class StatusScreen extends CharacterSheetScreen {
                         targetName, skillName, -1));
             })
                     .bounds(x, btnY, LIST_MOVE_W, btnH)
-                    .tooltip(Tooltip.create(Component.literal("Subir na lista")))
+                    .tooltip(Tooltip.create(Component.translatable("screen.tabletoprpg.status.move_up")))
                     .build());
         }
         if (index < total - 1) {
@@ -1345,7 +1358,7 @@ public class StatusScreen extends CharacterSheetScreen {
                         targetName, skillName, 1));
             })
                     .bounds(x + LIST_MOVE_W + LIST_MOVE_GAP, btnY, LIST_MOVE_W, btnH)
-                    .tooltip(Tooltip.create(Component.literal("Descer na lista")))
+                    .tooltip(Tooltip.create(Component.translatable("screen.tabletoprpg.status.move_down")))
                     .build());
         }
     }
@@ -1523,10 +1536,10 @@ public class StatusScreen extends CharacterSheetScreen {
         // ao descer.
         int plusH = spellColumn.clippedHeight(y, rowH - 2);
         if (plusH > 0) {
-            addRenderableWidget(Button.builder(Component.literal("+ Magia"),
+            addRenderableWidget(Button.builder(Component.translatable("screen.tabletoprpg.status.add_spell"),
                             b -> openSpellForm(-1, null))
                     .bounds(x, Math.max(y, spellColumn.listTop), w, plusH)
-                    .tooltip(Tooltip.create(Component.literal("Nova magia")))
+                    .tooltip(Tooltip.create(Component.translatable("screen.tabletoprpg.status.add_spell_tooltip")))
                     .build());
         }
         // Nao ha `y += rowH` depois do "+ Magia" de proposito: o fim do cabecalho e
@@ -1684,8 +1697,8 @@ public class StatusScreen extends CharacterSheetScreen {
         int delY = Math.max(y, column.listTop);
         Button del = addRenderableWidget(Button.builder(
                         column.delPending == storedIndex
-                                ? Component.literal("Del?")
-                                : Component.literal("Del"),
+                                ? Component.translatable("screen.tabletoprpg.status.delete_confirm")
+                                : Component.translatable("screen.tabletoprpg.status.delete"),
                         b -> onDeleteEntry(column, kind, storedIndex))
                 .bounds(x, delY, LIST_BTN_W, delH)
                 .tooltip(Tooltip.create(Component.literal(
@@ -1838,7 +1851,7 @@ public class StatusScreen extends CharacterSheetScreen {
         int cdH = spellColumn.clippedHeight(cdY, rowH - 2);
         if (cdH > 0) {
             cdBox = new EditBox(this.font, x + cdLabelW, Math.max(cdY, spellColumn.listTop),
-                    cdW, cdH, Component.literal("CD"));
+                    cdW, cdH, Component.translatable("screen.tabletoprpg.status.cd"));
             // 4 digitos: o mesmo teto de Spellbook.CD_MAX, que por sua vez espelha o
             // `stringUtf8(2048)` do SheetFieldPayload. Os tres tetos concordam.
             cdBox.setMaxLength(4);
@@ -2134,7 +2147,7 @@ public class StatusScreen extends CharacterSheetScreen {
         int boxX = x + w - boxW;
         addWrappedLabel("Max Weight", x, y, Math.max(20, boxX - x - 4), COL_LABEL);
         maxWeightBox = new EditBox(this.font, boxX, y, boxW, rowH - 2,
-                Component.literal("Max Weight"));
+                Component.translatable("screen.tabletoprpg.status.max_weight"));
         maxWeightBox.setMaxLength(8);
         // Filtro de digito e UM ponto, com 2 casas (o mesmo do formulario do
         // item): e o que impede "1.2.3", que nao parseia e cairia em 0 ao
@@ -2152,9 +2165,9 @@ public class StatusScreen extends CharacterSheetScreen {
         textLines.add(new TextLine("", x, y + labelOffset(), COL_BOX_TEXT));
         y += rowH;
 
-        addRenderableWidget(Button.builder(Component.literal("+ Item"), b -> openItemForm(-1, null))
+        addRenderableWidget(Button.builder(Component.translatable("screen.tabletoprpg.status.add_item"), b -> openItemForm(-1, null))
                 .bounds(x, y, w, rowH - 2)
-                .tooltip(Tooltip.create(Component.literal("Novo item do inventario")))
+                .tooltip(Tooltip.create(Component.translatable("screen.tabletoprpg.status.add_item_tooltip")))
                 .build());
         y += rowH;
 
@@ -2265,12 +2278,12 @@ public class StatusScreen extends CharacterSheetScreen {
         // Botao so quando a linha inteira cabe na faixa visivel: um botao cortado
         // pela borda seria clicavel sem o jogador ve-lo.
         if (lineInList(y, INV_BTN_H)) {
-            addRenderableWidget(Button.builder(Component.literal("Edit"), b -> openItemForm(index, item))
+            addRenderableWidget(Button.builder(Component.translatable("screen.tabletoprpg.status.edit"), b -> openItemForm(index, item))
                     .bounds(tx, y, INV_BTN_W, INV_BTN_H)
-                    .tooltip(Tooltip.create(Component.literal("Editar este item")))
+                    .tooltip(Tooltip.create(Component.translatable("screen.tabletoprpg.status.edit_item_tooltip")))
                     .build());
             Button del = addRenderableWidget(Button.builder(
-                            delPendingIndex == index ? Component.literal("Del?") : Component.literal("Del"),
+                            delPendingIndex == index ? Component.translatable("screen.tabletoprpg.status.delete_confirm") : Component.translatable("screen.tabletoprpg.status.delete"),
                             b -> onDeleteItem(index))
                     .bounds(tx + tw - INV_BTN_W, y, INV_BTN_W, INV_BTN_H)
                     .tooltip(Tooltip.create(Component.literal(
@@ -2427,7 +2440,7 @@ public class StatusScreen extends CharacterSheetScreen {
         MultiLineEditBox box = MultiLineEditBox.builder()
                 .setX(x)
                 .setY(y)
-                .setPlaceholder(Component.literal("write here"))
+                .setPlaceholder(Component.translatable("screen.tabletoprpg.status.write_here"))
                 .setTextColor(COL_BOX_TEXT)
                 .setTextShadow(false)
                 .setCursorColor(COL_BOX_TEXT)
@@ -2451,6 +2464,66 @@ public class StatusScreen extends CharacterSheetScreen {
         // (a roda so chega no que o `getChildAt` encontra por hit test).
         addRenderableWidget(box);
         multiLineBoxes.put(field, box);
+    }
+
+    /**
+     * Cria o checkbox "Usar iniciativa padrão" e devolve o proximo Y.
+     *
+     * <p>22/10/2026 (PARTE 6): a flag e por personagem ({@code SheetData.Progress}),
+     * e nao do modelo global. O campo de iniciativa logo abaixo mostra o valor
+     * efetivo e so aceita edicao quando a flag esta desligada.
+     */
+    private int addInitiativeToggle(int x0, int y, int w) {
+        initiativeCheckboxX = x0 + 2;
+        initiativeCheckboxY = y;
+        initiativeCheckboxW = Math.max(40, w - 4);
+        initiativeUsesDefault = sheet == null || sheet.progress().useDefaultInitiative();
+        initiativeCheckbox = buildInitiativeCheckbox(initiativeUsesDefault);
+        addRenderableWidget(initiativeCheckbox);
+        return y + rowH;
+    }
+
+    /**
+     * Monta o checkbox no estado pedido.
+     *
+     * <p>Nesta versao o {@code Checkbox} nao tem setter de estado, entao o eco do
+     * servidor que mude a flag precisa recriar o widget (ver
+     * {@link #applyExtraState}).
+     */
+    private Checkbox buildInitiativeCheckbox(boolean selected) {
+        Checkbox box = Checkbox.builder(Component.translatable("screen.tabletoprpg.status.use_default_initiative"), this.font)
+                .pos(initiativeCheckboxX, initiativeCheckboxY)
+                .maxWidth(initiativeCheckboxW)
+                .selected(selected)
+                .onValueChange((cb, checked) -> {
+                    initiativeUsesDefault = checked;
+                    if (sheet != null) {
+                        ClientPlayNetworking.send(new RpgNetworking.SheetFieldPayload(
+                                targetName, "useDefaultInitiative", Boolean.toString(checked)));
+                    }
+                    applyInitiativeEditable();
+                })
+                .build();
+        box.setSize(initiativeCheckboxW, Math.max(10, rowH - 2));
+        box.active = canEdit;
+        return box;
+    }
+
+    /**
+     * Escreve o {@code active} do checkbox e o {@code editable} do campo de
+     * iniciativa conforme a flag e a permissao de edicao.
+     *
+     * <p>Chamado no clique do checkbox e no {@code applyExtraState}, para o
+     * campo nao ficar editavel enquanto a ficha usa a iniciativa padrao.
+     */
+    private void applyInitiativeEditable() {
+        if (initiativeCheckbox != null) {
+            initiativeCheckbox.active = canEdit;
+        }
+        EditBox box = fieldBoxes.get("initiative");
+        if (box != null) {
+            box.setEditable(canEdit && !initiativeUsesDefault);
+        }
     }
 
     /**
@@ -2583,7 +2656,9 @@ public class StatusScreen extends CharacterSheetScreen {
         // 29/09/2026: o que sobra desse estouro na janela baixa e resolvido pela
         // rolagem da coluna esquerda ({@link #leftScroll}), e nao por mais uma
         // folga na conta.
-        int neededRows = 3 + 5 + 3 + 3 + 2 + attrRowCount;
+        // 22/10/2026 (PARTE 6): +2 linhas para o checkbox "Usar iniciativa
+        // padrão" e o campo de iniciativa, que ficam no fim de Progress.
+        int neededRows = 3 + 5 + 3 + 3 + 2 + 2 + attrRowCount;
         // 27/09/2026 (Sheet Editor): o Mestre pode desligar a raca, a mana e o
         // XP, e ai as linhas abaixo somem. Sem descontar, a altura de linha
         // seria calculada para linhas que nao existem e sobraria espaco vazio
@@ -2719,6 +2794,13 @@ public class StatusScreen extends CharacterSheetScreen {
             y += rowH;
         }
 
+        // 22/10/2026 (PARTE 6): a iniciativa do personagem. O checkbox decide
+        // se a ficha usa a iniciativa padrão do modelo global; o campo mostra
+        // o valor efetivo e só é editável quando o checkbox está desmarcado.
+        y = addInitiativeToggle(x0, drawY(y), leftW);
+        addField("initiative", x0, drawY(y), boxX, boxW, labelW, true);
+        y += rowH;
+
         // ---------------- Attributes ----------------
         // Decisao do usuario: atributos sao botoes -/+ (passo 1), sem caixa de
         // texto e sem barra, começando em 0, com teto 30 e PISO -30 (podem ser
@@ -2777,11 +2859,11 @@ public class StatusScreen extends CharacterSheetScreen {
         int y = bottomY - TAB_BAR_H;
         Button prev = addRenderableWidget(Button.builder(Component.literal("<"), b -> changeTab(-1))
                 .bounds(x0, y, TAB_ARROW_W, TAB_BAR_H)
-                .tooltip(Tooltip.create(Component.literal("Aba anterior")))
+                .tooltip(Tooltip.create(Component.translatable("screen.tabletoprpg.status.previous_tab")))
                 .build());
         Button next = addRenderableWidget(Button.builder(Component.literal(">"), b -> changeTab(1))
                 .bounds(x0 + panelW - TAB_ARROW_W, y, TAB_ARROW_W, TAB_BAR_H)
-                .tooltip(Tooltip.create(Component.literal("Proxima aba")))
+                .tooltip(Tooltip.create(Component.translatable("screen.tabletoprpg.status.next_tab")))
                 .build());
         prev.active = activeTab > 0;
         next.active = activeTab < tabCount() - 1;
@@ -4187,6 +4269,20 @@ public class StatusScreen extends CharacterSheetScreen {
         // 01/10/2026 (pagina 3): a caixa da CD e a linha do Modificador tambem
         // nao estao no `fieldBoxes` da base, entao recebem o eco do servidor aqui.
         applySpellHeader();
+        // 22/10/2026 (PARTE 6): o eco pode trazer a flag de iniciativa padrao
+        // diferente (outra pessoa alterou a ficha). O Checkbox nao tem setter,
+        // entao ele e recriado no mesmo lugar, como em PresetsScreen.
+        if (activeTab == 0 && initiativeCheckbox != null && sheet != null) {
+            boolean useDefault = sheet.progress().useDefaultInitiative();
+            if (initiativeUsesDefault != useDefault) {
+                removeWidget(initiativeCheckbox);
+                initiativeUsesDefault = useDefault;
+                initiativeCheckbox = buildInitiativeCheckbox(useDefault);
+                addRenderableWidget(initiativeCheckbox);
+            }
+            initiativeUsesDefault = useDefault;
+            applyInitiativeEditable();
+        }
     }
 
     /**

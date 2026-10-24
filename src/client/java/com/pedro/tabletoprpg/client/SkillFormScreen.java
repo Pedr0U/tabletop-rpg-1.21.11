@@ -94,7 +94,7 @@ public class SkillFormScreen extends Screen {
         int boxW = Math.max(40, panelW - 16 - labelW());
 
         int y = 40;
-        nameBox = new EditBox(this.font, boxX, y, boxW, 18, Component.literal("Name"));
+        nameBox = new EditBox(this.font, boxX, y, boxW, 18, Component.translatable("screen.tabletoprpg.skill_form.name"));
         nameBox.setMaxLength(SheetData.SKILL_MAX);
         nameBox.setValue(current.name());
         addRenderableWidget(nameBox);
@@ -107,13 +107,13 @@ public class SkillFormScreen extends Screen {
         descriptionBox = MultiLineEditBox.builder()
                 .setX(boxX)
                 .setY(descTop)
-                .setPlaceholder(Component.literal("description"))
+                .setPlaceholder(Component.translatable("screen.tabletoprpg.skill_form.description_placeholder"))
                 .setTextColor(CharacterSheetScreen.COL_BOX_TEXT)
                 .setTextShadow(false)
                 .setCursorColor(CharacterSheetScreen.COL_BOX_TEXT)
                 .setShowBackground(true)
                 .setShowDecorations(true)
-                .build(this.font, boxW, descBottom - descTop, Component.literal("Description"));
+                .build(this.font, boxW, descBottom - descTop, Component.translatable("screen.tabletoprpg.skill_form.description"));
         descriptionBox.setCharacterLimit(SheetData.SKILL_DESC_MAX);
         descriptionBox.setValue(current.description());
         // **OBRIGATORIO**: sem `addRenderableWidget` a caixa nao entra em
@@ -122,10 +122,10 @@ public class SkillFormScreen extends Screen {
 
         int buttonW = (panelW - 24) / 2;
         int buttonY = this.height - FOOTER_H;
-        saveButton = addRenderableWidget(Button.builder(Component.literal("Save"), b -> save())
+        saveButton = addRenderableWidget(Button.builder(Component.translatable("screen.tabletoprpg.skill_form.save"), b -> save())
                 .bounds(panelX + 8, buttonY, buttonW, 20)
                 .build());
-        addRenderableWidget(Button.builder(Component.literal("Cancel"), b -> onClose())
+        addRenderableWidget(Button.builder(Component.translatable("screen.tabletoprpg.skill_form.cancel"), b -> onClose())
                 .bounds(panelX + panelW - 8 - buttonW, buttonY, buttonW, 20)
                 .build());
 

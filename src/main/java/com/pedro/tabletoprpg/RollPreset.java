@@ -19,8 +19,10 @@ import java.util.Locale;
  * @param name    nome escolhido pela jogadora, como ela digitou (espacos colapsados)
  * @param formula formula ja normalizada, sem espaco (ex.: {@code 1d20+5})
  * @param colorId id de {@link RollPresetColor} (ex.: {@code red}, {@code light_blue})
+ * @param openRoll {@code true} quando a rolagem deste preset e <b>publica</b>: o
+ *                resultado vai para todo mundo, e nao so para quem rolou
  */
-public record RollPreset(String name, String formula, String colorId) {
+public record RollPreset(String name, String formula, String colorId, boolean openRoll) {
 
     public static final int MAX_NAME = 32;
     public static final int MAX_FORMULA = 128;
@@ -37,17 +39,23 @@ public record RollPreset(String name, String formula, String colorId) {
                     ByteBufCodecs.stringUtf8(MAX_NAME), RollPreset::name,
                     ByteBufCodecs.stringUtf8(MAX_FORMULA), RollPreset::formula,
                     ByteBufCodecs.stringUtf8(32), RollPreset::colorId,
+                    ByteBufCodecs.BOOL, RollPreset::openRoll,
                     RollPreset::new
             );
 
     // Sem limite de tamanho por campo: nesta versao do DFU o `Codec.STRING` nao tem
-// `maxLen`. O teto do NBT nao e o que segura um preset enorme -- e o clamp do
-// construtor compacto abaixo, que corta depois de decodificar.
+    // `maxLen`. O teto do NBT nao e o que segura um preset enorme -- e o clamp do
+    // construtor compacto abaixo, que corta depois de decodificar.
+    //
+    // O `openRoll` e opcional: um NBT gravado antes da flag existe (ou um preset
+    // criado sem ela) decodifica com `false`, que e o comportamento antigo --
+    // rolagem particular, so para quem rolou.
     public static final Codec<RollPreset> CODEC = RecordCodecBuilder.create(i -> i.group(
             Codec.STRING.fieldOf("name").forGetter(RollPreset::name),
             Codec.STRING.fieldOf("formula").forGetter(RollPreset::formula),
-            Codec.STRING.fieldOf("color").forGetter(RollPreset::colorId)
-    ).apply(i, RollPreset::new));
+            Codec.STRING.fieldOf("color").forGetter(RollPreset::colorId),
+            Codec.BOOL.optionalFieldOf("openRoll", false).forGetter(RollPreset::openRoll)
+    ).apply(i, (name, formula, colorId, openRoll) -> new RollPreset(name, formula, colorId, openRoll)));
 
     /**
      * Nunca lanca: e o caminho do {@link Codec}, que roda sobre NBT de mundo antigo ou
@@ -62,6 +70,18 @@ public record RollPreset(String name, String formula, String colorId) {
 
     public RollPresetColor color() {
         return RollPresetColor.idOrDefault(colorId);
+    }
+
+    /**
+     * Construtor de tres campos: preset sem rolagem publica.
+     *
+     * <p><b>Por que existe:</b> a flag {@code openRoll} entrou depois do preset, e
+     * o codigo antigo (e o NBT antigo) monta o preset com tres campos. Este
+     * atalho mantem esses chamadores funcionando e significa "preset particular",
+     * que era o unico comportamento antes.
+     */
+    public RollPreset(String name, String formula, String colorId) {
+        this(name, formula, colorId, false);
     }
 
     /**
@@ -131,6 +151,17 @@ public record RollPreset(String name, String formula, String colorId) {
      */
     public static RollPreset create(String rawName, String rawFormula, String rawColorId)
             throws PresetException {
+        return create(rawName, rawFormula, rawColorId, false);
+    }
+
+    /**
+     * Cria um preset validando o que a jogadora digitou, ja com a flag de rolagem
+     * publica.
+     *
+     * @param openRoll {@code true} para o resultado da rolagem ir para todo mundo
+     */
+    public static RollPreset create(String rawName, String rawFormula, String rawColorId,
+            boolean openRoll) throws PresetException {
 
         String name = rawName == null ? "" : rawName.trim().replaceAll("\\s+", " ");
         if (name.isEmpty()) {
@@ -200,7 +231,7 @@ public record RollPreset(String name, String formula, String colorId) {
                         () -> new PresetException("unknown color '" + rawColorId
                                 + "'. Valid colors: " + String.join(", ", RollPresetColor.ids()))).id();
 
-        return new RollPreset(name, formula, colorId);
+        return new RollPreset(name, formula, colorId, openRoll);
     }
 
     /** Erro de criacao com frase ja pronta para o chat (sem prefixo de cor). */

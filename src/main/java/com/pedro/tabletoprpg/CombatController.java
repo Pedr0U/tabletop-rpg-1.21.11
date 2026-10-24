@@ -11,6 +11,7 @@ import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.Mob;
+import net.minecraft.world.entity.Pose;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
@@ -47,6 +48,11 @@ import java.util.UUID;
  * e o monstro selecionado respeitam o limite de {@value #AURA_RADIUS} blocos
  * a partir de onde começaram (âncora). A aura não segue ninguém: ela fica
  * ancorada na posição inicial.
+ *
+ * <p><b>22/10/2026 (decisão do usuário):</b> no modo FREE (investigação
+ * livre, sem combate) o monstro é LIVRE — a âncora e a aura não limitam o
+ * movimento dele ({@link #isMonsterMovementFree}). Nos modos INVESTIGATION e
+ * COMBAT o limite continua valendo, como antes.
  */
 public final class CombatController {
 
@@ -198,7 +204,7 @@ public final class CombatController {
             // Clicou no mesmo monstro -> deseleciona (a aura some e o monstro
             // volta a ser uma "peça" congelada da mesa).
             clearSelection(level);
-            master.sendSystemMessage(Component.literal("§7[RPG] Monster deselected."));
+            master.sendSystemMessage(Component.translatable("message.tabletoprpg.monster_deselected"));
         } else {
             selectMob(level, master, mob);
         }
@@ -231,8 +237,8 @@ public final class CombatController {
             setPlayerAnchor(active);
         }
 
-        master.sendSystemMessage(Component.literal("§b[RPG] Monster selected: §e" + mob.getName().getString()
-                + "§b. §7Aura of " + AURA_RADIUS + " blocks active. Right-click a block to move it."));
+        master.sendSystemMessage(Component.translatable("message.tabletoprpg.monster_selected",
+                mob.getName().getString(), AURA_RADIUS));
         selectedMonsterUuid = mobUuid;
     }
 
@@ -242,17 +248,22 @@ public final class CombatController {
         }
         Entity entity = level.getEntity(selectedMonsterUuid);
         if (!(entity instanceof Mob mob)) {
-            master.sendSystemMessage(Component.literal("§c[RPG] Selected monster is no longer in the world."));
+            master.sendSystemMessage(Component.translatable("message.tabletoprpg.monster_gone"));
             clearSelection(level);
             RpgNetworking.sendAuraStateToAll(level.getServer());
             return;
         }
 
         // Valida o limite da aura (15 blocos da âncora do monstro).
+        // No modo FREE o monstro é LIVRE (decisão do usuário em 22/10/2026): a
+        // âncora e a aura NÃO limitam o movimento, e o destino é aceito para
+        // qualquer distância. Nos outros modos o limite continua como antes.
         BlockPos anchor = monsterAnchors.get(selectedMonsterUuid);
-        if (anchor != null && !isWithinAura(anchor, dest.getX() + 0.5, dest.getZ() + 0.5)) {
-            master.sendSystemMessage(Component.literal("§c[RPG] Destination is beyond the monster's aura ("
-                    + AURA_RADIUS + " blocks from its start)."));
+        if (!isMonsterMovementFree()
+                && anchor != null
+                && !isWithinAura(anchor, dest.getX() + 0.5, dest.getZ() + 0.5)) {
+            master.sendSystemMessage(Component.translatable(
+                    "message.tabletoprpg.monster_destination_beyond_aura", AURA_RADIUS));
             return;
         }
 
@@ -376,17 +387,21 @@ public final class CombatController {
         boolean cobreColuna = x1 > x0 && z1 > z0;
         if (cobreColuna
                 && !level.noCollision(mob, new AABB(x0, alvo.minY, z0, x1, alvo.maxY, z1))) {
-            master.sendSystemMessage(Component.literal(
-                    "§c[RPG] No room above that block to place the entity."));
+            master.sendSystemMessage(Component.translatable(
+                    "message.tabletoprpg.monster_no_room"));
             return;
         }
         monsterDestinations.put(selectedMonsterUuid,
                 new Vec3(dest.getX() + 0.5, groundY, dest.getZ() + 0.5));
-        master.sendSystemMessage(Component.literal("§a[RPG] Monster moving to §e" + dest.getX() + ", "
-                + dest.getY() + ", " + dest.getZ() + "§a."));
+        master.sendSystemMessage(Component.translatable("message.tabletoprpg.monster_moving",
+                dest.getX(), dest.getY(), dest.getZ()));
     }
 
     private static void tickControlledMonsters(MinecraftServer server) {
+        // Monstro deitado: a ficha de ameaça com HP <= 0 deita o monstro amarrado
+        // a ela (22/10/2026).
+        tickDownedThreatMobs(server);
+
         // Auto-recuperação: após reiniciar o servidor, os mobs inseridos
         // (marcados no NBT em insertEnemy) são re-registrados.
         selfHealInsertedMobs(server);
@@ -401,6 +416,12 @@ public final class CombatController {
                     Vec3 dest = monsterDestinations.get(uuid);
                     if (dest != null) {
                         // Andando: move em linha reta até o destino e olha para ele.
+                        //
+                        // Aqui NÃO existe clamp de aura: o limite de distância da
+                        // âncora nunca foi aplicado por tick, e sim na escolha do
+                        // destino (moveSelectedMonster) — que, no modo FREE, nem
+                        // existe (isMonsterMovementFree). O monstro sempre chega
+                        // onde o Mestre mandou, dentro ou fora da aura.
                         Vec3 delta = dest.subtract(pos);
                         double dist = delta.horizontalDistance();
                         if (dist <= MOVE_SPEED) {
@@ -461,6 +482,100 @@ public final class CombatController {
         }
     }
 
+    // ------------------------------------------------------------------
+    // MONSTRO DEITADO (HP DA FICHA <= 0)
+    // ------------------------------------------------------------------
+
+    /**
+     * Tag que marca o mob como deitado por causa da ficha.
+     *
+     * <p>A pose e a flag de IA sao gravadas no NBT do mob pelo vanilla, mas a TAG e
+     * o que diz "esse deitado e NOSSO": sem ela, o mob que a mesa ja mantinha
+     * congelado (peça, monstro selecionado) seria acordado por engano quando o HP
+     * da ficha voltasse a positivo.
+     */
+    private static final String TAG_DOWNED = "tabletoprpg_downed";
+
+    /**
+     * Deita (ou levanta) os monstros amarrados a uma ficha de ameaça.
+     *
+     * <p><b>Regra do Mestre (22/10/2026):</b> ficha com HP &lt;= 0 = monstro DEITADO,
+     * e nao morto. Ele fica no mundo, deitado, sem andar, sem atacar e sem vagar.
+     * Com o HP de volta a positivo, ele levanta sozinho.
+     *
+     * <p><b>Por que no servidor:</b> a pose e a flag de IA sao estado do servidor, e o
+     * cliente nao decide nada disso. E o mesmo caminho do personagem deitado do
+     * jogador ({@link DamageControlHandler}).
+     *
+     * <p><b>Por que so os mobs amarrados:</b> o percuso e o cache do vinculo (mob ->
+     * ficha), e nao todas as entidades do mundo.
+     */
+    private static void tickDownedThreatMobs(MinecraftServer server) {
+        // O cache do vinculo nasce vazio depois de um reinicio do servidor: e a tag
+        // do mob que sabe do vinculo. Refazemos o cache uma vez por sessao.
+        ThreatSheetBinding.selfHealOnce(server);
+        for (Map.Entry<UUID, String> entry : ThreatSheetBinding.boundMobs().entrySet()) {
+            Mob mob = ThreatSheetBinding.mobEntity(server, entry.getKey());
+            if (mob == null) {
+                continue; // o mob nao existe mais
+            }
+            ThreatSheet sheet = ThreatSheetStore.findAnyById(entry.getValue());
+            if (sheet == null) {
+                // A ficha nao esta em memoria (Mestre fora da sessao, ou ficha apagada):
+                // nao mexemos no mob. Quem manda no estado dele e a ficha, e ela nao
+                // esta aqui.
+                continue;
+            }
+            if (sheet.vitals().hp() <= 0) {
+                applyDowned(mob);
+            } else {
+                clearDowned(mob);
+            }
+        }
+    }
+
+    /**
+     * Deita o mob: pose de nado (a unica vanilla que deita sem cama) e sem IA.
+     *
+     * <p><b>Por que a pose e a mesma do personagem deitado:</b> o vanilla nao tem pose
+     * "deitado de costas" (javap Entity$Pose: STANDING, SLEEPING, SWIMMING, ...), e
+     * SWIMMING e a unica que deixa a criatura no chao sem exigir cama.
+     */
+    private static void applyDowned(Mob mob) {
+        if (mob.getPose() != Pose.SWIMMING) {
+            mob.setPose(Pose.SWIMMING);
+        }
+        if (!mob.isNoAi()) {
+            mob.setNoAi(true);
+        }
+        // Zera SO o movimento horizontal: zerar o eixo Y prenderia o mob parado no
+        // ar caso ele estivesse caindo.
+        Vec3 motion = mob.getDeltaMovement();
+        if (motion.x != 0.0 || motion.z != 0.0) {
+            mob.setDeltaMovement(0.0, motion.y, 0.0);
+        }
+        if (!mob.getTags().contains(TAG_DOWNED)) {
+            mob.addTag(TAG_DOWNED);
+        }
+    }
+
+    /** Levanta o mob: so mexe nele se foi NOS que deitou. */
+    private static void clearDowned(Mob mob) {
+        if (!mob.getTags().contains(TAG_DOWNED)) {
+            return; // nao foi nos que deitou: nao mexe na pose nem na IA dele
+        }
+        mob.removeTag(TAG_DOWNED);
+        if (mob.getPose() == Pose.SWIMMING) {
+            mob.setPose(Pose.STANDING);
+        }
+        // A IA so volta se o mob nao esta congelado por outra regra da mesa (peça,
+        // monstro selecionado, ancora) nem pela Camera Tool.
+        if (!isFrozenByTable(mob.getUUID())
+                && !mob.getTags().contains(CameraToolManager.CAMERA_TAG)) {
+            mob.setNoAi(false);
+        }
+    }
+
     /**
      * Faz o mob olhar para um ponto (rotação manual, sem IA ÔÇö o mob está
      * congelado com noAi=true, então o lookControl vanilla não roda).
@@ -481,6 +596,22 @@ public final class CombatController {
     // ------------------------------------------------------------------
     // LIMITES (AURAS)
     // ------------------------------------------------------------------
+
+    /**
+     * O monstro pode se mover sem limite de distância da âncora?
+     *
+     * <p><b>22/10/2026 (decisão do usuário):</b> no modo FREE (investigação
+     * livre, sem combate) os monstros são LIVRES — a âncora e a aura não
+     * limitam o movimento deles. Nos modos INVESTIGATION e COMBAT o limite de
+     * {@value #AURA_RADIUS} blocos continua valendo, como antes.
+     *
+     * <p>Vale para o monstro selecionado e para os mobs inseridos (peças da
+     * mesa): no modo FREE nada prende a peça da mesa ao ponto onde ela foi
+     * escolhida.
+     */
+    public static boolean isMonsterMovementFree() {
+        return SessionManager.getMode() == SessionManager.GameMode.FREE;
+    }
 
     /** Verifica se (x, z) está dentro do círculo de raio AURA_RADIUS ao redor da âncora. */
     public static boolean isWithinAura(BlockPos anchor, double x, double z) {
@@ -598,6 +729,56 @@ public final class CombatController {
         return cameraMobs;
     }
 
+    /** Mobs inseridos pelo mestre (UUID), como estão em memória. */
+    public static Set<UUID> getInsertedMobs() {
+        return insertedMobs;
+    }
+
+    /** Este mob foi inserido pelo mestre (/rpg insert enemy)? */
+    public static boolean isInsertedMob(UUID mobUuid) {
+        return mobUuid != null && insertedMobs.contains(mobUuid);
+    }
+
+    /**
+     * Esquece um mob inserido: ele saiu do mundo (morto ou removido), então
+     * não pode continuar na lista de inseridos nem na de câmera.
+     */
+    public static void forgetInsertedMob(UUID mobUuid) {
+        if (mobUuid == null) {
+            return;
+        }
+        insertedMobs.remove(mobUuid);
+        cameraMobs.remove(mobUuid);
+    }
+
+    /**
+     * Aplica (ou tira) a invulnerabilidade dos mobs inseridos pelo mestre.
+     *
+     * <p><b>Por que mexer neles:</b> o {@code /rpg insert enemy} cria o mob
+     * invulnerável (é uma "peça" da mesa, não um alvo). Com a opção "Mobs podem
+     * levar dano" LIGADA, essa invulnerabilidade é o que impede o mob de
+     * apanhar; com a opção DESLIGADA, ela volta.
+     *
+     * @return quantos mobs foram alterados
+     */
+    public static int applyInvulnerabilityToInsertedMobs(MinecraftServer server, boolean invulnerable) {
+        if (server == null) {
+            return 0;
+        }
+        int changed = 0;
+        for (UUID uuid : new ArrayList<>(insertedMobs)) {
+            for (ServerLevel level : server.getAllLevels()) {
+                Entity entity = level.getEntity(uuid);
+                if (entity instanceof Mob mob) {
+                    mob.setInvulnerable(invulnerable);
+                    changed++;
+                    break;
+                }
+            }
+        }
+        return changed;
+    }
+
     /**
      * Auto-recuperacao dos mobs com camera (marca NBT "tabletoprpg_camera"): os mobs
      * persistem no mundo, mas o Set em memoria pode ser perdido (JVM nova) ou ficar
@@ -620,12 +801,51 @@ public final class CombatController {
             for (Entity e : level.getAllEntities()) {
                 if (e instanceof Mob mob && mob.getTags().contains("tabletoprpg_camera")) {
                     cameraMobs.add(mob.getUUID());
+                    // A Camera Tool congela a criatura (PARTE 3): o mob com
+                    // camera para de andar, de vagar e de atacar. O
+                    // congelamento e re-aplicado aqui porque a flag de IA nao
+                    // sobrevive ao reinicio do servidor -- a tag sim. Sem esta
+                    // linha o mob voltaria a andar depois do restart.
+                    mob.setNoAi(true);
                     if (mob.getTags().contains("tabletoprpg_inserted")) {
                         insertedMobs.add(mob.getUUID());
                     }
                 }
             }
         }
+    }
+
+    /**
+     * Este mob precisa continuar congelado ({@code noAi=true}) mesmo sem a
+     * Camera Tool?
+     *
+     * <p><b>Por que isto existe (PARTE 3):</b> a Camera Tool congela a
+     * criatura, e ao tirar a camera o monstro volta a se mover. Mas ha mobs
+     * que o {@code CombatController} segura por outros motivos, e esses nao
+     * podem voltar a andar:
+     *
+     * <ul>
+     *   <li><b>Peça da mesa</b> ({@code insertedMobs}): mob inserido pelo
+     *       Mestre, que nunca age sozinho.</li>
+     *   <li><b>Monstro selecionado</b> ({@code controlledMonsters}): o
+     *       Mestre esta movendo ele, e o movimento sem IA depende do
+     *       congelamento.</li>
+     *   <li><b>Ja selecionado antes</b> ({@code monsterAnchors}): a ancora
+     *       do monstro sobrevive a deselecao, e o monstro deselecionado
+     *       <b>continua congelado</b> (ver {@link #clearSelection}). E o
+     *       registro que sobrou para saber que ele ja foi uma peça da mesa.
+     *       </li>
+     * </ul>
+     *
+     * @return true se o mob deve continuar congelado
+     */
+    public static boolean isFrozenByTable(UUID mobUuid) {
+        if (mobUuid == null) {
+            return false;
+        }
+        return insertedMobs.contains(mobUuid)
+                || controlledMonsters.contains(mobUuid)
+                || monsterAnchors.containsKey(mobUuid);
     }
 
     /**
@@ -668,12 +888,69 @@ public final class CombatController {
             return;
         }
         Entity entity = level.getEntity(selectedMonsterUuid);
-        if (entity != null) {
-            entity.discard();
+        if (entity instanceof Mob mob) {
+            // Descartar e limpar as listas internas é o mesmo caminho do
+            // /rpg remove enemy @e[name="..."] (removeMob).
+            removeMob(mob);
+        } else {
+            if (entity != null) {
+                entity.discard();
+            }
+            cameraMobs.remove(selectedMonsterUuid);
+            insertedMobs.remove(selectedMonsterUuid);
         }
-        cameraMobs.remove(selectedMonsterUuid);
-        insertedMobs.remove(selectedMonsterUuid);
         clearSelection(level);
+    }
+
+    /**
+     * Remove um mob do RPG do mundo: descarta a entidade e apaga o mob das
+     * listas internas (inseridos, câmera, controlados, destino e âncora).
+     *
+     * <p>É o caminho usado tanto pelo {@code /rpg remove enemy} (o mob
+     * selecionado) quanto pelo {@code /rpg remove enemy @e[name="..."]} (todos
+     * os mobs do RPG com aquele nome). O vínculo da ficha de ameaça também é
+     * solto, para o cache não continuar apontando para um mob que saiu do
+     * mundo.
+     */
+    public static void removeMob(Mob mob) {
+        if (mob == null) {
+            return;
+        }
+        UUID uuid = mob.getUUID();
+        ThreatSheetBinding.unbind(mob);
+        mob.discard();
+        cameraMobs.remove(uuid);
+        insertedMobs.remove(uuid);
+        controlledMonsters.remove(uuid);
+        monsterDestinations.remove(uuid);
+        monsterAnchors.remove(uuid);
+        if (uuid.equals(selectedMonsterUuid)) {
+            selectedMonsterUuid = null;
+        }
+    }
+
+    /**
+     * Este mob é uma peça da mesa do RPG (invocado pelo Mestre, marcado pela
+     * câmera ou controlado por ele)?
+     *
+     * <p>É o filtro que o {@code /rpg remove enemy @e[name="..."]} usa: só
+     * mobs do RPG são removidos, nunca uma criatura natural do mundo que
+     * por acaso tenha o mesmo nome.
+     *
+     * <p>A marcação é conferida em memória (listas do servidor) e também nas
+     * tags NBT ("tabletoprpg_inserted" / "tabletoprpg_camera"), que
+     * sobrevivem ao reinício do servidor.
+     */
+    public static boolean isRpgMob(Mob mob) {
+        if (mob == null) {
+            return false;
+        }
+        UUID uuid = mob.getUUID();
+        if (insertedMobs.contains(uuid) || cameraMobs.contains(uuid) || controlledMonsters.contains(uuid)) {
+            return true;
+        }
+        Set<String> tags = mob.getTags();
+        return tags.contains("tabletoprpg_inserted") || tags.contains(CameraToolManager.CAMERA_TAG);
     }
 
     // ------------------------------------------------------------------

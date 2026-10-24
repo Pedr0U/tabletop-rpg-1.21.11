@@ -198,7 +198,66 @@ public final class SpectatorCameraController {
     /** Alvos do carrossel vindos do servidor (sem incluir a si mesmo). */
     private static List<RpgNetworking.SpectatorTargetsPayload.TargetData> targets = List.of();
 
-    /** Índice do alvo atual: 0 = si mesmo, 1+ = targets.get(index - 1). */
+    /**
+     * O Mestre ligou o modo de câmera de espectador na mão (tecla propria).
+     *
+     * <p><b>Por que existe (PARTE 3):</b> a câmera de espectador liga sozinha
+     * para o jogador <b>travado</b> (o turno e de outra pessoa). O Mestre nunca
+     * e travado pelo servidor (ele sempre pode agir), entao sem esta flag ele
+     * nunca entraria no mesmo modo -- que e justamente o que o Mestre precisa
+     * para assistir a mesa.
+     *
+     * <p>Com a flag ligada, o cliente trata o Mestre como travado: os quatro
+     * modos de câmera (tecla V), o carrossel de alvos (clique esquerdo/direito)
+     * e o F5 bloqueado entram pelo mesmo caminho do jogador travado.
+     */
+    private static boolean masterSpectator = false;
+
+    /** O Mestre esta no modo de câmera de espectador? */
+    public static boolean isMasterSpectator() {
+        return masterSpectator;
+    }
+
+    /**
+     * Liga/desliga o modo de câmera de espectador do Mestre.
+     *
+     * <p>Só o Mestre pode usar: o papel e decidido pelo servidor e chega no
+     * cliente pelo payload (retrato das trancas no JOIN, ou o menu da sessao
+     * na tecla R).
+     *
+     * <p>A trava local ({@link TabletopRpgClient#locked}) e o que liga os
+     * controles de espectador do cliente (carrossel de cliques e F5, no
+     * {@code MinecraftMixin}) e o modo espectador da câmera. Por isso ela e
+     * ligada aqui: o servidor nunca trava o Mestre.
+     */
+    public static void toggleMasterSpectator() {
+        Minecraft client = Minecraft.getInstance();
+        if (client.player == null) {
+            return;
+        }
+        if (!TabletopRpgClient.isMaster) {
+            client.player.displayClientMessage(
+                    Component.translatable("message.tabletop-rpg.spectator_only_master"), true);
+            return;
+        }
+        masterSpectator = !masterSpectator;
+        // A trava local e a chave dos controles de espectador. O Mestre nunca
+        // e travado pelo servidor, entao esta e a unica forma de ligar o
+        // carrossel de cliques e os modos de câmera para ele.
+        TabletopRpgClient.locked = masterSpectator;
+        client.player.displayClientMessage(
+                Component.translatable("message.tabletoprpg.camera_spectator", masterSpectator ? "ON" : "OFF"), true);
+        TabletopRpgClient.LOGGER.info("[TabletopRPG-Client] Camera de espectador do Mestre: {}",
+                masterSpectator ? "ON" : "OFF");
+    }
+
+    /**
+     * Índice do alvo atual: 0 = si mesmo, 1+ = targets.get(index - 1).
+     *
+     * <p>Para o <b>Mestre</b> a posição 0 nao e ele mesmo (ele nunca e alvo
+     * de si mesmo): o índice é o da lista do servidor direto. Ver
+     * {@link #listIndex(int)}.
+     */
     private static int targetIndex = 0;
 
     /** Contador do heartbeat diagnostico do carrossel (08/10/2026). */
@@ -226,6 +285,9 @@ public final class SpectatorCameraController {
         freeCamInitialized = false;
         thirdPersonLookInitialized = false;
         freeCamPos = null;
+        // A câmera de espectador do Mestre é estado da sessão: ela não
+        // sobrevive a uma saída do mundo.
+        masterSpectator = false;
         // O id zerado e proposital (08/10/2026): o tick trata "0 -> id novo" como
         // troca de entidade e re-pede a lista de alvos ao servidor no primeiro tick da
         // sessao nova. Sem este re-arma, quem saia no meio de um modo e voltava ficava
@@ -357,6 +419,28 @@ public final class SpectatorCameraController {
     }
 
     /**
+     * Quantas posições tem o carrossel.
+     *
+     * <p>Para o jogador comum a posição 0 é ele mesmo. Para o <b>Mestre</b>
+     * essa posição não existe: o mestre nunca é alvo de ninguém (nem de si
+     * mesmo), então o carrossel dele começa direto na lista do servidor.
+     */
+    private static int carouselSize() {
+        return masterSpectator ? targets.size() : targets.size() + 1;
+    }
+
+    /**
+     * Índice do alvo dentro da lista do servidor.
+     *
+     * <p>O índice 0 do carrossel é o próprio jogador -- exceto para o Mestre,
+     * que nunca é alvo de si mesmo: para ele o índice do carrossel e o índice
+     * da lista.
+     */
+    private static int listIndex(int index) {
+        return masterSpectator ? index : index - 1;
+    }
+
+    /**
      * Atualiza a lista de alvos do carrossel vinda do servidor. O próprio
      * jogador é filtrado (ele é sempre o alvo 0 localmente).
      */
@@ -370,7 +454,7 @@ public final class SpectatorCameraController {
             }
         }
         targets = filtered;
-        int size = targets.size() + 1;
+        int size = carouselSize();
         if (targetIndex >= size) {
             targetIndex = Math.max(0, size - 1);
         }
@@ -408,7 +492,7 @@ public final class SpectatorCameraController {
                 mode = Mode.THIRD_PERSON;
                 if (client.player != null) {
                     client.player.displayClientMessage(
-                            Component.literal("§b[Camera] §fNormal camera"), true);
+                            Component.translatable("message.tabletoprpg.camera_normal"), true);
                 }
                 return;
             }
@@ -416,7 +500,7 @@ public final class SpectatorCameraController {
             if (client.player != null) {
                 resetTransition(client);
                 client.player.displayClientMessage(
-                        Component.literal("§b[Camera] §f" + Mode.FREE.getDisplayName()), true);
+                        Component.translatable("message.tabletoprpg.camera_mode", Mode.FREE.getDisplayName()), true);
             }
             return;
         }
@@ -426,14 +510,14 @@ public final class SpectatorCameraController {
         if (client.player != null) {
             resetTransition(client);
             client.player.displayClientMessage(
-                    Component.literal("§b[Camera] §f" + mode.getDisplayName()), true);
+                    Component.translatable("message.tabletoprpg.camera_mode", mode.getDisplayName()), true);
         }
     }
 
     /** Carrossel: próximo alvo (clique esquerdo). */
     public static void cycleNext() {
-        int size = targets.size() + 1;
-        if (size <= 1) {
+        int size = carouselSize();
+        if (size <= (masterSpectator ? 0 : 1)) {
             // Log diagnostico (08/10/2026): prova que o clique chegou e a lista
             // estava vazia -- o sintoma "nao consigo trocar a camera" da jogadora.
             TabletopRpgClient.LOGGER.info("[TabletopRPG-Client] CycleNext ignorado: carrossel sem alvos.");
@@ -446,8 +530,8 @@ public final class SpectatorCameraController {
 
     /** Carrossel: alvo anterior (clique direito). */
     public static void cyclePrev() {
-        int size = targets.size() + 1;
-        if (size <= 1) {
+        int size = carouselSize();
+        if (size <= (masterSpectator ? 0 : 1)) {
             TabletopRpgClient.LOGGER.info("[TabletopRPG-Client] CyclePrev ignorado: carrossel sem alvos.");
             return;
         }
@@ -465,13 +549,13 @@ public final class SpectatorCameraController {
      */
     private static void logCycle(String direcao) {
         Minecraft client = Minecraft.getInstance();
-        if (targetIndex == 0) {
+        int idx = listIndex(targetIndex);
+        if (idx < 0) {
             TabletopRpgClient.LOGGER.info(
                     "[TabletopRPG-Client] Clique carrossel ({}): indice 0 = jogador proprio.", direcao);
             return;
         }
-        int idx = targetIndex - 1;
-        if (client.level == null || idx < 0 || idx >= targets.size()) {
+        if (client.level == null || idx >= targets.size()) {
             TabletopRpgClient.LOGGER.info(
                     "[TabletopRPG-Client] Clique carrossel ({}): indice {} fora da lista (size={}).",
                     direcao, targetIndex, targets.size());
@@ -482,13 +566,13 @@ public final class SpectatorCameraController {
         if (entity != null) {
             TabletopRpgClient.LOGGER.info(
                     "[TabletopRPG-Client] Clique carrossel ({}): indice {}/{} alvoId={} resolvido={} pos=({}).",
-                    direcao, targetIndex, targets.size() + 1, t.entityId(),
+                    direcao, targetIndex, carouselSize(), t.entityId(),
                     entity.getType().getDescriptionId(),
                     String.format("%.1f, %.1f, %.1f", entity.getX(), entity.getY(), entity.getZ()));
         } else {
             TabletopRpgClient.LOGGER.info(
                     "[TabletopRPG-Client] Clique carrossel ({}): indice {}/{} alvoId={} NULO (entidade nao existe no cliente).",
-                    direcao, targetIndex, targets.size() + 1, t.entityId());
+                    direcao, targetIndex, carouselSize(), t.entityId());
         }
     }
 
@@ -550,7 +634,7 @@ public final class SpectatorCameraController {
                 }
                 TabletopRpgClient.LOGGER.info(
                         "[TabletopRPG-Client] Carrossel heartbeat: idx={}/{} alvos resolviveis={}/{} locked={} active={} modo={}",
-                        targetIndex, targets.size() + 1, resolviveis, targets.size(),
+                        targetIndex, carouselSize(), resolviveis, targets.size(),
                         locked, active, mode);
             }
         }
@@ -572,7 +656,7 @@ public final class SpectatorCameraController {
             freeCamSelected = false;
             resetTransition(client);
             client.player.displayClientMessage(
-                    Component.literal("§b[Camera] §fNormal camera"), true);
+                    Component.translatable("message.tabletoprpg.camera_normal"), true);
         }
 
         if (!locked && !freeCamSelected) {
@@ -582,8 +666,14 @@ public final class SpectatorCameraController {
 
         Entity target = getCurrentTarget(client);
         if (target == null) {
-            deactivate(client);
-            return;
+            // O MESTRE nunca e alvo de si mesmo: se a lista de alvos esta
+            // vazia (ou o alvo sumiu do mundo) nao ha o que espectar. A
+            // camera LIVRE e a unica que nao precisa de alvo -- ela voa a
+            // partir do proprio corpo.
+            if (!(masterSpectator && mode == Mode.FREE)) {
+                deactivate(client);
+                return;
+            }
         }
 
         if (!active) {
@@ -598,7 +688,7 @@ public final class SpectatorCameraController {
             // rejoin (indice do carrossel e modo de camera).
             TabletopRpgClient.LOGGER.info(
                     "[TabletopRPG-Client] Camera de espectador ativada: modo={} idx={}/{}",
-                    mode, targetIndex, targets.size() + 1);
+                    mode, targetIndex, carouselSize());
         }
 
         switch (mode) {
@@ -829,15 +919,15 @@ public final class SpectatorCameraController {
         if (client.level == null || client.player == null) {
             return null;
         }
-        if (targetIndex == 0) {
-            return client.player;
-        }
-        int idx = targetIndex - 1;
+        int idx = listIndex(targetIndex);
         if (idx < 0 || idx >= targets.size()) {
-            return client.player;
+            // O jogador comum volta para si mesmo (a posicao 0 do carrossel).
+            // O MESTRE nao pode ser alvo de si mesmo: sem alvo valido a
+            // camera de espectador dele simplesmente nao liga.
+            return masterSpectator ? null : client.player;
         }
         Entity entity = client.level.getEntity(targets.get(idx).entityId());
-        return entity != null ? entity : client.player;
+        return entity != null ? entity : (masterSpectator ? null : client.player);
     }
 
     /**

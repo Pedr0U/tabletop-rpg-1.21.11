@@ -129,7 +129,7 @@ public class SpellFormScreen extends Screen {
                                     new SheetData.Spell("", circle, "", "", "", "", "").circleLabel()));
                         })
                 .bounds(boxX, y, boxW, ROW_H - 2)
-                .tooltip(Tooltip.create(Component.literal("Círculo da magia (1 a 5)")))
+                .tooltip(Tooltip.create(Component.translatable("screen.tabletoprpg.spell_form.circle_tooltip")))
                 .build());
         y += ROW_H;
 
@@ -145,10 +145,10 @@ public class SpellFormScreen extends Screen {
 
         int buttonW = (panelW - 24) / 2;
         int buttonY = this.height - FOOTER_H;
-        saveButton = addRenderableWidget(Button.builder(Component.literal("Save"), b -> save())
+        saveButton = addRenderableWidget(Button.builder(Component.translatable("screen.tabletoprpg.spell_form.save"), b -> save())
                 .bounds(panelX + 8, buttonY, buttonW, 20)
                 .build());
-        addRenderableWidget(Button.builder(Component.literal("Cancel"), b -> onClose())
+        addRenderableWidget(Button.builder(Component.translatable("screen.tabletoprpg.spell_form.cancel"), b -> onClose())
                 .bounds(panelX + panelW - 8 - buttonW, buttonY, buttonW, 20)
                 .build());
 

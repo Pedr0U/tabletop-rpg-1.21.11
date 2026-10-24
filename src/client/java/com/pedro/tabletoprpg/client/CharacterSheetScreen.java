@@ -536,11 +536,11 @@ public abstract class CharacterSheetScreen extends Screen {
         Button extra = buildFooterExtra(panelX, backY, panelW, 20);
         if (extra != null) {
             addRenderableWidget(extra);
-            addRenderableWidget(Button.builder(Component.literal("Back"), b -> close())
+            addRenderableWidget(Button.builder(Component.translatable("screen.tabletoprpg.character_sheet.back"), b -> close())
                     .bounds(panelX, backY, Math.max(60, panelW - 72), 20)
                     .build());
         } else {
-            addRenderableWidget(Button.builder(Component.literal("Back"), b -> close())
+            addRenderableWidget(Button.builder(Component.translatable("screen.tabletoprpg.character_sheet.back"), b -> close())
                     .bounds(panelX, backY, panelW, 20)
                     .build());
         }
@@ -891,7 +891,7 @@ public abstract class CharacterSheetScreen extends Screen {
         }
         box.setTextColor(COL_BOX_TEXT);
         box.setTextColorUneditable(COL_BOX_TEXT_OFF);
-        box.setHint(Component.literal("click to edit"));
+        box.setHint(Component.translatable("screen.tabletoprpg.character_sheet.click_to_edit"));
         applyEditable(box);
         box.setResponder(value -> {
             if (suppressNotify || !canEdit) {

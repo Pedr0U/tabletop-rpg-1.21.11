@@ -37,7 +37,7 @@ public class DiceRollScreen extends Screen {
     private int modifier = 0;
 
     public DiceRollScreen(Screen parentScreen) {
-        super(Component.literal("Dice Roll"));
+        super(Component.translatable("screen.tabletoprpg.dice_roll.title"));
         this.parentScreen = parentScreen; // Guarda a tela anterior para podermos voltar
     }
 
@@ -95,14 +95,14 @@ public class DiceRollScreen extends Screen {
         // --- BOTÕES DE AÇÃO ---
         int actionX = panelX + (panelWidth - buttonWidth) / 2;
 
-        this.addRenderableWidget(Button.builder(Component.literal("Roll!"), b -> rollDice())
+        this.addRenderableWidget(Button.builder(Component.translatable("screen.tabletoprpg.dice_roll.roll"), b -> rollDice())
                 .bounds(actionX, actionY, buttonWidth, 20).build());
 
         int halfW = (buttonWidth - gap) / 2;
-        this.addRenderableWidget(Button.builder(Component.literal("Clear"), b -> clearRoll())
+        this.addRenderableWidget(Button.builder(Component.translatable("screen.tabletoprpg.dice_roll.clear"), b -> clearRoll())
                 .bounds(actionX, bottomY, halfW, 20).build());
 
-        this.addRenderableWidget(Button.builder(Component.literal("Back"), b -> this.minecraft.setScreen(parentScreen))
+        this.addRenderableWidget(Button.builder(Component.translatable("screen.tabletoprpg.dice_roll.back"), b -> this.minecraft.setScreen(parentScreen))
                 .bounds(actionX + halfW + gap, bottomY, halfW, 20).build());
 
         // "Presets", ABAIXO da linha Clear/Back e centralizado (01/10/2026).
@@ -113,7 +113,7 @@ public class DiceRollScreen extends Screen {
         // esconder sem valor de rolagem tiraria da jogadora a unica forma de abrir
         // a lista quando ela so quer reordenar ou apagar.
         int presetY = panelY + (int) (400 * scale);
-        this.presetsButton = Button.builder(Component.literal("Presets"), b -> openPresets())
+        this.presetsButton = Button.builder(Component.translatable("screen.tabletoprpg.dice_roll.presets"), b -> openPresets())
                 .bounds(actionX, presetY, buttonWidth, 20).build();
         this.addRenderableWidget(presetsButton);
     }

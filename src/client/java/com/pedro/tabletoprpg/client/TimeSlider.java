@@ -50,7 +50,7 @@ public class TimeSlider extends AbstractSliderButton {
 
     @Override
     protected void updateMessage() {
-        setMessage(Component.literal("World Time: " + formatTime(getTimeOfDay())));
+        setMessage(Component.translatable("screen.tabletoprpg.time_slider.world_time", formatTime(getTimeOfDay())));
     }
 
     @Override

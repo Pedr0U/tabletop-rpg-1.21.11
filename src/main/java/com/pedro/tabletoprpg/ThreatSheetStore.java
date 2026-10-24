@@ -42,6 +42,18 @@ public final class ThreatSheetStore {
 
     private static final Map<UUID, List<ThreatSheet>> BY_PLAYER = new ConcurrentHashMap<>();
 
+    /**
+     * Indice global id -&gt; ficha.
+     *
+     * <p><b>E cache, como os mapas do {@link ThreatSheetBinding}:</b> a fonte da
+     * verdade sao as listas do {@link #BY_PLAYER}. Ele existe porque o monstro
+     * deitado (HP da ficha &lt;= 0) e procurado pelo ID da ficha, e o ID nao diz de
+     * QUEM e a ficha: a ficha e do Mestre, e o monstro nao sabe quem e o Mestre.
+     * Sem o indice, o tick teria de varrer as fichas de todos os Mestres a cada
+     * tick.
+     */
+    private static final Map<String, ThreatSheet> BY_ID = new ConcurrentHashMap<>();
+
     private ThreatSheetStore() {
     }
 
@@ -60,6 +72,7 @@ public final class ThreatSheetStore {
         }
         if (sheets == null || sheets.isEmpty()) {
             BY_PLAYER.remove(uuid);
+            rebuildIndex();
             return;
         }
         List<ThreatSheet> copy = new ArrayList<>();
@@ -74,6 +87,37 @@ public final class ThreatSheetStore {
             }
         }
         BY_PLAYER.put(uuid, Collections.unmodifiableList(copy));
+        rebuildIndex();
+    }
+
+    /**
+     * A ficha com esse id, de QUALQUER Mestre, ou {@code null}.
+     *
+     * <p>E a busca que o monstro deitado faz: o vinculo mora na tag do mob, e a tag
+     * so tem o id da ficha.
+     */
+    public static ThreatSheet findAnyById(String id) {
+        if (id == null || id.isBlank()) {
+            return null;
+        }
+        return BY_ID.get(id.trim());
+    }
+
+    /**
+     * Refaz o indice id -&gt; ficha.
+     *
+     * <p>Chamado depois de QUALQUER mudanca na lista de fichas de alguem: e o que
+     * garante que o indice nao sirva uma ficha apagada nem perca uma ficha nova.
+     */
+    private static void rebuildIndex() {
+        BY_ID.clear();
+        for (List<ThreatSheet> sheets : BY_PLAYER.values()) {
+            for (ThreatSheet sheet : sheets) {
+                if (sheet.hasId()) {
+                    BY_ID.put(sheet.id(), sheet);
+                }
+            }
+        }
     }
 
     /** A ficha com essa chave, ou {@code null}. */
@@ -207,6 +251,7 @@ public final class ThreatSheetStore {
             if (!taken) {
                 current.add(blank);
                 BY_PLAYER.put(uuid, Collections.unmodifiableList(current));
+                rebuildIndex();
                 return blank;
             }
         }
@@ -312,6 +357,7 @@ public final class ThreatSheetStore {
             }
             current.set(index, stored);
             BY_PLAYER.put(uuid, Collections.unmodifiableList(current));
+            rebuildIndex();
             return previousKey.equals(key) ? SaveResult.UPDATED : SaveResult.RENAMED;
         }
         if (!sheet.hasId()) {
@@ -319,6 +365,7 @@ public final class ThreatSheetStore {
         }
         current.add(sheet);
         BY_PLAYER.put(uuid, Collections.unmodifiableList(current));
+        rebuildIndex();
         return SaveResult.CREATED;
     }
 
@@ -380,12 +427,14 @@ public final class ThreatSheetStore {
         } else {
             BY_PLAYER.put(uuid, Collections.unmodifiableList(out));
         }
+        rebuildIndex();
         return removed;
     }
 
     /** Limpa o cache. Existe para teste e limpeza explicita; o logout nao chama. */
     public static void forget(UUID uuid) {
         BY_PLAYER.remove(uuid);
+        rebuildIndex();
     }
 
     /** Motivo da recusa do save, com frase ja pronta para a tela e para o chat. */

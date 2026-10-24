@@ -165,9 +165,13 @@ public class MasterCommands {
 
                 // /rpg remove enemy  (só o mestre) -> remove o mob selecionado
                 // (clique direito nele primeiro). 1 mob por execução.
+                // /rpg remove enemy @e[name="Nome Exato"] -> remove TODOS os
+                // mobs do RPG com aquele nome exato (22/10/2026).
                 .then(Commands.literal("remove")
                     .then(Commands.literal("enemy")
-                        .executes(MasterCommands::removeEnemy)))
+                        .executes(MasterCommands::removeEnemy)
+                        .then(Commands.argument("selector", StringArgumentType.greedyString())
+                            .executes(MasterCommands::removeEnemyBySelector))))
 
                 // /rpg block_lock          -> arma o pedido de TRAVAR; o próximo
                 //   clique do mestre num bloco tranca aquele bloco.
@@ -199,7 +203,7 @@ public class MasterCommands {
                                     .executes(MasterCommands::presetCreate)))))
                     .then(Commands.literal("use")
                         .then(Commands.argument("name", StringArgumentType.string())
-                            .suggests(MasterCommands::suggestOwnRollPresets)
+                            .suggests(MasterCommands::suggestUsableRollPresets)
                             .executes(MasterCommands::presetUse)))
                     .then(Commands.literal("delete")
                         .then(Commands.argument("name", StringArgumentType.string())
@@ -226,7 +230,7 @@ public class MasterCommands {
 
     private static int openMenu(CommandContext<CommandSourceStack> ctx) {
         if (!(ctx.getSource().getEntity() instanceof ServerPlayer player)) {
-            ctx.getSource().sendFailure(Component.literal("Only players can open the RPG menu."));
+            ctx.getSource().sendFailure(Component.translatable("message.tabletoprpg.only_players_menu"));
             return 0;
         }
 
@@ -239,17 +243,20 @@ public class MasterCommands {
         try {
             ServerPlayer player = ctx.getSource().getPlayerOrException();
             if (SessionManager.setMaster(player)) {
-                broadcast(ctx, "§6§e" + player.getName().getString() + " §fis now the §bGame Master§f!");
+                broadcast(ctx, "��6��e" + player.getName().getString() + " ��fis now the ��bGame Master��f!");
                 RpgNetworking.sendToAll(ctx.getSource().getServer());
+                BlockLockManager.sendSnapshotTo(player);
                 refreshChatMenu(ctx);
                 return 1;
             } else {
-                ctx.getSource().sendFailure(Component.literal("§c[RPG] A Game Master is already assigned (" + SessionManager.getMasterName() + ")."));
+                ctx.getSource().sendFailure(Component.translatable("message.tabletoprpg.master_slots_in_use",
+                        SessionManager.getMasterCount(), SessionManager.getMaxMasters(),
+                        SessionManager.getMasterName()));
                 return 0;
             }
         } catch (Exception e) {
             TabletopRpg.LOGGER.error("[TabletopRPG] Error claiming master: {}", e.getMessage());
-            ctx.getSource().sendFailure(Component.literal("§c[RPG] Failed to claim Game Master role."));
+            ctx.getSource().sendFailure(Component.translatable("message.tabletoprpg.master_claim_failed"));
             return 0;
         }
     }
@@ -258,22 +265,28 @@ public class MasterCommands {
         try {
             ServerPlayer player = ctx.getSource().getPlayerOrException();
             if (SessionManager.isMaster(player)) {
-                SessionManager.releaseMaster();
-                CombatController.reset(ctx.getSource().getServer());
-                broadcast(ctx, "§6§e" + player.getName().getString() + " §fhas stepped down as Game Master.");
+                // Com vǭrios mestres, sair um NǟO derruba a sessǜo: s�� o
+                // ǧltimo mestre que sai reseta o combate (22/10/2026).
+                boolean lastMaster = SessionManager.getMasterCount() <= 1;
+                SessionManager.releaseMaster(player);
+                if (lastMaster) {
+                    CombatController.reset(ctx.getSource().getServer());
+                }
+                broadcast(ctx, "��6��e" + player.getName().getString() + " ��fhas stepped down as Game Master.");
                 RpgNetworking.sendToAll(ctx.getSource().getServer());
                 RpgNetworking.sendAuraStateToAll(ctx.getSource().getServer());
-                // O reset limpou os mobs com câmera: atualiza o carrossel.
+                // O reset limpou os mobs com cǽmera: atualiza o carrossel.
                 RpgNetworking.sendSpectatorTargetsToAll(ctx.getSource().getServer());
+                BlockLockManager.sendSnapshotTo(player);
                 refreshChatMenu(ctx);
                 return 1;
             } else {
-                ctx.getSource().sendFailure(Component.literal("§c[RPG] You are not the current Game Master."));
+                ctx.getSource().sendFailure(Component.translatable("message.tabletoprpg.master_not_current"));
                 return 0;
             }
         } catch (Exception e) {
             TabletopRpg.LOGGER.error("[TabletopRPG] Error releasing master: {}", e.getMessage());
-            ctx.getSource().sendFailure(Component.literal("§c[RPG] Failed to release Game Master role."));
+            ctx.getSource().sendFailure(Component.translatable("message.tabletoprpg.master_release_failed"));
             return 0;
         }
     }
@@ -304,13 +317,13 @@ public class MasterCommands {
             // Âncora do jogador ativo: onde ele começou o turno (limite da aura).
             CombatController.setPlayerAnchor(target);
             broadcast(ctx, "§6§aTurn granted to §e" + target.getName().getString() + "§a!");
-            target.sendSystemMessage(Component.literal("§aIt is now YOUR TURN! Move and act freely."));
+            target.sendSystemMessage(Component.translatable("message.tabletoprpg.turn_your_turn"));
             RpgNetworking.sendToAll(ctx.getSource().getServer());
             RpgNetworking.sendAuraStateToAll(ctx.getSource().getServer());
             refreshChatMenu(ctx);
             return 1;
         } catch (Exception e) {
-            ctx.getSource().sendFailure(Component.literal("§cPlayer not found."));
+            ctx.getSource().sendFailure(Component.translatable("message.tabletoprpg.turn_player_not_found"));
             return 0;
         }
     }
@@ -336,7 +349,7 @@ public class MasterCommands {
             ServerPlayer player = ctx.getSource().getPlayerOrException();
 
             if (!SessionManager.isActivePlayer(player) && !SessionManager.isMaster(player)) {
-                ctx.getSource().sendFailure(Component.literal("§c[RPG] It is not your turn to finish!"));
+                ctx.getSource().sendFailure(Component.translatable("message.tabletoprpg.turn_not_yours_finish"));
                 return 0;
             }
 
@@ -352,7 +365,7 @@ public class MasterCommands {
             return 1;
         } catch (Exception e) {
             TabletopRpg.LOGGER.error("[TabletopRPG] Error finishing turn: {}", e.getMessage());
-            ctx.getSource().sendFailure(Component.literal("§c[RPG] Failed to finish turn."));
+            ctx.getSource().sendFailure(Component.translatable("message.tabletoprpg.turn_finish_failed"));
             return 0;
         }
     }
@@ -362,7 +375,7 @@ public class MasterCommands {
 
         String name = StringArgumentType.getString(ctx, "name").trim();
         if (name.isEmpty()) {
-            ctx.getSource().sendFailure(Component.literal("§cSession name cannot be empty."));
+            ctx.getSource().sendFailure(Component.translatable("message.tabletoprpg.session_name_empty"));
             return 0;
         }
         if (name.length() > 64) {
@@ -415,7 +428,8 @@ public class MasterCommands {
             // Lookup do tipo de entidade no registro nativo (aceita "zombie" ou "minecraft:zombie")
             Identifier id = Identifier.tryParse(type.contains(":") ? type : "minecraft:" + type);
             if (id == null || !BuiltInRegistries.ENTITY_TYPE.containsKey(id)) {
-                ctx.getSource().sendFailure(Component.literal("§c[RPG] Unknown enemy type: " + type));
+                ctx.getSource().sendFailure(Component.translatable(
+                        "message.tabletoprpg.enemy_unknown_type", type));
                 return 0;
             }
             EntityType<?> entityType = BuiltInRegistries.ENTITY_TYPE.getValue(id);
@@ -432,7 +446,7 @@ public class MasterCommands {
             // Cria a entidade com a API do 1.21.11 (EntitySpawnReason.COMMAND)
             Entity entity = entityType.create(serverLevel, EntitySpawnReason.COMMAND);
             if (entity == null) {
-                ctx.getSource().sendFailure(Component.literal("§c[RPG] Failed to create entity."));
+                ctx.getSource().sendFailure(Component.translatable("message.tabletoprpg.enemy_create_failed"));
                 return 0;
             }
 
@@ -445,7 +459,10 @@ public class MasterCommands {
             if (entity instanceof Mob mob) {
                 mob.setNoAi(true);
                 mob.setPersistenceRequired();
-                mob.setInvulnerable(true);
+                // Invulnerável só quando a opção "Mobs podem levar dano" está
+                // DESLIGADA: com a opção LIGADA, o mob invocado é um alvo de
+                // verdade (o mestre e os jogadores precisam poder machucá-lo).
+                mob.setInvulnerable(!SessionManager.canMobsBeDamaged());
                 // Marca NBT persistente: sobrevive ao reinício do servidor e
                 // permite re-registrar o mob no carrossel/lookAt (o Set em
                 // memória é perdido no restart). Tags vanilla são salvas no
@@ -465,12 +482,12 @@ public class MasterCommands {
 
             // Mensagem de confirmação
             broadcast(ctx, "§6§e" + type + " §fsummoned by the Master at spawn position.");
-            master.sendSystemMessage(Component.literal("§aAn enemy has been summoned!"));
+            master.sendSystemMessage(Component.translatable("message.tabletoprpg.enemy_summoned"));
 
             return 1;
         } catch (Exception e) {
             TabletopRpg.LOGGER.error("[TabletopRPG] Error summoning enemy: {}", e.getMessage());
-            ctx.getSource().sendFailure(Component.literal("§c[RPG] Failed to summon enemy."));
+            ctx.getSource().sendFailure(Component.translatable("message.tabletoprpg.enemy_summon_failed"));
             return 0;
         }
     }
@@ -497,7 +514,7 @@ public class MasterCommands {
             return 1;
         } catch (Exception e) {
             TabletopRpg.LOGGER.error("[TabletopRPG] Error arming camera: {}", e.getMessage());
-            ctx.getSource().sendFailure(Component.literal("§c[RPG] Failed to arm the camera."));
+            ctx.getSource().sendFailure(Component.translatable("message.tabletoprpg.camera_arm_failed"));
             return 0;
         }
     }
@@ -532,13 +549,14 @@ public class MasterCommands {
             String rawName = StringArgumentType.getString(ctx, "name");
             String wanted = RollPreset.normalizeKey(rawName);
             if (wanted.isEmpty()) {
-                ctx.getSource().sendFailure(Component.literal("§c[RPG] Diga o nome da ameaca."));
+                ctx.getSource().sendFailure(Component.translatable(
+                        "message.tabletoprpg.threat_sheet_name_required"));
                 return 0;
             }
             ThreatSheet sheet = ThreatSheetStore.find(master.getUUID(), wanted);
             if (sheet == null) {
-                ctx.getSource().sendFailure(Component.literal(
-                        "§c[RPG] Nenhuma ficha de ameaca com o nome \"" + rawName + "\"."));
+                ctx.getSource().sendFailure(Component.translatable(
+                        "message.tabletoprpg.threat_sheet_not_found_by_name", rawName));
                 return 0;
             }
             RpgNetworking.sendThreatSheetOpen(master, sheet);
@@ -547,7 +565,7 @@ public class MasterCommands {
             return 1;
         } catch (Exception e) {
             TabletopRpg.LOGGER.error("[TabletopRPG] /rpg mob view falhou: {}", e.getMessage());
-            ctx.getSource().sendFailure(Component.literal("§c[RPG] Failed to open the threat sheet."));
+            ctx.getSource().sendFailure(Component.translatable("message.tabletoprpg.threat_sheet_open_failed"));
             return 0;
         }
     }
@@ -568,19 +586,20 @@ public class MasterCommands {
             String rawName = StringArgumentType.getString(ctx, "name");
             String wanted = RollPreset.normalizeKey(rawName);
             if (wanted.isEmpty()) {
-                ctx.getSource().sendFailure(Component.literal("§c[RPG] Diga o nome da ameaca."));
+                ctx.getSource().sendFailure(Component.translatable(
+                        "message.tabletoprpg.threat_sheet_name_required"));
                 return 0;
             }
             ThreatSheet sheet = ThreatSheetStore.find(master.getUUID(), wanted);
             if (sheet == null) {
-                ctx.getSource().sendFailure(Component.literal(
-                        "§c[RPG] Nenhuma ficha de ameaca com o nome \"" + rawName + "\"."));
+                ctx.getSource().sendFailure(Component.translatable(
+                        "message.tabletoprpg.threat_sheet_not_found_by_name", rawName));
                 return 0;
             }
             ItemStack stack = ModItems.giveThreatSheet(master, sheet);
             if (stack == null) {
                 ctx.getSource().sendFailure(
-                        Component.literal("§c[RPG] Inventario cheio: a ficha nao coube no inventario."));
+                        Component.translatable("message.tabletoprpg.threat_sheet_inventory_full"));
                 return 0;
             }
             TabletopRpg.LOGGER.info("[TabletopRPG] Item da ficha '{}' entregue por /rpg mob give.",
@@ -589,7 +608,7 @@ public class MasterCommands {
         } catch (Exception e) {
             TabletopRpg.LOGGER.error("[TabletopRPG] /rpg mob give falhou: {}", e.getMessage());
             ctx.getSource().sendFailure(
-                    Component.literal("§c[RPG] Failed to give the threat sheet item."));
+                    Component.translatable("message.tabletoprpg.threat_sheet_give_failed"));
             return 0;
         }
     }
@@ -629,8 +648,8 @@ public class MasterCommands {
 
             Mob selected = CombatController.getSelectedMonster(serverLevel);
             if (selected == null) {
-                ctx.getSource().sendFailure(Component.literal(
-                        "§c[RPG] No enemy selected. Right-click an enemy first, then run /rpg remove enemy."));
+                ctx.getSource().sendFailure(Component.translatable(
+                        "message.tabletoprpg.enemy_none_selected"));
                 return 0;
             }
 
@@ -642,9 +661,142 @@ public class MasterCommands {
             return 1;
         } catch (Exception e) {
             TabletopRpg.LOGGER.error("[TabletopRPG] Error removing enemy: {}", e.getMessage());
-            ctx.getSource().sendFailure(Component.literal("§c[RPG] Failed to remove enemy."));
+            ctx.getSource().sendFailure(Component.translatable("message.tabletoprpg.enemy_remove_failed"));
             return 0;
         }
+    }
+
+    /**
+     * /rpg remove enemy @e[name="Nome Exato"]: remove TODOS os mobs do RPG com
+     * aquele nome exato (decisão do usuário em 22/10/2026).
+     *
+     * <p><b>Por que o seletor do vanilla não é usado:</b> o {@code @e} do
+     * vanilla só funciona para quem tem permissão de op, e o Mestre do RPG
+     * não precisa ser op. Então o nome é lido do texto do seletor e a busca é
+     * feita aqui, com DOIS filtros: nome exato e mob do RPG
+     * ({@link CombatController#isRpgMob}). Uma criatura natural do mundo que
+     * por acaso tenha o mesmo nome nunca é removida.
+     *
+     * <p>Se nenhum mob casar, o chat avisa que nada foi encontrado — o
+     * comando não fica em silêncio depois de não ter feito nada.
+     */
+    private static int removeEnemyBySelector(CommandContext<CommandSourceStack> ctx) {
+        if (!verifyMasterPermission(ctx)) return 0;
+
+        try {
+            String selector = StringArgumentType.getString(ctx, "selector");
+            String name = selectorName(selector);
+            if (name == null) {
+                ctx.getSource().sendFailure(Component.translatable(
+                        "message.tabletoprpg.enemy_selector_usage"));
+                return 0;
+            }
+
+            List<Mob> targets = new ArrayList<>();
+            for (ServerLevel level : ctx.getSource().getServer().getAllLevels()) {
+                for (Entity entity : level.getAllEntities()) {
+                    if (!(entity instanceof Mob mob)) {
+                        continue;
+                    }
+                    if (!name.equals(mob.getName().getString())) {
+                        continue;
+                    }
+                    if (!CombatController.isRpgMob(mob)) {
+                        continue;
+                    }
+                    targets.add(mob);
+                }
+            }
+
+            if (targets.isEmpty()) {
+                ctx.getSource().sendFailure(Component.translatable(
+                        "message.tabletoprpg.enemy_not_found_by_name", name));
+                return 0;
+            }
+
+            for (Mob mob : targets) {
+                CombatController.removeMob(mob);
+            }
+            broadcast(ctx, "§6§e" + name + " §fremoved by the Master ("
+                    + targets.size() + ").");
+            RpgNetworking.sendAuraStateToAll(ctx.getSource().getServer());
+            RpgNetworking.sendSpectatorTargetsToAll(ctx.getSource().getServer());
+            return 1;
+        } catch (Exception e) {
+            TabletopRpg.LOGGER.error("[TabletopRPG] Error removing enemies by selector: {}", e.getMessage());
+            ctx.getSource().sendFailure(Component.translatable("message.tabletoprpg.enemy_remove_failed"));
+            return 0;
+        }
+    }
+
+    /**
+     * Lê o nome de um seletor de entidade do vanilla no formato
+     * {@code @e[name="Nome Exato"]}. Devolve {@code null} quando o texto não é
+     * um seletor de entidade ou quando ele não traz a opção {@code name=}.
+     *
+     * <p>O nome entre aspas é lido até a próxima aspa, e o nome sem aspas até o
+     * fim da opção — as duas formas que o vanilla aceita. Só a opção
+     * {@code name=} é usada: as demais opções do seletor são ignoradas, porque
+     * o filtro de mob do RPG já garante o resto.
+     */
+    private static String selectorName(String selector) {
+        if (selector == null) {
+            return null;
+        }
+        String text = selector.trim();
+        if (text.length() < 4 || !text.regionMatches(true, 0, "@e[", 0, 3) || !text.endsWith("]")) {
+            return null;
+        }
+        String body = text.substring(3, text.length() - 1);
+        for (String option : splitSelectorOptions(body)) {
+            int equal = option.indexOf('=');
+            if (equal < 0) {
+                continue;
+            }
+            // A chave é comparada depois de tirar os espaços: o vanilla aceita
+            // "name = ...". E "nickname=" NÃO casa, porque a chave não é "name".
+            if (!option.substring(0, equal).trim().equalsIgnoreCase("name")) {
+                continue;
+            }
+            String value = option.substring(equal + 1).trim();
+            if (value.isEmpty()) {
+                return null;
+            }
+            if (value.charAt(0) == '"') {
+                int end = value.indexOf('"', 1);
+                if (end < 0) {
+                    return null;
+                }
+                value = value.substring(1, end);
+            }
+            return value.isEmpty() ? null : value;
+        }
+        return null;
+    }
+
+    /**
+     * Divide o corpo do seletor em opções (separadas por vírgula), sem quebrar
+     * dentro de aspas — assim um nome com vírgula ({@code name="Bob, o Chefe"})
+     * continua inteiro.
+     */
+    private static List<String> splitSelectorOptions(String body) {
+        List<String> options = new ArrayList<>();
+        StringBuilder current = new StringBuilder();
+        boolean quoted = false;
+        for (int i = 0; i < body.length(); i++) {
+            char c = body.charAt(i);
+            if (c == '"') {
+                quoted = !quoted;
+            }
+            if (c == ',' && !quoted) {
+                options.add(current.toString());
+                current.setLength(0);
+                continue;
+            }
+            current.append(c);
+        }
+        options.add(current.toString());
+        return options;
     }
 
     /**
@@ -661,7 +813,7 @@ public class MasterCommands {
             return 1;
         } catch (Exception e) {
             TabletopRpg.LOGGER.error("[TabletopRPG] Error arming block lock: {}", e.getMessage());
-            ctx.getSource().sendFailure(Component.literal("§c[RPG] Failed to arm the block lock."));
+            ctx.getSource().sendFailure(Component.translatable("message.tabletoprpg.block_lock_arm_failed"));
             return 0;
         }
     }
@@ -679,7 +831,7 @@ public class MasterCommands {
             return 1;
         } catch (Exception e) {
             TabletopRpg.LOGGER.error("[TabletopRPG] Error arming block unlock: {}", e.getMessage());
-            ctx.getSource().sendFailure(Component.literal("§c[RPG] Failed to arm the block unlock."));
+            ctx.getSource().sendFailure(Component.translatable("message.tabletoprpg.block_unlock_arm_failed"));
             return 0;
         }
     }
@@ -713,8 +865,8 @@ public class MasterCommands {
         MixedRoll mixed = splitPericiaPrefix(player, raw);
         if (mixed != null) {
             if (mixed.tail().isEmpty()) {
-                ctx.getSource().sendFailure(Component.literal(
-                        "§cInforme o que somar, por exemplo: " + mixed.pericia().name() + "+5"));
+                ctx.getSource().sendFailure(Component.translatable(
+                        "message.tabletoprpg.roll_inform_bonus", mixed.pericia().name()));
                 return 0;
             }
             return rollPericia(ctx, player, mixed.pericia(), mixed.tail());
@@ -786,7 +938,7 @@ public class MasterCommands {
         try {
             return ctx.getSource().getPlayerOrException();
         } catch (Exception e) {
-            ctx.getSource().sendFailure(Component.literal("§cOnly players can roll dice."));
+            ctx.getSource().sendFailure(Component.translatable("message.tabletoprpg.roll_players_only"));
             return null;
         }
     }
@@ -972,18 +1124,18 @@ public class MasterCommands {
         }
         SheetData sheet = SessionManager.getSheet(player.getUUID());
         if (sheet == null || sheet.pericias().isEmpty()) {
-            ctx.getSource().sendFailure(Component.literal("§cNo skills on this sheet."));
+            ctx.getSource().sendFailure(Component.translatable("message.tabletoprpg.roll_no_skills"));
             return 0;
         }
 
-        ctx.getSource().sendSystemMessage(Component.literal(
-                "§6Skills §7(§f/rpg roll <name>§7): " + sheet.pericias().size()));
+        ctx.getSource().sendSystemMessage(Component.translatable(
+                "message.tabletoprpg.roll_skill_list_header", sheet.pericias().size()));
         for (SheetData.Pericia pericia : sheet.pericias()) {
             int attr = sheet.attributeValue(pericia.attributeId());
-            ctx.getSource().sendSystemMessage(Component.literal(
-                    "§7- §f" + pericia.name() + " §8| §e" + pericia.value()
-                            + " §7+ §e" + attr + " §8(" + SheetModelHolder.current().attributeLabel(pericia.attributeId()) + ")"
-                            + " §8= §e" + (pericia.value() + attr)));
+            ctx.getSource().sendSystemMessage(Component.translatable(
+                    "message.tabletoprpg.roll_skill_list_entry", pericia.name(), pericia.value(), attr,
+                    SheetModelHolder.current().attributeLabel(pericia.attributeId()),
+                    pericia.value() + attr));
         }
         return sheet.pericias().size();
     }
@@ -1023,7 +1175,7 @@ public class MasterCommands {
         try {
             player = ctx.getSource().getPlayerOrException();
         } catch (Exception e) {
-            ctx.getSource().sendFailure(Component.literal("§cOnly players can roll dice."));
+            ctx.getSource().sendFailure(Component.translatable("message.tabletoprpg.roll_players_only"));
             return 0;
         }
 
@@ -1068,14 +1220,32 @@ public class MasterCommands {
      */
     private static int rollAndPublish(CommandContext<CommandSourceStack> ctx, ServerPlayer player,
                                       String rawFormula) {
+        return rollAndPublish(ctx, player, rawFormula, false);
+    }
+
+    /**
+     * Rola uma fórmula com a MESMA regra de visibilidade de {@code /rpg roll}: Mestre
+     * vê só o resultado, jogador envia para todos.
+     *
+     * <p><b>Por que existe:</b> preset (por comando e por item) e rolagem manual
+     * precisam cair nas mesmas regras, ou o mesmo dado fica secreto para um e público
+     * para o outro. O texto também é o mesmo, para ninguém notar a diferença.
+     *
+     * <p><b>Rolagem publica (22/10/2026):</b> com {@code open} o resultado vai
+     * para todo mundo, Mestre incluido.
+     *
+     * @return {@code 1} se rolou, {@code 0} se a fórmula foi recusada
+     */
+    private static int rollAndPublish(CommandContext<CommandSourceStack> ctx, ServerPlayer player,
+                                      String rawFormula, boolean open) {
         String message = rollDice(ctx, rawFormula);
         if (message == null) {
             return 0;
         }
-        if (SessionManager.isMaster(player)) {
-            player.sendSystemMessage(Component.literal(message));
-        } else {
+        if (open || !SessionManager.isMaster(player)) {
             broadcast(ctx, message);
+        } else {
+            player.sendSystemMessage(Component.literal(message));
         }
         return 1;
     }
@@ -1118,7 +1288,9 @@ public class MasterCommands {
         }
 
         UUID uuid = player.getUUID();
-        RollPreset existing = RollPresetStore.find(uuid, preset.key()).orElse(null);
+        // A busca e SO entre os presets da propria jogadora: um preset compartilhado
+        // de outra pessoa nao impede a jogadora de ter um preset com o mesmo nome.
+        RollPreset existing = RollPresetStore.findOwn(uuid, preset.key()).orElse(null);
         if (existing != null) {
             // Decisao do usuario em 01/10/2026: create nao sobrescreve. Recusar e
             // dizer o que fazer e o que segura a surpresa de digitar "create ataque
@@ -1159,8 +1331,15 @@ public class MasterCommands {
         }
 
         String name = StringArgumentType.getString(ctx, "name");
-        RollPreset existing = RollPresetStore.find(player.getUUID(), name).orElse(null);
+        // Editar e apagar sao atos de DONO: a busca e so entre os presets da propria
+        // jogadora. Um preset compartilhado de outra pessoa existe, mas nao pode
+        // ser editado por quem nao o criou.
+        RollPreset existing = RollPresetStore.findOwn(player.getUUID(), name).orElse(null);
         if (existing == null) {
+            if (RollPresetStore.findShared(name).isPresent()) {
+                ctx.getSource().sendFailure(Component.translatable("message.tabletoprpg.preset_not_owner", name));
+                return 0;
+            }
             ctx.getSource().sendFailure(Component.translatable("message.tabletoprpg.preset_not_found", name));
             return 0;
         }
@@ -1171,9 +1350,13 @@ public class MasterCommands {
             // busca e pode estar escrito de outra forma ("ATAQUE" acha "Ataque").
             // Trocar o nome no proprio create/edit faria o preset sumir de baixo do
             // item que ja existe no inventario.
+            //
+            // A flag de rolagem publica e a do preset que ja existia: o comando
+            // `/rpg preset edit` mexe na formula e na cor, nao na visibilidade.
             edited = RollPreset.create(existing.name(),
                     StringArgumentType.getString(ctx, "formula"),
-                    StringArgumentType.getString(ctx, "color"));
+                    StringArgumentType.getString(ctx, "color"),
+                    existing.openRoll());
         } catch (RollPreset.PresetException e) {
             ctx.getSource().sendFailure(Component.translatable("message.tabletoprpg.preset_create_failed",
                     e.getMessage()));
@@ -1270,7 +1453,7 @@ public class MasterCommands {
             ctx.getSource().sendFailure(Component.translatable("message.tabletoprpg.preset_not_found", name));
             return 0;
         }
-        return rollAndPublish(ctx, player, preset.formula());
+        return rollAndPublish(ctx, player, preset.formula(), preset.openRoll());
     }
 
     /**
@@ -1290,6 +1473,12 @@ public class MasterCommands {
         String name = StringArgumentType.getString(ctx, "name");
         RollPreset removed = RollPresetStore.remove(player.getUUID(), name).orElse(null);
         if (removed == null) {
+            // Apagar e ato de DONO: um preset compartilhado de outra pessoa nao pode
+            // ser apagado por quem nao o criou.
+            if (RollPresetStore.findShared(name).isPresent()) {
+                ctx.getSource().sendFailure(Component.translatable("message.tabletoprpg.preset_not_owner", name));
+                return 0;
+            }
             ctx.getSource().sendFailure(Component.translatable("message.tabletoprpg.preset_not_found", name));
             return 0;
         }
@@ -1307,7 +1496,8 @@ public class MasterCommands {
         }
 
         List<RollPreset> presets = RollPresetStore.list(player.getUUID());
-        if (presets.isEmpty()) {
+        List<RollPresetStore.SharedPreset> shared = RollPresetStore.listShared(player.getUUID());
+        if (presets.isEmpty() && shared.isEmpty()) {
             ctx.getSource().sendSuccess(() -> Component.translatable("message.tabletoprpg.preset_list_empty"), false);
             return 0;
         }
@@ -1318,7 +1508,14 @@ public class MasterCommands {
             ctx.getSource().sendSuccess(() -> Component.translatable("message.tabletoprpg.preset_list_entry",
                     entry.name(), entry.formula(), entry.color().displayName()), false);
         }
-        return presets.size();
+        // Os compartilhados entram depois, com a marca de que vem de outra pessoa:
+        // eles podem ser usados, mas nao editados nem apagados por quem nao e dono.
+        for (RollPresetStore.SharedPreset sharedEntry : shared) {
+            RollPreset entry = sharedEntry.preset();
+            ctx.getSource().sendSuccess(() -> Component.translatable("message.tabletoprpg.preset_list_entry_shared",
+                    entry.name(), entry.formula(), entry.color().displayName()), false);
+        }
+        return presets.size() + shared.size();
     }
 
     /**
@@ -1346,6 +1543,39 @@ public class MasterCommands {
         return builder.buildFuture();
     }
 
+    /**
+     * Completa os nomes de preset que a jogadora pode <b>usar</b>: os dela e os que a
+     * mesa compartilhou.
+     *
+     * <p><b>Por que uma lista a parte:</b> os comandos de editar e apagar so
+     * aceitam preset da propria jogadora, e sugerir ali um preset de outra pessoa
+     * seria sugerir um comando que vai recusar. No {@code use} o preset de outra
+     * pessoa e valido, entao ele entra na sugestao.
+     */
+    private static CompletableFuture<Suggestions> suggestUsableRollPresets(
+            CommandContext<CommandSourceStack> ctx, SuggestionsBuilder builder) {
+        ServerPlayer player = presetPlayer(ctx);
+        if (player == null) {
+            return builder.buildFuture();
+        }
+        String remaining = builder.getRemainingLowerCase();
+        for (RollPreset preset : RollPresetStore.list(player.getUUID())) {
+            addPresetSuggestion(builder, preset.commandName(), remaining);
+        }
+        for (RollPresetStore.SharedPreset shared : RollPresetStore.listShared(player.getUUID())) {
+            addPresetSuggestion(builder, shared.preset().commandName(), remaining);
+        }
+        return builder.buildFuture();
+    }
+
+    /** Acrescenta a sugestao, se o nome comeca com o que ja foi digitado. */
+    private static void addPresetSuggestion(SuggestionsBuilder builder, String commandName,
+            String remaining) {
+        if (commandName.toLowerCase(Locale.ROOT).startsWith(remaining)) {
+            builder.suggest(commandName);
+        }
+    }
+
     /** Completa as 17 cores de Bundle. */
     private static CompletableFuture<Suggestions> suggestPresetColors(
             CommandContext<CommandSourceStack> ctx, SuggestionsBuilder builder) {
@@ -1371,7 +1601,7 @@ public class MasterCommands {
             return 1;
         } catch (Exception e) {
             TabletopRpg.LOGGER.error("[TabletopRPG] Error setting world time: {}", e.getMessage());
-            ctx.getSource().sendFailure(Component.literal("§c[RPG] Failed to set world time."));
+            ctx.getSource().sendFailure(Component.translatable("message.tabletoprpg.world_time_failed"));
             return 0;
         }
     }
@@ -1408,7 +1638,7 @@ public class MasterCommands {
         try {
             player = ctx.getSource().getPlayerOrException();
         } catch (Exception e) {
-            ctx.getSource().sendFailure(Component.literal("§cOnly players can roll dice."));
+            ctx.getSource().sendFailure(Component.translatable("message.tabletoprpg.roll_players_only"));
             return null;
         }
 
@@ -1433,6 +1663,22 @@ public class MasterCommands {
      *         (a recusa ja foi enviada para quem rollou)
      */
     public static int rollForPlayer(ServerPlayer player, String rawFormula) {
+        return rollForPlayer(player, rawFormula, false);
+    }
+
+    /**
+     * Rola e entrega o resultado a {@code player}, sem depender de comando.
+     *
+     * <p><b>Rolagem publica (22/10/2026):</b> com {@code open} o resultado vai
+     * para a mesa inteira, mesmo quando quem rola e o Mestre. E o que a flag
+     * "Open Roll" do preset significa: o dado e compartilhado com a mesa, e nao
+     * um segredo do Mestre.
+     *
+     * @param open {@code true} para o resultado ir para todo mundo
+     * @return {@code 1} se publicou o resultado, {@code 0} se a formula foi recusada
+     *         (a recusa ja foi enviada para quem rollou)
+     */
+    public static int rollForPlayer(ServerPlayer player, String rawFormula, boolean open) {
         String message;
         try {
             message = rollMessageFor(player, rawFormula);
@@ -1440,15 +1686,15 @@ public class MasterCommands {
             player.displayClientMessage(Component.literal("§c" + e.getMessage()), false);
             return 0;
         }
-        if (SessionManager.isMaster(player)) {
-            player.sendSystemMessage(Component.literal(message));
-        } else {
+        if (open || !SessionManager.isMaster(player)) {
             MinecraftServer server = player.level().getServer();
             if (server != null) {
                 server.getPlayerList().broadcastSystemMessage(Component.literal(message), false);
             } else {
                 player.sendSystemMessage(Component.literal(message));
             }
+        } else {
+            player.sendSystemMessage(Component.literal(message));
         }
         return 1;
     }
@@ -1657,7 +1903,7 @@ public class MasterCommands {
                 return true;
             }
         }
-        ctx.getSource().sendFailure(Component.literal("§c[RPG] Only the Game Master can perform this action."));
+        ctx.getSource().sendFailure(Component.translatable("message.tabletoprpg.master_only_action"));
         return false;
     }
 
@@ -1683,25 +1929,28 @@ public class MasterCommands {
         MutableComponent menu = Component.empty();
 
         menu.append(Component.literal("§8=========================================\n"));
-        menu.append(Component.literal("§6§l           [ TableTop RPG ]\n"));
-        menu.append(Component.literal("§7          \"" + SessionManager.getSessionName() + "\"\n"));
+        menu.append(Component.translatable("message.tabletoprpg.menu_title"));
+        menu.append(Component.translatable("message.tabletoprpg.menu_session_name",
+                SessionManager.getSessionName()));
         
         if (isMaster) {
-            menu.append(Component.literal("§e              [ ROLE: MASTER ]\n"));
+            menu.append(Component.translatable("message.tabletoprpg.menu_role_master"));
             menu.append(Component.literal("§8-----------------------------------------\n"));
             
             // Seção de Modos
-            menu.append(Component.literal("§f Modes: "));
+            menu.append(Component.translatable("message.tabletoprpg.menu_modes"));
             menu.append(createBtn("[FREE]", ChatFormatting.GREEN, "/rpg mode free", "Set mode to Free (everyone moves)"));
             menu.append(Component.literal(" "));
             menu.append(createBtn("[INVESTIGATION]", ChatFormatting.YELLOW, "/rpg mode investigation", "Set mode to Investigation"));
             menu.append(Component.literal(" "));
             menu.append(createBtn("[COMBAT]", ChatFormatting.RED, "/rpg mode combat", "Set mode to Combat"));
-            menu.append(Component.literal("\n§f Current Mode: §e" + SessionManager.getMode().getDisplayName() + "\n\n"));
+            menu.append(Component.translatable("message.tabletoprpg.menu_current_mode",
+                    SessionManager.getMode().getDisplayName()));
 
             // Seção de Turnos
-            menu.append(Component.literal("§f Active Turn: §a" + SessionManager.getActivePlayerName() + "\n"));
-            menu.append(Component.literal("§f Turn Control: "));
+            menu.append(Component.translatable("message.tabletoprpg.menu_active_turn",
+                    SessionManager.getActivePlayerName()));
+            menu.append(Component.translatable("message.tabletoprpg.menu_turn_control"));
             menu.append(createSuggestBtn("[Give Turn]", ChatFormatting.LIGHT_PURPLE, "/rpg turn give ", "Click to choose a player for turn"));
             menu.append(Component.literal(" "));
             menu.append(createBtn("[Revoke Turn]", ChatFormatting.DARK_RED, "/rpg turn revoke", "Revoke active player's turn"));
@@ -1712,25 +1961,27 @@ public class MasterCommands {
             // Sem botao de tranca aqui (decisao do usuario em 30/09/2026): o
             // comando `/rpg block_lock` e o item ja cobrem, e o botao seria uma
             // terceira via para a mesma acao.
-            menu.append(Component.literal("§f Actions: "));
+            menu.append(Component.translatable("message.tabletoprpg.menu_actions"));
             menu.append(createSuggestBtn("[Roll]", ChatFormatting.AQUA, "/rpg roll ", "Type a dice formula, ex: d20, 2d6+3"));
             menu.append(Component.literal(" "));
             menu.append(createBtn("[Step Down]", ChatFormatting.GRAY, "/rpg master release", "Release Master role"));
             menu.append(Component.literal("\n"));
 
         } else {
-            menu.append(Component.literal("§b              [ ROLE: PLAYER ]\n"));
+            menu.append(Component.translatable("message.tabletoprpg.menu_role_player"));
             menu.append(Component.literal("§8-----------------------------------------\n"));
             
-            menu.append(Component.literal("§f Current Mode: §e" + SessionManager.getMode().getDisplayName() + "\n"));
-            menu.append(Component.literal("§f Active Turn: §a" + SessionManager.getActivePlayerName() + "\n\n"));
+            menu.append(Component.translatable("message.tabletoprpg.menu_current_mode_short",
+                    SessionManager.getMode().getDisplayName()));
+            menu.append(Component.translatable("message.tabletoprpg.menu_active_turn_long",
+                    SessionManager.getActivePlayerName()));
 
             boolean isMyTurn = SessionManager.isActivePlayer(player);
             if (isMyTurn) {
-                menu.append(Component.literal("§a§l >> YOUR TURN IS ACTIVE! <<\n\n"));
+                menu.append(Component.translatable("message.tabletoprpg.menu_your_turn_active"));
             }
 
-            menu.append(Component.literal("§f Actions:\n "));
+            menu.append(Component.translatable("message.tabletoprpg.menu_actions_player"));
             if (isMyTurn) {
                 menu.append(createBtn("[Finish Turn]", ChatFormatting.GREEN, "/rpg turn finish", "Click to end your turn"));
                 menu.append(Component.literal(" "));

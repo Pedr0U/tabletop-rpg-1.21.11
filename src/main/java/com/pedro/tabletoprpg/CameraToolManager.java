@@ -33,6 +33,12 @@ import java.util.concurrent.ConcurrentHashMap;
  * <p><b>Alterna.</b> Decisao do usuario em 01/10/2026: o mesmo clique que adiciona
  * tambem remove, para corrigir engano sem precisar de outro comando.
  *
+ * <p><b>PARTE 3: a camera tambem congela a criatura</b> ({@code setNoAi(true)}), do
+ * mesmo jeito que a selecao de monstro congela. O monstro marcado com a camera fica
+ * parado (sem andar, sem vagar, sem atacar); ao tirar a camera, ele volta a se mover
+ * -- a menos que o {@link CombatController} o segure por outro motivo (ver
+ * {@link CombatController#isFrozenByTable}).
+ *
  * <p><b>So Mobs.</b> Tambem decidido em 01/10/2026. O carrossel
  * ({@code RpgNetworking.getSpectatorTargets}) filtra {@code instanceof Mob}, entao
  * aceitar barco ou armadura aqui daria uma camera que some em silencio na hora de montar
@@ -206,8 +212,19 @@ public final class CameraToolManager {
      * <p>Adicionar marca a tag NBT e persiste a entidade. A persistencia e necessaria
      * porque uma camera que despawna some do carrossel em silencio, e o Mestre so
      * descobre no meio da sessao; e o mesmo que o caminho do {@code cam_perm=true} ja
-     * faz. Nao congela a criatura ({@code setNoAi}): o pedido foi de camera num mob que
-     * se move, e congelar mudaria o comportamento do mundo sem ter sido pedido.
+     * faz.
+     *
+     * <p><b>PARTE 3: a camera tambem CONGELA a criatura</b> ({@code setNoAi(true)}),
+     * do mesmo jeito que a selecao de monstro congela: o mob marcado com a camera
+     * fica parado (sem andar, sem vagar, sem atacar). E o que o Mestre quer -- a
+     * criatura vira a peca de mesa que ele filma.
+     *
+     * <p>Ao tirar a camera o monstro volta a se mover, <b>mas so se o
+     * {@link CombatController} nao estiver segurando ele</b>: peca da mesa, monstro
+     * selecionado ou monstro ja selecionado antes continuam congelados (ver
+     * {@link CombatController#isFrozenByTable}). Sem essa guarda, tirar a camera
+     * de um monstro que o Mestre ja tinha selecionado poria a criatura andando
+     * sozinha, o que a regra do mod proibe.
      */
     private static void toggle(ServerPlayer master, ServerLevel level, Mob mob) {
         String name = mob.getName().getString();
@@ -215,6 +232,11 @@ public final class CameraToolManager {
         if (CombatController.getCameraMobs().contains(mob.getUUID())) {
             CombatController.removeCameraMob(mob.getUUID());
             mob.removeTag(CAMERA_TAG);
+            // Devolve a criatura ao mundo: o congelamento da Camera Tool acaba,
+            // exceto quando o CombatController segura o mob por outro motivo.
+            if (!CombatController.isFrozenByTable(mob.getUUID())) {
+                mob.setNoAi(false);
+            }
             master.displayClientMessage(
                     Component.translatable("message.tabletop-rpg.camera_removed", name), false);
             TabletopRpg.LOGGER.info("[TabletopRPG] Camera removida de {} por {}",
@@ -223,6 +245,8 @@ public final class CameraToolManager {
             CombatController.addCameraMob(mob.getUUID());
             mob.addTag(CAMERA_TAG);
             mob.setPersistenceRequired();
+            // Congela a criatura (PARTE 3): a camera segura o monstro parado.
+            mob.setNoAi(true);
             master.displayClientMessage(
                     Component.translatable("message.tabletop-rpg.camera_added", name), false);
             TabletopRpg.LOGGER.info("[TabletopRPG] Camera em {} por {}",

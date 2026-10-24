@@ -108,7 +108,7 @@ public class ThreatPericiasScreen extends Screen {
 
     public ThreatPericiasScreen(Screen parentScreen, List<ThreatSheet.PericiaValue> current,
                                 Consumer<List<ThreatSheet.PericiaValue>> onSave) {
-        super(Component.literal("Perícias da Ameaça"));
+        super(Component.translatable("screen.tabletoprpg.threat_pericias.title"));
         this.parentScreen = parentScreen;
         this.onSave = onSave;
         if (current != null) {
@@ -159,11 +159,11 @@ public class ThreatPericiasScreen extends Screen {
 
         int addW = 84;
         int btnW = Math.max(40, (panelW - 2 * PAD - 2 * GAP - addW) / 2);
-        addRenderableWidget(Button.builder(Component.literal("+ Adicionar"), b -> addRow())
+        addRenderableWidget(Button.builder(Component.translatable("screen.tabletoprpg.threat_pericias.add"), b -> addRow())
                 .bounds(panelX + PAD, footerY, addW, FOOTER_H).build());
-        addRenderableWidget(Button.builder(Component.literal("Salvar"), b -> save())
+        addRenderableWidget(Button.builder(Component.translatable("screen.tabletoprpg.threat_pericias.save"), b -> save())
                 .bounds(panelX + PAD + addW + GAP, footerY, btnW, FOOTER_H).build());
-        addRenderableWidget(Button.builder(Component.literal("< Voltar"), b -> onClose())
+        addRenderableWidget(Button.builder(Component.translatable("screen.tabletoprpg.threat_pericias.back"), b -> onClose())
                 .bounds(panelX + panelW - PAD - btnW, footerY, btnW, FOOTER_H).build());
     }
 
@@ -230,7 +230,7 @@ public class ThreatPericiasScreen extends Screen {
                     .build());
 
             EditBox box = new EditBox(this.font, panelX + PAD + nameW + GAP, y, VALUE_W, ROW_H,
-                    Component.literal("Valor"));
+                    Component.translatable("screen.tabletoprpg.threat_pericias.value"));
             box.setMaxLength(ThreatSheet.VALUE_CHARS);
             // `-?\d{0,4}` e o mesmo limite do dado: 4 caracteres com sinal, que e
             // o que cabe em -999..999. O sinal tambem e aceito COLADO no fim ("5-"),
@@ -241,7 +241,7 @@ public class ThreatPericiasScreen extends Screen {
             addRowWidget(box);
             valueBoxes.add(box);
 
-            addRowWidget(Button.builder(Component.literal("Del"), b -> removeRow(index))
+            addRowWidget(Button.builder(Component.translatable("screen.tabletoprpg.threat_pericias.delete"), b -> removeRow(index))
                     .bounds(box.getRight() + GAP, y, DEL_W, ROW_H).build());
         }
     }

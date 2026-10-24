@@ -14,6 +14,7 @@ import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.EntityHitResult;
 import net.minecraft.world.phys.Vec3;
 
+import java.util.Collections;
 import java.util.Map;
 import java.util.List;
 import java.util.Set;
@@ -38,6 +39,12 @@ import java.util.concurrent.ConcurrentHashMap;
  * <p><b>Uma ficha, no maximo, um mob:</b> vincular substitui, decide do Mestre em
  * 02/10/2026. Se a ficha ja estava em outro mob, a tag sai de la -- senao dois mobs
  * responderiam pelo mesmo nome em comando.
+ *
+ * <p><b>Modo Horda (22/10/2026):</b> com {@code hordeMode} ligado, a MESMA ficha
+ * pode valer para varios mobs ao mesmo tempo (1:N). A tag do mob ja permitia isso --
+ * o que era 1:1 era so o cache e o "roubo" do {@link #bind}. No modo horda o roubo
+ * nao acontece: o mob novo entra na ficha e os outros ficam onde estavam. Fora do
+ * modo horda, a regra antiga continua valendo (uma ficha, no maximo, um mob).
  */
 public final class ThreatSheetBinding {
 
@@ -48,7 +55,11 @@ public final class ThreatSheetBinding {
     private static final double MAX_REACH = 5.0;
 
     private static final Map<UUID, String> BY_MOB = new ConcurrentHashMap<>();
-    private static final Map<String, UUID> BY_SHEET = new ConcurrentHashMap<>();
+    /** Ficha -&gt; mobs. No modo horda a ficha tem mais de um mob. */
+    private static final Map<String, Set<UUID>> BY_SHEET = new ConcurrentHashMap<>();
+
+    /** O cache ja foi refeito pelo menos uma vez nesta sessao? */
+    private static boolean healed = false;
 
     private ThreatSheetBinding() {
     }
@@ -69,29 +80,39 @@ public final class ThreatSheetBinding {
             // Sobrescrever (regra do Mestre, 07/10/2026): a ficha antiga fica LIVRE,
             // e o cache acompanha -- sem isso o mobOf da ficha antiga continuaria
             // devolvendo este mob, como se ela ainda estivesse amarrada.
-            BY_SHEET.remove(previous, mob.getUUID());
+            forgetMob(previous, mob.getUUID());
         }
 
         // A ficha ja estava em outro mob? Ele solta a tag, para o nome nao apontar duas
         // criaturas ao mesmo tempo.
-        UUID otherMob = BY_SHEET.get(sheet.id());
-        if (otherMob != null && !otherMob.equals(mob.getUUID())) {
-            // Roubo (regra do Mestre, 07/10/2026): a ficha sai do mob antigo, que fica
-            // SEM ficha nenhuma. A tag sai e o cache acompanha -- senao o sheetOf do mob
-            // antigo continuaria devolvendo a ficha roubada.
-            BY_MOB.remove(otherMob);
-            BY_SHEET.remove(sheet.id(), otherMob);
-            if (level != null) {
-                Entity previousMob = level.getEntity(otherMob);
-                if (previousMob != null) {
-                    previousMob.removeTag(tagOf(sheet.id()));
-                    // Feedback da jogadora (07/10/2026): sem isto o mob antigo
-                    // CONTINUA com o nome de exibicao flutuando, e ficam dois mobs
-                    // com o mesmo nome. O nome customizado so existe por causa do
-                    // vinculo, entao o roubo o remove inteiro (o mob volta ao nome
-                    // do vanilla).
-                    previousMob.setCustomName(null);
-                    previousMob.setCustomNameVisible(false);
+        //
+        // Modo Horda (22/10/2026): NAO e roubo. A ficha pode valer para varios mobs,
+        // e o mob que ja estava amarrado continua amarrado.
+        if (!sheet.hordeMode()) {
+            Set<UUID> others = BY_SHEET.get(sheet.id());
+            if (others != null) {
+                for (UUID otherMob : List.copyOf(others)) {
+                    if (otherMob.equals(mob.getUUID())) {
+                        continue;
+                    }
+                    // Roubo (regra do Mestre, 07/10/2026): a ficha sai do mob antigo, que fica
+                    // SEM ficha nenhuma. A tag sai e o cache acompanha -- senao o sheetOf do mob
+                    // antigo continuaria devolvendo a ficha roubada.
+                    BY_MOB.remove(otherMob);
+                    forgetMob(sheet.id(), otherMob);
+                    if (level != null) {
+                        Entity previousMob = level.getEntity(otherMob);
+                        if (previousMob != null) {
+                            previousMob.removeTag(tagOf(sheet.id()));
+                            // Feedback da jogadora (07/10/2026): sem isto o mob antigo
+                            // CONTINUA com o nome de exibicao flutuando, e ficam dois mobs
+                            // com o mesmo nome. O nome customizado so existe por causa do
+                            // vinculo, entao o roubo o remove inteiro (o mob volta ao nome
+                            // do vanilla).
+                            previousMob.setCustomName(null);
+                            previousMob.setCustomNameVisible(false);
+                        }
+                    }
                 }
             }
         }
@@ -101,8 +122,24 @@ public final class ThreatSheetBinding {
             mob.addTag(tag);
         }
         BY_MOB.put(mob.getUUID(), sheet.id());
-        BY_SHEET.put(sheet.id(), mob.getUUID());
+        mobs(sheet.id()).add(mob.getUUID());
         applyDisplayName(mob, sheet);
+    }
+
+    /** O conjunto de mobs de uma ficha no cache (criado se ainda nao existir). */
+    private static Set<UUID> mobs(String sheetId) {
+        return BY_SHEET.computeIfAbsent(sheetId, key -> ConcurrentHashMap.newKeySet());
+    }
+
+    /** Tira um mob do conjunto de mobs de uma ficha. */
+    private static void forgetMob(String sheetId, UUID mobUuid) {
+        Set<UUID> set = BY_SHEET.get(sheetId);
+        if (set != null) {
+            set.remove(mobUuid);
+            if (set.isEmpty()) {
+                BY_SHEET.remove(sheetId, set);
+            }
+        }
     }
 
     /**
@@ -136,13 +173,13 @@ public final class ThreatSheetBinding {
         }
         String sheetId = BY_MOB.remove(mob.getUUID());
         if (sheetId != null) {
-            BY_SHEET.remove(sheetId, mob.getUUID());
+            forgetMob(sheetId, mob.getUUID());
         }
         // Varre as tags do proprio mob: cobre o caso em que o cache foi perdido
         // (reinicio do servidor) e o vinculo so existe na tag.
         for (String tag : mob.getTags()) {
             if (tag.startsWith(TAG_PREFIX)) {
-                BY_SHEET.remove(tag.substring(TAG_PREFIX.length()), mob.getUUID());
+                forgetMob(tag.substring(TAG_PREFIX.length()), mob.getUUID());
             }
         }
     }
@@ -173,12 +210,69 @@ public final class ThreatSheetBinding {
         if (sheetId == null || sheetId.isEmpty()) {
             return null;
         }
-        UUID cached = BY_SHEET.get(sheetId);
-        if (cached != null && isAlive(server, cached)) {
-            return cached;
+        Set<UUID> cached = BY_SHEET.get(sheetId);
+        if (cached != null) {
+            for (UUID uuid : cached) {
+                if (isAlive(server, uuid)) {
+                    return uuid;
+                }
+            }
         }
         selfHeal(server);
-        return BY_SHEET.get(sheetId);
+        Set<UUID> healed = BY_SHEET.get(sheetId);
+        if (healed == null) {
+            return null;
+        }
+        for (UUID uuid : healed) {
+            if (isAlive(server, uuid)) {
+                return uuid;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Todos os mobs amarrados a esta ficha (1:N no Modo Horda), ou lista vazia.
+     *
+     * <p>E a pergunta que o salvamento da ficha faz: o nome novo precisa chegar a
+     * TODOS os monstros da ficha, e nao so a um.
+     */
+    public static List<UUID> mobsOf(MinecraftServer server, String sheetId) {
+        if (sheetId == null || sheetId.isEmpty()) {
+            return List.of();
+        }
+        Set<UUID> cached = BY_SHEET.get(sheetId);
+        if (cached == null || cached.isEmpty()) {
+            selfHeal(server);
+            cached = BY_SHEET.get(sheetId);
+        }
+        if (cached == null || cached.isEmpty()) {
+            return List.of();
+        }
+        return List.copyOf(cached);
+    }
+
+    /** O mob com esse UUID em algum mundo do servidor, ou {@code null}. */
+    public static Mob mobEntity(MinecraftServer server, UUID uuid) {
+        if (server == null || uuid == null) {
+            return null;
+        }
+        for (ServerLevel level : server.getAllLevels()) {
+            if (level.getEntity(uuid) instanceof Mob mob) {
+                return mob;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Todos os pares mob -&gt; ficha que o cache conhece.
+     *
+     * <p>E o que o tick do monstro deitado percorre: sao os mobs amarrados, e nao
+     * todas as entidades do mundo.
+     */
+    public static Map<UUID, String> boundMobs() {
+        return Collections.unmodifiableMap(BY_MOB);
     }
 
     private static boolean isAlive(MinecraftServer server, UUID uuid) {
@@ -199,6 +293,9 @@ public final class ThreatSheetBinding {
      * <p>Chamado quando o cache nao tem a resposta. No primeiro mob que aparecer com a
      * tag, a ficha fica apontada para ele -- dois mobs com a mesma tag e um estado que
      * {@link #bind} impede de criar, entao isso so acontece por edicao de NBT a mao.
+     *
+     * <p><b>Modo Horda (22/10/2026):</b> dois mobs com a MESMA tag sao legitimos
+     * quando a ficha esta no modo horda, entao todos entram na ficha.
      */
     public static void selfHeal(MinecraftServer server) {
         if (server == null) {
@@ -219,13 +316,28 @@ public final class ThreatSheetBinding {
                         continue;
                     }
                     BY_MOB.put(mob.getUUID(), id);
-                    BY_SHEET.putIfAbsent(id, mob.getUUID());
+                    mobs(id).add(mob.getUUID());
                     // Um mob tem no maximo uma ficha. Duas tags aqui so acontecem se
                     // alguem editou o NBT a mao; o cache guarda a primeira.
                     break;
                 }
             }
         }
+    }
+
+    /**
+     * Refaz o cache uma vez por sessao.
+     *
+     * <p><b>Por que uma vez so:</b> refazer o cache e varrer TODAS as entidades
+     * carregadas, e fazer isso a cada tick seria caro. O cache se mantem em dia
+     * sozinho: o {@link #bind} atualiza ele, e o {@link #unbind} tira o mob.
+     */
+    public static void selfHealOnce(MinecraftServer server) {
+        if (healed) {
+            return;
+        }
+        healed = true;
+        selfHeal(server);
     }
 
     /**
@@ -293,9 +405,8 @@ public static boolean handleEntityClick(ServerPlayer player, ServerLevel level,
     }
 
     private static void refuseBlankName(ServerPlayer player, ThreatSheet sheet) {
-        player.displayClientMessage(Component.literal("§c[Ficha] §e" + sheet.identity().name()
-                + " §cnão tem nome de exibição. Abra a ficha pelo item, preencha o nome de "
-                + "exibição e clique em Atualizar antes de amarrar."), true);
+        player.displayClientMessage(Component.translatable(
+                "message.tabletoprpg.threat_sheet_blank_display_name", sheet.identity().name()), true);
         TabletopRpg.LOGGER.info("[TabletopRPG] Amarracao recusada: ficha '{}' sem nome de exibicao.",
                 sheet.identity().name());
     }
@@ -376,14 +487,14 @@ public static Mob mobUnderCrosshair(ServerPlayer player) {
 
     /** A mensagem de vinculo, compartilhada pelos dois caminhos. */
     private static Component linkMessage(Mob mob, ThreatSheet sheet) {
-        return Component.literal("§a[Ficha] §e" + sheet.identity().name()
-                + " §7ligada ao §f" + mob.getName().getString()
-                + "§7. Aponte com §f@e[name=\"" + sheet.identity().displayName() + "\"]§7.");
+        return Component.translatable("message.tabletoprpg.threat_sheet_linked",
+                sheet.identity().name(), mob.getName().getString(), sheet.identity().displayName());
     }
 
     /** Esvazia o cache. Existe para o comando de depuracao e para teste. */
     public static void forgetAll() {
         BY_MOB.clear();
         BY_SHEET.clear();
+        healed = false;
     }
 }

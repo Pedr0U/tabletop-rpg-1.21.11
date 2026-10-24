@@ -80,7 +80,8 @@ public record SheetModel(
         List<PericiaDef> pericias,
         int attributeValueMin,
         int attributeValueMax,
-        int periciaValueMax
+        int periciaValueMax,
+        int defaultInitiative
     ) {
 
     /**
@@ -146,6 +147,21 @@ public record SheetModel(
     public static final int DEFAULT_ATTRIBUTE_VALUE_MAX = 30;
     /** Teto padrao do valor de uma pericia. Como o do atributo, e editavel. */
     public static final int DEFAULT_PERICIA_VALUE_MAX = 30;
+
+    /**
+     * Iniciativa padrao da mesa (22/10/2026).
+     *
+     * <p>E o valor que o Mestre coloca no Sheet Editor e que vale para TODOS os
+     * personagens que usam a iniciativa padrao. O personagem que quer um valor
+     * proprio desliga o "usar iniciativa padrao" na ficha dele e digita o seu.
+     *
+     * <p><b>Por que 0 e nao 10:</b> o padrao de uma ficha recem-criada tem de
+     * ser o mesmo que o de uma ficha salva antes deste campo existir, e o
+     * primeiro valor que o mundo ja usava era o "nada digitado" (0). Um mundo
+     * novo com a iniciativa em 0 e o mesmo mundo de antes, so que a linha
+     * existe.
+     */
+    public static final int DEFAULT_INITIATIVE = 0;
 
     /**
      * Teto <b>absoluto</b> de um limite de valor escolhido pelo Mestre.
@@ -294,7 +310,8 @@ public record SheetModel(
                 ),
                 DEFAULT_ATTRIBUTE_VALUE_MIN,
                 DEFAULT_ATTRIBUTE_VALUE_MAX,
-                DEFAULT_PERICIA_VALUE_MAX
+                DEFAULT_PERICIA_VALUE_MAX,
+                DEFAULT_INITIATIVE
         );
     }
 
@@ -353,10 +370,16 @@ public record SheetModel(
         // investimento do jogador e um numero negativo ali seria penalidade, e
         // penalidade pertence ao atributo.
         periciaValueMax = clamp(periciaValueMax, 0, VALUE_LIMIT_MAX);
+        // 22/10/2026: a iniciativa padrao da mesa e um numero COM sinal (o
+        // modificador de iniciativa do personagem pode ser negativo), entao ela
+        // usa o mesmo teto absoluto dos limites de valor.
+        defaultInitiative = clamp(defaultInitiative, VALUE_LIMIT_MIN, VALUE_LIMIT_MAX);
     }
 
     /**
-     * Construtor de 16 campos, sem o {@code caLabel}, para as copias internas.
+     * Construtor de 16 campos, sem o {@code caLabel} e sem a
+     * {@code defaultInitiative}, para quem so quer o modelo com os rotulos
+     * padrao.
      *
      * <p><b>Por que ele existe (01/10/2026):</b> o {@code caLabel} foi o
      * campo 17 do record. Sem esta sobrecarga, as dezenove chamadas de
@@ -366,6 +389,12 @@ public record SheetModel(
      * nenhuma relacao com CA. Com esta sobrecarga, todas elas seguem
      * compilando e com o rotulo CA padrao, que e o que elas queriam mesmo: uma
      * copia que muda outra coisa nao deve trocar o rotulo por acidente.
+     *
+     * <p><b>22/10/2026:</b> com a iniciativa padrao no record, esta sobrecarga
+     * tambem deixa a iniciativa em {@link #DEFAULT_INITIATIVE}. As copias
+     * internas do modelo NAO usam mais esta sobrecarga: elas usam o
+     * {@link #copy}, que preserva o rotulo do CA e a iniciativa padrao do modelo
+     * que esta sendo copiado.
      */
     public SheetModel(
             String nameLabel,
@@ -387,7 +416,42 @@ public record SheetModel(
     ) {
         this(nameLabel, raceLabel, raceEnabled, classLabel, backgroundLabel, hpLabel, manaLabel,
                 manaEnabled, levelLabel, xpLabel, "CA", xp, attributes, pericias, attributeValueMin,
-                attributeValueMax, periciaValueMax);
+                attributeValueMax, periciaValueMax, DEFAULT_INITIATIVE);
+    }
+
+    /**
+     * Copia do modelo que preserva o rotulo do CA e a iniciativa padrao.
+     *
+     * <p><b>Por que ela existe (22/10/2026):</b> as copias internas (os
+     * {@code with...}) reconstruiam o modelo inteiro para trocar UM campo. Como
+     * elas usavam o construtor de 16 campos, cada copia voltava com o rotulo do
+     * CA no padrao "CA" e com a iniciativa padrao em 0 -- ou seja, renomear um
+     * campo APAGAVA o rotulo do CA que o Mestre tinha configurado, e trocar
+     * qualquer coisa apagava a iniciativa da mesa. Com esta copia, o rotulo do
+     * CA e a iniciativa padrao vem do modelo de origem, e o que muda e so o
+     * campo que a edicao pediu.
+     */
+    private SheetModel copy(
+            String nameLabel,
+            String raceLabel,
+            boolean raceEnabled,
+            String classLabel,
+            String backgroundLabel,
+            String hpLabel,
+            String manaLabel,
+            boolean manaEnabled,
+            String levelLabel,
+            String xpLabel,
+            XpMode xp,
+            List<AttributeDef> attributes,
+            List<PericiaDef> pericias,
+            int attributeValueMin,
+            int attributeValueMax,
+            int periciaValueMax
+    ) {
+        return new SheetModel(nameLabel, raceLabel, raceEnabled, classLabel, backgroundLabel, hpLabel,
+                manaLabel, manaEnabled, levelLabel, xpLabel, caLabel, xp, attributes, pericias,
+                attributeValueMin, attributeValueMax, periciaValueMax, defaultInitiative);
     }
 
     private static List<AttributeDef> sanitizeAttributes(List<AttributeDef> raw) {
@@ -526,6 +590,11 @@ public record SheetModel(
             // `switch` quando o modelo devolve string vazia, e o `default`
             // abaixo devolve a propria chave.
             case "playername" -> "Player";
+            // 22/10/2026: a iniciativa do personagem. O rotulo e um LITERAL,
+            // como o do Player: nao ha `initiativeLabel` no modelo, porque o
+            // campo novo nao virou configuravel no Sheet Editor (o que o
+            // Mestre configura la e a iniciativa PADRAO da mesa, outra coisa).
+            case "initiative" -> "Initiative";
             default -> field;
         };
     }
@@ -586,31 +655,31 @@ public record SheetModel(
         }
         String value = clean(label, LABEL_MAX);
         return switch (field.toLowerCase(Locale.ROOT)) {
-            case "charactername" -> new SheetModel(value.isEmpty() ? nameLabel : value, raceLabel,
+            case "charactername" -> copy(value.isEmpty() ? nameLabel : value, raceLabel,
                     raceEnabled, classLabel, backgroundLabel, hpLabel, manaLabel, manaEnabled,
                     levelLabel, xpLabel, xp, attributes, pericias, attributeValueMin,
                     attributeValueMax, periciaValueMax);
-            case "race" -> new SheetModel(nameLabel, value, raceEnabled, classLabel,
+            case "race" -> copy(nameLabel, value, raceEnabled, classLabel,
                     backgroundLabel, hpLabel, manaLabel, manaEnabled, levelLabel, xpLabel, xp,
                     attributes, pericias, attributeValueMin, attributeValueMax, periciaValueMax);
-            case "characterclass" -> new SheetModel(nameLabel, raceLabel, raceEnabled, value,
+            case "characterclass" -> copy(nameLabel, raceLabel, raceEnabled, value,
                     backgroundLabel, hpLabel, manaLabel, manaEnabled, levelLabel, xpLabel, xp,
                     attributes, pericias, attributeValueMin, attributeValueMax, periciaValueMax);
-            case "background" -> new SheetModel(nameLabel, raceLabel, raceEnabled, classLabel, value,
+            case "background" -> copy(nameLabel, raceLabel, raceEnabled, classLabel, value,
                     hpLabel, manaLabel, manaEnabled, levelLabel, xpLabel, xp, attributes, pericias,
                     attributeValueMin, attributeValueMax, periciaValueMax);
-            case "hp" -> new SheetModel(nameLabel, raceLabel, raceEnabled, classLabel,
+            case "hp" -> copy(nameLabel, raceLabel, raceEnabled, classLabel,
                     backgroundLabel, value, manaLabel, manaEnabled, levelLabel, xpLabel, xp,
                     attributes, pericias, attributeValueMin, attributeValueMax, periciaValueMax);
-            case "mana" -> new SheetModel(nameLabel, raceLabel, raceEnabled, classLabel,
+            case "mana" -> copy(nameLabel, raceLabel, raceEnabled, classLabel,
                     backgroundLabel, hpLabel, value, manaEnabled, levelLabel, xpLabel, xp,
                     attributes, pericias, attributeValueMin, attributeValueMax, periciaValueMax);
-            case "level" -> new SheetModel(nameLabel, raceLabel, raceEnabled, classLabel,
+            case "level" -> copy(nameLabel, raceLabel, raceEnabled, classLabel,
                     backgroundLabel, hpLabel, manaLabel, manaEnabled, value, xpLabel, xp,
                     attributes, pericias, attributeValueMin, attributeValueMax, periciaValueMax);
-            case "xp" -> new SheetModel(nameLabel, raceLabel, raceEnabled, classLabel,
+            case "xp" -> copy(nameLabel, raceLabel, raceEnabled, classLabel,
                     backgroundLabel, hpLabel, manaLabel, manaEnabled, levelLabel,
-                    value.isEmpty() ? xpLabel : value, caLabel, xp, attributes, pericias,
+                    value.isEmpty() ? xpLabel : value, xp, attributes, pericias,
                     attributeValueMin, attributeValueMax, periciaValueMax);
             // 01/10/2026: o CA, na mesma linha do Level. `value.isEmpty()` com o
             // padrao, pelo mesmo motivo do XP acima: um rotulo apagado no editor
@@ -618,7 +687,7 @@ public record SheetModel(
             case "ca" -> new SheetModel(nameLabel, raceLabel, raceEnabled, classLabel,
                     backgroundLabel, hpLabel, manaLabel, manaEnabled, levelLabel, xpLabel,
                     value.isEmpty() ? caLabel : value, xp, attributes, pericias,
-                    attributeValueMin, attributeValueMax, periciaValueMax);
+                    attributeValueMin, attributeValueMax, periciaValueMax, defaultInitiative);
             default -> this;
         };
     }
@@ -629,15 +698,15 @@ public record SheetModel(
             return this;
         }
         return switch (field.toLowerCase(Locale.ROOT)) {
-            case "race" -> new SheetModel(nameLabel, raceLabel, enabled, classLabel, backgroundLabel,
+            case "race" -> copy(nameLabel, raceLabel, enabled, classLabel, backgroundLabel,
                     hpLabel, manaLabel, manaEnabled, levelLabel, xpLabel, xp, attributes, pericias,
                     attributeValueMin, attributeValueMax, periciaValueMax);
-            case "mana" -> new SheetModel(nameLabel, raceLabel, raceEnabled, classLabel,
+            case "mana" -> copy(nameLabel, raceLabel, raceEnabled, classLabel,
                     backgroundLabel, hpLabel, manaLabel, enabled, levelLabel, xpLabel, xp,
                     attributes, pericias, attributeValueMin, attributeValueMax, periciaValueMax);
             // Desligar XP e o mesmo que dar um rotulo vazio: e assim que a tela
             // faz, e mantem um unico caminho para "campo que nao aparece".
-            case "xp" -> new SheetModel(nameLabel, raceLabel, raceEnabled, classLabel, backgroundLabel,
+            case "xp" -> copy(nameLabel, raceLabel, raceEnabled, classLabel, backgroundLabel,
                     hpLabel, manaLabel, manaEnabled, levelLabel, xpLabel,
                     enabled ? (xp == XpMode.HIDDEN ? XpMode.NUMBER : xp) : XpMode.HIDDEN, attributes,
                     pericias, attributeValueMin, attributeValueMax, periciaValueMax);
@@ -647,7 +716,7 @@ public record SheetModel(
 
     /** Copia com XP no modo texto (livre) ou numero (setas de -/+). */
     public SheetModel withXpMode(XpMode mode) {
-        return new SheetModel(nameLabel, raceLabel, raceEnabled, classLabel, backgroundLabel, hpLabel,
+        return copy(nameLabel, raceLabel, raceEnabled, classLabel, backgroundLabel, hpLabel,
                 manaLabel, manaEnabled, levelLabel, xpLabel, mode == null ? XpMode.NUMBER : mode,
                 attributes, pericias, attributeValueMin, attributeValueMax, periciaValueMax);
     }
@@ -661,9 +730,24 @@ public record SheetModel(
      * atualiza {@code staged} a cada tecla sem reconstruir os widgets.
      */
     public SheetModel withValueLimits(int min, int max, int periciaMax) {
-        return new SheetModel(nameLabel, raceLabel, raceEnabled, classLabel, backgroundLabel, hpLabel,
+        return copy(nameLabel, raceLabel, raceEnabled, classLabel, backgroundLabel, hpLabel,
                 manaLabel, manaEnabled, levelLabel, xpLabel, xp, attributes, pericias,
                 min, max, periciaMax);
+    }
+
+    /**
+     * Copia com a iniciativa padrao da mesa trocada (22/10/2026).
+     *
+     * <p>E o unico caminho de edicao desse numero, e quem chama e o Sheet
+     * Editor, que atualiza o rascunho a cada tecla sem remontar a tela. O
+     * construtor compacto corta o que for absurdo (o mesmo teto absoluto dos
+     * limites de valor), entao o numero que entra no modelo esta sempre em
+     * faixa.
+     */
+    public SheetModel withDefaultInitiative(int value) {
+        return new SheetModel(nameLabel, raceLabel, raceEnabled, classLabel, backgroundLabel, hpLabel,
+                manaLabel, manaEnabled, levelLabel, xpLabel, caLabel, xp, attributes, pericias,
+                attributeValueMin, attributeValueMax, periciaValueMax, value);
     }
 
     /** Copia com outro rotulo/nome para um atributo. */
@@ -675,7 +759,7 @@ public record SheetModel(
         for (AttributeDef def : attributes) {
             out.add(def.id().equals(id) ? new AttributeDef(id, label, name) : def);
         }
-        return new SheetModel(nameLabel, raceLabel, raceEnabled, classLabel, backgroundLabel, hpLabel,
+        return copy(nameLabel, raceLabel, raceEnabled, classLabel, backgroundLabel, hpLabel,
                 manaLabel, manaEnabled, levelLabel, xpLabel, xp, out, pericias, attributeValueMin,
                 attributeValueMax, periciaValueMax);
     }
@@ -715,7 +799,7 @@ public record SheetModel(
         String id = "attr_" + index;
         List<AttributeDef> out = new ArrayList<>(attributes);
         out.add(new AttributeDef(id, "AT" + out.size(), "Attribute " + out.size()));
-        return new SheetModel(nameLabel, raceLabel, raceEnabled, classLabel, backgroundLabel,
+        return copy(nameLabel, raceLabel, raceEnabled, classLabel, backgroundLabel,
                 hpLabel, manaLabel, manaEnabled, levelLabel, xpLabel, xp, out, pericias,
                 attributeValueMin, attributeValueMax, periciaValueMax);
     }
@@ -777,7 +861,7 @@ public record SheetModel(
                     ? new PericiaDef(def.id(), def.name(), fallback)
                     : def);
         }
-        return new SheetModel(nameLabel, raceLabel, raceEnabled, classLabel, backgroundLabel, hpLabel,
+        return copy(nameLabel, raceLabel, raceEnabled, classLabel, backgroundLabel, hpLabel,
                 manaLabel, manaEnabled, levelLabel, xpLabel, xp, out, newPericias, attributeValueMin,
                 attributeValueMax, periciaValueMax);
     }
@@ -812,7 +896,7 @@ public record SheetModel(
         }
         List<PericiaDef> out = new ArrayList<>(pericias);
         out.add(new PericiaDef(freshPericiaId(out), "Skill " + n, firstAttributeId()));
-        return new SheetModel(nameLabel, raceLabel, raceEnabled, classLabel, backgroundLabel, hpLabel,
+        return copy(nameLabel, raceLabel, raceEnabled, classLabel, backgroundLabel, hpLabel,
                 manaLabel, manaEnabled, levelLabel, xpLabel, xp, attributes, out, attributeValueMin,
                 attributeValueMax, periciaValueMax);
     }
@@ -841,7 +925,7 @@ public record SheetModel(
         if (out.isEmpty()) {
             return this;
         }
-        return new SheetModel(nameLabel, raceLabel, raceEnabled, classLabel, backgroundLabel, hpLabel,
+        return copy(nameLabel, raceLabel, raceEnabled, classLabel, backgroundLabel, hpLabel,
                 manaLabel, manaEnabled, levelLabel, xpLabel, xp, attributes, out, attributeValueMin,
                 attributeValueMax, periciaValueMax);
     }
@@ -878,7 +962,7 @@ public record SheetModel(
         for (PericiaDef current : pericias) {
             out.add(current.id().equals(def.id()) ? new PericiaDef(def.id(), target, attr) : current);
         }
-        return new SheetModel(nameLabel, raceLabel, raceEnabled, classLabel, backgroundLabel, hpLabel,
+        return copy(nameLabel, raceLabel, raceEnabled, classLabel, backgroundLabel, hpLabel,
                 manaLabel, manaEnabled, levelLabel, xpLabel, xp, attributes, out, attributeValueMin,
                 attributeValueMax, periciaValueMax);
     }
@@ -1113,6 +1197,11 @@ public record SheetModel(
                             .add("attributeValueMin", model.attributeValueMin(), Codec.INT)
                             .add("attributeValueMax", model.attributeValueMax(), Codec.INT)
                             .add("periciaValueMax", model.periciaValueMax(), Codec.INT)
+                            // 22/10/2026: a iniciativa padrao da mesa, no fim do
+                            // mapa (a mesma posicao do record). Um Sheet Model
+                            // gravado antes dela nao tem a chave, e a ausencia
+                            // significa "o Mestre ainda nao configurou" (0).
+                            .add("defaultInitiative", model.defaultInitiative(), Codec.INT)
                             .build(prefix);
                 }
             },
@@ -1136,7 +1225,8 @@ public record SheetModel(
                             read(ops, map, "pericias", Codec.list(PericiaDef.CODEC), List.<PericiaDef>of()),
                             read(ops, map, "attributeValueMin", Codec.INT, DEFAULT_ATTRIBUTE_VALUE_MIN),
                             read(ops, map, "attributeValueMax", Codec.INT, DEFAULT_ATTRIBUTE_VALUE_MAX),
-                            read(ops, map, "periciaValueMax", Codec.INT, DEFAULT_PERICIA_VALUE_MAX)
+                            read(ops, map, "periciaValueMax", Codec.INT, DEFAULT_PERICIA_VALUE_MAX),
+                            read(ops, map, "defaultInitiative", Codec.INT, DEFAULT_INITIATIVE)
                     )).map(decoded -> Pair.of(decoded, input));
                 }
             }
@@ -1230,6 +1320,10 @@ public record SheetModel(
         ByteBufCodecs.VAR_INT.encode(buf, model.attributeValueMin());
         ByteBufCodecs.VAR_INT.encode(buf, model.attributeValueMax());
         ByteBufCodecs.VAR_INT.encode(buf, model.periciaValueMax());
+        // 22/10/2026: a iniciativa padrao da mesa entra por ULTIMO, como no
+        // record. O VAR_INT aceita numero negativo (o Minecraft escreve o
+        // sinal em 5 bytes), entao a iniciativa pode ser negativa.
+        ByteBufCodecs.VAR_INT.encode(buf, model.defaultInitiative());
     };
 
     private static final StreamDecoder<FriendlyByteBuf, SheetModel> DECODER = buf -> new SheetModel(
@@ -1251,6 +1345,10 @@ public record SheetModel(
             PERICIAS_CODEC.decode(buf),
             ByteBufCodecs.VAR_INT.decode(buf),
             ByteBufCodecs.VAR_INT.decode(buf),
+            ByteBufCodecs.VAR_INT.decode(buf),
+            // 22/10/2026: a iniciativa padrao da mesa, na MESMA posicao do
+            // ENCODER acima (a ultima). Se um dos lados mudar de lugar, o
+            // round-trip do SheetModelCodecTest quebra.
             ByteBufCodecs.VAR_INT.decode(buf)
     );
 

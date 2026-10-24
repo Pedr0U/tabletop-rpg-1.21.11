@@ -125,6 +125,7 @@ public final class ModItems {
     private static final String NBT_PRESET = "preset";
     private static final String NBT_FORMULA = "formula";
     private static final String NBT_COLOR = "color";
+    private static final String NBT_OPEN = "open";
     private static final String NBT_THREAT_SHEET = "threat_sheet";
     private static final String NBT_LEVEL = "level";
 
@@ -208,6 +209,12 @@ public final class ModItems {
                         tag.getString(NBT_FORMULA).orElse("")));
                 tooltip.accept(Component.translatable("item.tabletop-rpg.roll_preset.color",
                         RollPresetColor.idOrDefault(tag.getString(NBT_COLOR).orElse("")).displayName()));
+                // A linha da rolagem publica so aparece quando ela e publica: e a
+                // diferenca que muda a mesa, e um item particular nao precisa dizer
+                // que e particular.
+                if (tag.getBoolean(NBT_OPEN).orElse(false)) {
+                    tooltip.accept(Component.translatable("item.tabletop-rpg.roll_preset.open"));
+                }
             }
         };
 
@@ -228,12 +235,13 @@ public final class ModItems {
                 super.appendHoverText(stack, context, display, tooltip, flag);
                 CompoundTag tag = threatSheetTag(stack);
                 if (tag == null) {
-                    tooltip.accept(Component.literal("Item sem ficha"));
+                    tooltip.accept(Component.translatable("message.tabletoprpg.threat_sheet_item_no_sheet"));
                     return;
                 }
-                tooltip.accept(Component.literal("ND " + tag.getInt(NBT_LEVEL).orElse(0)));
-                tooltip.accept(Component.literal("Clique direito no ar: abrir e atualizar"));
-                tooltip.accept(Component.literal("Clique direito numa criatura: ligar a ficha"));
+                tooltip.accept(Component.translatable("message.tabletoprpg.threat_sheet_item_level",
+                        tag.getInt(NBT_LEVEL).orElse(0)));
+                tooltip.accept(Component.translatable("message.tabletoprpg.threat_sheet_item_use_air"));
+                tooltip.accept(Component.translatable("message.tabletoprpg.threat_sheet_item_use_entity"));
             }
         };
 
@@ -411,6 +419,9 @@ public final class ModItems {
         tag.putString(NBT_PRESET, preset.key());
         tag.putString(NBT_FORMULA, preset.formula());
         tag.putString(NBT_COLOR, preset.colorId());
+        // A flag de rolagem publica vai junto: o item e a apresentacao do preset, e
+        // quem usa o item tem de rolar do mesmo jeito que quem criou o preset.
+        tag.putBoolean(NBT_OPEN, preset.openRoll());
         stack.set(DataComponents.CUSTOM_DATA, CustomData.of(tag));
 
         // Toda cor pinta: a opcao "default" saiu em 01/10/2026 porque marrom sem
@@ -439,15 +450,35 @@ public final class ModItems {
      * mostrando a formula antiga na dica e com a cor antiga, e a jogadora veria duas
      * informacoes diferentes para o mesmo preset.
      */
-    public static void refreshRollPresetItems(ServerPlayer player, RollPreset preset) {
+    public static boolean refreshRollPresetItems(ServerPlayer player, RollPreset preset) {
+        return refreshRollPresetItems(player, preset, preset.key());
+    }
+
+    /**
+     * Reaplica nome, cor e dica nos itens de um preset que a jogadora ja carrega,
+     * deixando o item ser achado pela chave <b>antiga</b>.
+     *
+     * <p><b>Por que a chave antiga:</b> renomear o preset muda a chave (ela vem do
+     * nome), e o item ainda carrega a chave antiga. Sem a chave anterior, o item
+     * renomeado nao seria reconhecido e continuaria mostrando a formula antiga.
+     *
+     * @param oldKey a chave que o item carrega hoje (a chave nova, quando nao houve
+     *               renomeio)
+     * @return {@code true} se pelo menos um item foi atualizado no lugar
+     */
+    public static boolean refreshRollPresetItems(ServerPlayer player, RollPreset preset, String oldKey) {
         ItemStack updated = buildRollPresetStack(preset);
+        String from = oldKey == null || oldKey.isBlank()
+                ? preset.key()
+                : RollPreset.normalizeKey(oldKey);
+        boolean refreshed = false;
         for (int slot = 0; slot < player.getInventory().getContainerSize(); slot++) {
             ItemStack existing = player.getInventory().getItem(slot);
             if (!isRollPreset(existing)) {
                 continue;
             }
             CompoundTag tag = presetTag(existing);
-            if (tag == null || !preset.key().equals(tag.getString(NBT_PRESET).orElse(""))) {
+            if (tag == null || !from.equals(tag.getString(NBT_PRESET).orElse(""))) {
                 continue;
             }
             existing.set(DataComponents.CUSTOM_NAME, updated.get(DataComponents.CUSTOM_NAME));
@@ -457,7 +488,9 @@ public final class ModItems {
             } else {
                 existing.remove(DataComponents.DYED_COLOR);
             }
+            refreshed = true;
         }
+        return refreshed;
     }
 
     /**
@@ -573,7 +606,10 @@ public final class ModItems {
 
             // SUCCESS (e nao PASS): o item nao tem outro uso, e PASS deixaria o jogador
             // colocar no mundo o item inteiro a cada rolagem.
-            MasterCommands.rollForPlayer(serverPlayer, preset.formula());
+            //
+            // A flag de rolagem publica vem do preset: um preset compartilhado rola
+            // para a mesa toda, e o item de outro jogador se comporta como o dono.
+            MasterCommands.rollForPlayer(serverPlayer, preset.formula(), preset.openRoll());
             return InteractionResult.SUCCESS;
         }
 

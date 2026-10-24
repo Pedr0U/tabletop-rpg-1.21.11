@@ -2,6 +2,7 @@ package com.pedro.tabletoprpg;
 
 import net.fabricmc.fabric.api.entity.event.v1.ServerLivingEntityEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
+import net.minecraft.network.chat.Component;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.damagesource.DamageTypes;
@@ -30,6 +31,11 @@ import java.util.UUID;
  *   <li>{@link DamageTypes#GENERIC_KILL} (/kill): o mestre precisa poder
  *       matar entidades para desfazer erros de sessão.</li>
  * </ul>
+ *
+ * <p><b>Mobs e dano (22/10/2026):</b> a imunidade dos mobs deixou de ser
+ * fixa. Com a opção "Mobs podem levar dano" LIGADA (menu de Settings), os
+ * mobs levam dano normal -- inclusive os invocados pelo mestre, que perdem a
+ * invulnerabilidade quando a opção liga.
  */
 public final class DamageControlHandler {
 
@@ -39,13 +45,46 @@ public final class DamageControlHandler {
     public static void register() {
         // Retornar false no ALLOW_DAMAGE cancela o dano antes de ser aplicado.
         ServerLivingEntityEvents.ALLOW_DAMAGE.register((entity, source, amount) -> {
-            if (entity instanceof ServerPlayer || entity instanceof Mob) {
+            if (entity instanceof ServerPlayer) {
                 if (source.is(DamageTypes.FELL_OUT_OF_WORLD) || source.is(DamageTypes.GENERIC_KILL)) {
                     return true; // exceçóes de segurança (void e /kill)
                 }
-                return false; // imune: jogadores e mobs não tomam dano físico
+                return false; // imune: jogadores não tomam dano físico
+            }
+            if (entity instanceof Mob) {
+                if (source.is(DamageTypes.FELL_OUT_OF_WORLD) || source.is(DamageTypes.GENERIC_KILL)) {
+                    return true; // exceções de segurança (void e /kill)
+                }
+                // Mobs são imunes por padrão (regra da mesa: o HP do monstro é
+                // ajustado pelo mestre). Com a opção "Mobs podem levar dano"
+                // LIGADA, o mob leva dano normal -- inclusive os invocados pelo
+                // mestre, que perdem a invulnerabilidade quando a opção liga.
+                return SessionManager.canMobsBeDamaged();
             }
             return true; // demais entidades seguem o comportamento vanilla
+        });
+
+        // Mob invocado pelo mestre que morre: some DE VEZ (não ressurge) e o
+        // vínculo da ficha de ameaça é solto. Fica aqui porque é a regra de
+        // dano da sessão que decide se o mob pode morrer.
+        ServerLivingEntityEvents.AFTER_DEATH.register((entity, source) -> {
+            if (!(entity instanceof Mob mob)) {
+                return;
+            }
+            if (!CombatController.isInsertedMob(mob.getUUID())) {
+                return; // mob do mundo: segue o comportamento vanilla
+            }
+            String nome = mob.getName().getString();
+            MinecraftServer server = mob.level().getServer();
+            // Solta a ficha de ameaça amarrada: o cache (ficha -> mob) não pode
+            // continuar apontando para um mob que não existe mais.
+            ThreatSheetBinding.unbind(mob);
+            mob.discard();
+            CombatController.forgetInsertedMob(mob.getUUID());
+            if (server != null) {
+                server.getPlayerList().broadcastSystemMessage(
+                        Component.translatable("message.tabletoprpg.mob_destroyed", nome), false);
+            }
         });
 
         // Personagem deitado (HP da ficha <= 0): aplicado no fim de cada tick

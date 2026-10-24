@@ -190,9 +190,9 @@ public class ThreatEntryFormScreen extends Screen {
         }
 
         int btnW = Math.max(40, (panelW - 2 * PAD - GAP) / 2);
-        addRenderableWidget(Button.builder(Component.literal("Salvar"), b -> save())
+        addRenderableWidget(Button.builder(Component.translatable("screen.tabletoprpg.threat_entry_form.save"), b -> save())
                 .bounds(panelX + PAD, footerY, btnW, FOOTER_H).build());
-        addRenderableWidget(Button.builder(Component.literal("Cancelar"), b -> onClose())
+        addRenderableWidget(Button.builder(Component.translatable("screen.tabletoprpg.threat_entry_form.cancel"), b -> onClose())
                 .bounds(panelX + panelW - PAD - btnW, footerY, btnW, FOOTER_H).build());
 
         // So o primeiro campo recebe o foco: entrar na tela com o cursor ja na caixa

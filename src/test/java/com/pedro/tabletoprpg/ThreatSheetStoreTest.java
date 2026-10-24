@@ -42,7 +42,8 @@ class ThreatSheetStoreTest {
                 List.of("Caracteristica"),
                 List.of(new ThreatSheet.Ability("Passiva", "efeito")),
                 List.of(new ThreatSheet.Action("Acao", "+5", "1d8", "golpe")),
-                "");
+                "",
+                false);
     }
 
     /** Salva e devolve a ficha com o id que o servidor atribuiu. */
@@ -216,6 +217,52 @@ class ThreatSheetStoreTest {
 
         assertEquals(copia, deVolta);
         assertEquals(mae.id(), deVolta.copyOf());
+    }
+
+    @Test
+    @DisplayName("NBT antigo sem o campo horde_mode carrega com o Modo Horda desligado")
+    void nbtAntigoViraForaDoModoHorda() {
+        ThreatSheet mae = salva("Horda");
+        CompoundTag nbt = gravaNbt(mae);
+        // Remove o campo como se o NBT tivesse sido gravado antes do campo existir.
+        nbt.remove("horde_mode");
+
+        ThreatSheet carregado = ThreatSheet.CODEC.parse(NbtOps.INSTANCE, nbt).getOrThrow();
+        assertFalse(carregado.hordeMode());
+    }
+
+    @Test
+    @DisplayName("NBT round-trip preserva o Modo Horda")
+    void nbtRoundTripPreservaModoHorda() {
+        ThreatSheet mae = salva("Horda Ligada");
+        // Salva de novo, agora com o Modo Horda ligado.
+        assertEquals(ThreatSheetStore.SaveResult.UPDATED,
+                ThreatSheetStore.save(U, mae.withHordeMode(true), "Horda Ligada"));
+
+        ThreatSheet comHorda = ThreatSheetStore.find(U, "Horda Ligada");
+        assertNotNull(comHorda);
+        assertTrue(comHorda.hordeMode());
+
+        ThreatSheet carregado = ThreatSheet.CODEC.parse(NbtOps.INSTANCE, gravaNbt(comHorda)).getOrThrow();
+        assertTrue(carregado.hordeMode());
+    }
+
+    @Test
+    @DisplayName("STREAM_CODEC round-trip preserva o Modo Horda")
+    void streamCodecRoundTripPreservaModoHorda() {
+        ThreatSheet mae = salva("Horda da Rede");
+        assertEquals(ThreatSheetStore.SaveResult.UPDATED,
+                ThreatSheetStore.save(U, mae.withHordeMode(true), "Horda da Rede"));
+        ThreatSheet comHorda = ThreatSheetStore.find(U, "Horda da Rede");
+        assertNotNull(comHorda);
+
+        FriendlyByteBuf buf = new FriendlyByteBuf(Unpooled.buffer());
+        ThreatSheet.STREAM_CODEC.encode(buf, comHorda);
+        ThreatSheet deVolta = ThreatSheet.STREAM_CODEC.decode(buf);
+        assertEquals(0, buf.readableBytes());
+
+        assertEquals(comHorda, deVolta);
+        assertTrue(deVolta.hordeMode());
     }
 
     private static CompoundTag gravaNbt(ThreatSheet ficha) {
