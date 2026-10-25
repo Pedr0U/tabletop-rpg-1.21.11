@@ -1,0 +1,91 @@
+package com.pedro.tabletoprpg;
+
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+
+/**
+ * Lista de iniciativa em memoria: estado da coleta e participantes com valor.
+ *
+ * <p>Classe pura, sem dependencias do Minecraft, para ter teste proprio. Quem
+ * valida mundo, permissao e modo e o {@link InitiativeCommands}.
+ *
+ * <p><b>Regras:</b> um jogador entra uma vez so. Um mob e identificado pelo nome de
+ * exibicao; todos os mobs com o mesmo nome compartilham o mesmo valor rolado, e o
+ * mestre pode repetir a entrada (cada repeticao e um turno a mais no grupo).
+ *
+ * <p>A ordenacao (maior valor primeiro) entra na Fase 2; por enquanto a lista fica
+ * na ordem de entrada.
+ */
+public final class InitiativeTracker {
+
+    public enum State {
+        IDLE,
+        COLLECTING
+    }
+
+    /** Um participante. {@code mob} diferencia jogador de grupo de mobs. */
+    public record Entry(String name, boolean mob, int value) {
+    }
+
+    private State state = State.IDLE;
+    private final List<Entry> entries = new ArrayList<>();
+
+    public State state() {
+        return state;
+    }
+
+    public boolean isCollecting() {
+        return state == State.COLLECTING;
+    }
+
+    /** Abre a coleta de rolagens e limpa qualquer lista anterior. */
+    public void start() {
+        entries.clear();
+        state = State.COLLECTING;
+    }
+
+    /** Encerra a iniciativa e limpa a lista. */
+    public void end() {
+        entries.clear();
+        state = State.IDLE;
+    }
+
+    public List<Entry> entries() {
+        return Collections.unmodifiableList(entries);
+    }
+
+    /** Valor ja rolado para um nome (jogador ou grupo de mob), ou {@code null}. */
+    public Integer valueOf(String name) {
+        for (Entry entry : entries) {
+            if (entry.name().equals(name)) {
+                return entry.value();
+            }
+        }
+        return null;
+    }
+
+    public boolean contains(String name) {
+        return valueOf(name) != null;
+    }
+
+    /**
+     * Adiciona uma entrada. Jogador nao pode aparecer duas vezes; mob pode.
+     *
+     * @return {@code true} se a entrada foi adicionada
+     */
+    public boolean add(String name, boolean mob, int value) {
+        if (!mob && contains(name)) {
+            return false;
+        }
+        entries.add(new Entry(name, mob, value));
+        return true;
+    }
+
+    /** Remove todas as entradas com aquele nome e devolve quantas saiu. */
+    public int remove(String name) {
+        int before = entries.size();
+        entries.removeIf(entry -> entry.name().equals(name));
+        return before - entries.size();
+    }
+}
