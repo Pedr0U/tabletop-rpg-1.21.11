@@ -86,6 +86,9 @@ public class MasterCommands {
                     .then(Commands.literal("finish")
                         .executes(MasterCommands::finishTurn)))
 
+                // /rpg initiative <start|end|roll|add|remove> -> lista de iniciativa (Fase 1)
+                .then(InitiativeCommands.node())
+
                 // /rpg roll                  -> lista as pericias da ficha
                 // /rpg roll <pericia>         -> 1d20 + valor da pericia + atributo
                 // /rpg roll <formula>         -> d20, 2d6, d20+10, 2d6+d4+3
@@ -294,6 +297,7 @@ public class MasterCommands {
     private static int setMode(CommandContext<CommandSourceStack> ctx, SessionManager.GameMode mode) {
         if (!verifyMasterPermission(ctx)) return 0;
 
+        InitiativeCommands.onModeChanged(ctx.getSource().getServer(), mode);
         SessionManager.setMode(mode);
         if (mode == SessionManager.GameMode.FREE) {
             // Fim do encontro: limpa seleção, âncoras e monstros controlados.
