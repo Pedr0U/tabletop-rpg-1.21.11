@@ -8,30 +8,23 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 class InitiativeRollerTest {
 
     @Test
-    @DisplayName("bonus vazio rola 1d20 puro")
-    void emptyBonusIsPlainD20() {
-        assertEquals("1d20", InitiativeRoller.bonusFormula(""));
-        assertEquals("1d20", InitiativeRoller.bonusFormula("   "));
-        assertEquals("1d20", InitiativeRoller.bonusFormula(null));
+    @DisplayName("formula vazia rola 1d20 puro")
+    void emptyFormulaIsPlainD20() {
+        assertEquals("1d20", InitiativeRoller.formulaOrDefault(""));
+        assertEquals("1d20", InitiativeRoller.formulaOrDefault("   "));
+        assertEquals("1d20", InitiativeRoller.formulaOrDefault(null));
     }
 
     @Test
-    @DisplayName("numero vira 1d20+numero")
-    void numberBonusIsAppended() {
-        assertEquals("1d20+3", InitiativeRoller.bonusFormula("3"));
-        assertEquals("1d20+3", InitiativeRoller.bonusFormula("  3  "));
+    @DisplayName("formula digitada pelo mestre e a rolagem inteira, sem 1d20 extra")
+    void typedFormulaIsTheWholeRoll() {
+        assertEquals("1d20+3", InitiativeRoller.formulaOrDefault("1d20+3"));
+        assertEquals("2d6+1", InitiativeRoller.formulaOrDefault("  2d6+1  "));
     }
 
     @Test
-    @DisplayName("bonus com sinal negativo mantem o sinal")
-    void negativeBonusKeepsSign() {
-        assertEquals("1d20-2", InitiativeRoller.bonusFormula("-2"));
-        assertEquals("1d20+2", InitiativeRoller.bonusFormula("+2"));
-    }
-
-    @Test
-    @DisplayName("formula de dado no bonus soma mais um dado (1d20+1d20+3)")
-    void diceBonusAddsAnotherDie() {
-        assertEquals("1d20+1d20+3", InitiativeRoller.bonusFormula("1d20+3"));
+    @DisplayName("formula com sinal inicial e mantida como digitada")
+    void signedFormulaIsKept() {
+        assertEquals("-2", InitiativeRoller.formulaOrDefault("-2"));
     }
 }
