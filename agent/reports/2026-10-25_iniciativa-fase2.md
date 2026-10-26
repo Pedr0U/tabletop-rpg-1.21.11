@@ -49,3 +49,10 @@ Data: 25/10/2026. Branch: `feature/iniciativa`. Fase 1: tag `iniciativa-fase1`.
 - Mestre no Sheet Editor: com a caixa desmarcada e nenhuma pericia marcada, o salvamento e bloqueado com mensagem no chat. O servidor tambem recusa a gravacao nesse caso.
 - Formula vazia com a caixa marcada continua rolando 1d20 seco.
 - Build exit 0. Nao validado em jogo.
+
+## Mestre e repeticao de jogador (25/10/2026, terceiro feedback)
+- /rpg initiative add <jogador> funciona mesmo com a caixa desmarcada (o mestre adiciona; o jogador rola com a pericia pelo proprio add).
+- Mestre pode repetir o add de um jogador para dar mais turnos: a repeticao reaproveita o valor ja rolado (igual ao grupo de mobs). Jogador continua sem poder rolar duas vezes pelo /rpg initiative roll.
+- Sugestoes do add: jogadores online e mobs elegiveis (ja existiam desde a Fase 1; confirmar em jogo).
+- InitiativeTracker.add agora sempre adiciona; a regra de rolagem unica fica no comando.
+- Build exit 0. Nao validado em jogo.

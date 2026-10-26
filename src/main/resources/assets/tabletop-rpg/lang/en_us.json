@@ -427,7 +427,6 @@
   "message.tabletoprpg.initiative.list_header": "Initiative list:",
   "message.tabletoprpg.initiative.list_line": "%s - %s",
   "message.tabletoprpg.initiative.skill_roll": "With the table initiative unchecked, roll your initiative with /rpg roll %s.",
-  "message.tabletoprpg.initiative.skill_roll_for_player": "With the table initiative unchecked, the player must roll with /rpg roll %s.",
   "message.tabletoprpg.initiative.no_skill": "No skill is marked as the default initiative skill.",
   "screen.tabletoprpg.label.character_appearance": "Character Appearance",
   "screen.tabletoprpg.label.character_backstory": "Character Backstory"

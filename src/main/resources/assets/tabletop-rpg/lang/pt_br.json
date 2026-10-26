@@ -427,7 +427,6 @@
   "message.tabletoprpg.initiative.list_header": "Lista de iniciativa:",
   "message.tabletoprpg.initiative.list_line": "%s - %s",
   "message.tabletoprpg.initiative.skill_roll": "Com a iniciativa padrao da mesa desmarcada, role a iniciativa com /rpg roll %s.",
-  "message.tabletoprpg.initiative.skill_roll_for_player": "Com a iniciativa padrao da mesa desmarcada, o jogador precisa rolar com /rpg roll %s.",
   "message.tabletoprpg.initiative.no_skill": "Nenhuma pericia esta marcada como iniciativa padrao.",
   "screen.tabletoprpg.label.character_appearance": "Aparência do Personagem",
   "screen.tabletoprpg.label.character_backstory": "Histórico do Personagem"
