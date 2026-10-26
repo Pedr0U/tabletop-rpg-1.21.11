@@ -4,7 +4,6 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -38,15 +37,15 @@ class InitiativeTrackerTest {
     }
 
     @Test
-    @DisplayName("jogador nao entra duas vezes")
-    void playerCannotEnterTwice() {
+    @DisplayName("mestre pode repetir a entrada de um jogador para dar mais turnos")
+    void playerCanBeAddedAgain() {
         InitiativeTracker tracker = new InitiativeTracker();
         tracker.start();
 
-        assertTrue(tracker.add("Ana", false, 12));
-        assertFalse(tracker.add("Ana", false, 18));
+        tracker.add("Ana", false, 12);
+        tracker.add("Ana", false, tracker.valueOf("Ana"));
 
-        assertEquals(1, tracker.entries().size());
+        assertEquals(2, tracker.entries().size());
         assertEquals(12, tracker.valueOf("Ana"));
     }
 

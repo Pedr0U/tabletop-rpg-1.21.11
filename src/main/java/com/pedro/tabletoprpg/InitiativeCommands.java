@@ -132,7 +132,7 @@ public final class InitiativeCommands {
      */
     private static int rollSelf(CommandContext<CommandSourceStack> ctx, String extra) {
         if (!checkModeAndCollecting(ctx)) return 0;
-        if (!checkSkillRollRequired(ctx, false)) return 0;
+        if (!checkSkillRollRequired(ctx)) return 0;
         if (!(ctx.getSource().getEntity() instanceof ServerPlayer player)) {
             ctx.getSource().sendFailure(Component.translatable("message.tabletoprpg.roll_players_only"));
             return 0;
@@ -197,10 +197,11 @@ public final class InitiativeCommands {
 
         ServerPlayer online = findOnlinePlayer(server, name);
         if (online != null) {
-            if (!checkSkillRollRequired(ctx, true)) return 0;
-            if (TRACKER.contains(name)) {
-                ctx.getSource().sendFailure(Component.translatable("message.tabletoprpg.initiative.already_in", name));
-                return 0;
+            Integer playerValue = TRACKER.valueOf(name);
+            if (playerValue != null) {
+                TRACKER.add(name, false, playerValue);
+                broadcast(ctx, Component.translatable("message.tabletoprpg.initiative.added", name, playerValue));
+                return 1;
             }
             InitiativeRoller.Roll roll;
             try {
@@ -290,10 +291,10 @@ public final class InitiativeCommands {
 
     /**
      * Com a caixa "usar iniciativa padrao da mesa" desmarcada, o jogador rola a
-     * iniciativa com a propria pericia ({@code /rpg roll <pericia>}), e o comando da
-     * iniciativa nao rola por ele. {@code byMaster} so muda o texto da recusa.
+     * iniciativa com a propria pericia ({@code /rpg roll <pericia>}), e o comando
+     * {@code /rpg initiative roll} nao rola por ele.
      */
-    private static boolean checkSkillRollRequired(CommandContext<CommandSourceStack> ctx, boolean byMaster) {
+    private static boolean checkSkillRollRequired(CommandContext<CommandSourceStack> ctx) {
         SheetModel model = SheetModelHolder.current();
         if (model.initiativeUseDefault()) {
             return true;
@@ -302,10 +303,7 @@ public final class InitiativeCommands {
         if (skill == null) {
             ctx.getSource().sendFailure(Component.translatable("message.tabletoprpg.initiative.no_skill"));
         } else {
-            String key = byMaster
-                    ? "message.tabletoprpg.initiative.skill_roll_for_player"
-                    : "message.tabletoprpg.initiative.skill_roll";
-            ctx.getSource().sendFailure(Component.translatable(key, skill.name()));
+            ctx.getSource().sendFailure(Component.translatable("message.tabletoprpg.initiative.skill_roll", skill.name()));
         }
         return false;
     }

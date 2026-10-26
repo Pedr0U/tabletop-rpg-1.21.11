@@ -11,7 +11,7 @@ import java.util.List;
  * <p>Classe pura, sem dependencias do Minecraft, para ter teste proprio. Quem
  * valida mundo, permissao e modo e o {@link InitiativeCommands}.
  *
- * <p><b>Regras:</b> um jogador entra uma vez so. Um mob e identificado pelo nome de
+ * <p><b>Regras:</b> um jogador rola uma vez so (o mestre pode repetir a entrada dele). Um mob e identificado pelo nome de
  * exibicao; todos os mobs com o mesmo nome compartilham o mesmo valor rolado, e o
  * mestre pode repetir a entrada (cada repeticao e um turno a mais no grupo).
  *
@@ -76,16 +76,12 @@ public final class InitiativeTracker {
     }
 
     /**
-     * Adiciona uma entrada. Jogador nao pode aparecer duas vezes; mob pode.
-     *
-     * @return {@code true} se a entrada foi adicionada
+     * Adiciona uma entrada. A regra de quem pode rolar (um jogador nao rola duas
+     * vezes) fica no comando; aqui a entrada sempre entra, porque o mestre pode
+     * repetir jogador ou mob para dar mais turnos.
      */
-    public boolean add(String name, boolean mob, int value) {
-        if (!mob && contains(name)) {
-            return false;
-        }
+    public void add(String name, boolean mob, int value) {
         entries.add(new Entry(name, mob, value));
-        return true;
     }
 
     /** Remove todas as entradas com aquele nome e devolve quantas saiu. */
