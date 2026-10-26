@@ -1,6 +1,7 @@
 package com.pedro.tabletoprpg.client;
 
 import net.minecraft.client.gui.GuiGraphics;
+import com.pedro.tabletoprpg.SessionManager;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.renderer.RenderPipelines;
@@ -139,6 +140,18 @@ public class RpgMenuScreen extends Screen {
         // porque a jogadora pediu o botao "tanto do player quanto do mestre": o diario e
         // pessoal (cada um tem o seu, no NBT dele) e por isso nao faz sentido o mestre ter o
         // dele escondido.
+        // Fase 3: iniciativa. Fica logo abaixo de Rolagens, e so funciona fora do modo FREE.
+        Button initiativeButton = Button.builder(Component.translatable("screen.tabletoprpg.rpg_menu.initiative"),
+                        b -> {
+                            if (this.minecraft != null) {
+                                this.minecraft.setScreen(new InitiativeScreen(this, isMaster, initiativeAllowed()));
+                            }
+                        })
+                .bounds(x, y, buttonWidth, BUTTON_HEIGHT)
+                .build();
+        initiativeButton.active = true;
+        this.addRenderableWidget(initiativeButton);
+        y += BUTTON_GAP;
         y = addButton(Component.translatable("screen.tabletoprpg.rpg_menu.diary"), x, y, () -> {
             if (this.minecraft != null) {
                 this.minecraft.setScreen(DiaryScreen.open(this));
@@ -199,6 +212,11 @@ public class RpgMenuScreen extends Screen {
             .bounds(x, y, buttonWidth, BUTTON_HEIGHT)
             .build());
         return y + BUTTON_GAP;
+    }
+
+    /** A iniciativa so funciona em Investigacao e Combate. */
+    private boolean initiativeAllowed() {
+        return !SessionManager.GameMode.FREE.getDisplayName().equals(modeName);
     }
 
     /** Envia um comando de chat (simples para o servidor executar). */
