@@ -1,21 +1,29 @@
 package com.pedro.tabletoprpg.client;
 
+import com.pedro.tabletoprpg.InitiativeSync;
+import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.screens.ChatScreen;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
 
+import java.util.List;
+
 /**
- * Menu de iniciativa, aberto pelo botao "Iniciativa" do menu R (Fase 3).
+ * Menu de iniciativa, aberto pelo botao "Iniciativa" do menu R.
  *
- * <p>Mestre: comecar/terminar, adicionar, rolar, lista, mostrar e configurar.
- * Jogador: rolar, mostrar, e a lista somente leitura. Comecar/terminar e a lista
- * executam direto; rolar e adicionar so preenchem o comando no chat, para o jogador
- * completar. "Configurar" aparece desabilitado: ainda nao tem funcao.
+ * <p>Os botoes ficam em coluna e a lista de iniciativa aparece logo abaixo, sem
+ * botao para abrir: e so visual nesta fase. Mestre: comecar/terminar, adicionar,
+ * rolar, mostrar e configurar (desabilitado). Jogador: rolar e mostrar. Comecar,
+ * terminar e mostrar executam direto; rolar e adicionar so preenchem o comando no
+ * chat. Fora do modo Investigacao/Combate os botoes de acao ficam desabilitados.
  */
 public class InitiativeScreen extends Screen {
 
+    private static final int PANEL_W = 280;
+    private static final int BUTTON_W = 200;
+    private static final int BUTTON_H = 20;
     private static final int TOP = 56;
     private static final int GAP = 6;
 
@@ -23,6 +31,8 @@ public class InitiativeScreen extends Screen {
     private final boolean isMaster;
     private final boolean allowed;
     private boolean builtCollecting;
+    /** Y do titulo da lista, logo abaixo da ultima linha de botoes. */
+    private int listTop;
 
     /**
      * @param allowed {@code false} no modo FREE: iniciativa so funciona em
@@ -38,7 +48,7 @@ public class InitiativeScreen extends Screen {
     @Override
     protected void init() {
         builtCollecting = InitiativeClientState.isCollecting();
-        int x = width / 2 - InitiativeListScreen.BUTTON_W / 2;
+        int x = width / 2 - BUTTON_W / 2;
         int y = TOP;
         if (isMaster) {
             y = addMenuButton(x, y, Component.translatable(builtCollecting
@@ -50,8 +60,6 @@ public class InitiativeScreen extends Screen {
                     () -> openChat("/rpg initiative add "));
             y = addMenuButton(x, y, Component.translatable("screen.tabletoprpg.initiative.roll"), allowed,
                     () -> openChat("/rpg initiative roll"));
-            y = addMenuButton(x, y, Component.translatable("screen.tabletoprpg.initiative.list"), allowed,
-                    () -> this.minecraft.setScreen(new InitiativeListScreen(this)));
         } else {
             y = addMenuButton(x, y, Component.translatable("screen.tabletoprpg.initiative.roll"), allowed,
                     () -> openChat("/rpg initiative roll"));
@@ -61,12 +69,13 @@ public class InitiativeScreen extends Screen {
             rebuildWidgets();
         });
         if (isMaster) {
-            addMenuButton(x, y, Component.translatable("screen.tabletoprpg.initiative.configure"), false, () -> {
+            y = addMenuButton(x, y, Component.translatable("screen.tabletoprpg.initiative.configure"), false, () -> {
             });
         }
+        listTop = y + GAP;
         addRenderableWidget(Button.builder(Component.translatable("screen.tabletoprpg.initiative.back"),
                         b -> this.minecraft.setScreen(parent))
-                .bounds(x, height - 28, InitiativeListScreen.BUTTON_W, InitiativeListScreen.BUTTON_H)
+                .bounds(x, height - 28, BUTTON_W, BUTTON_H)
                 .build());
     }
 
@@ -80,25 +89,60 @@ public class InitiativeScreen extends Screen {
 
     @Override
     public void renderBackground(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
-        InitiativeListScreen.drawPanel(graphics, width, height);
+        drawPanel(graphics, width, height);
     }
 
     @Override
     public void render(GuiGraphics graphics, int mouseX, int mouseY, float delta) {
         super.render(graphics, mouseX, mouseY, delta);
-        InitiativeListScreen.drawTitle(graphics, font, getTitle().getString(), width, 18);
-        InitiativeListScreen.drawTitle(graphics, font, stateLabel().getString(), width, 32);
-        if (!isMaster) {
-            int bottom = height - 36;
-            int y = TOP + 2 * (InitiativeListScreen.BUTTON_H + GAP) + GAP;
-            InitiativeListScreen.drawEntries(graphics, font, width / 2 - InitiativeListScreen.PANEL_W / 2 + 10,
-                    y, bottom, InitiativeClientState.entries());
+        drawCentered(graphics, getTitle().getString(), 18, 0xFFFFD700);
+        drawCentered(graphics, stateLabel().getString(), 32, 0xFFDDDDDD);
+        int bottom = height - 36;
+        if (listTop + font.lineHeight >= bottom) {
+            return;
         }
+        int left = width / 2 - PANEL_W / 2 + 10;
+        graphics.drawString(font, Component.translatable("screen.tabletoprpg.initiative.list_title").getString(),
+                left, listTop, 0xFFFFD700, false);
+        drawEntries(graphics, font, left, listTop + font.lineHeight + 6, bottom,
+                InitiativeClientState.entries());
     }
 
     @Override
     public boolean isPauseScreen() {
         return false;
+    }
+
+    /** Fundo escuro e painel central, sem textura de pergaminho. */
+    private static void drawPanel(GuiGraphics graphics, int screenW, int screenH) {
+        graphics.fill(0, 0, screenW, screenH, 0x99000000);
+        int x = screenW / 2 - PANEL_W / 2;
+        graphics.fill(x - 1, 9, x + PANEL_W + 1, screenH - 9, 0xFF555555);
+        graphics.fill(x, 10, x + PANEL_W, screenH - 10, 0xE0101010);
+    }
+
+    private void drawCentered(GuiGraphics graphics, String text, int y, int color) {
+        graphics.drawString(font, text, width / 2 - font.width(text) / 2, y, color, false);
+    }
+
+    /** Lista de participantes, do maior valor para o menor, cortada no limite de baixo. */
+    private static void drawEntries(GuiGraphics graphics, Font font, int x, int y, int bottom,
+                                    List<InitiativeSync.Entry> entries) {
+        if (entries.isEmpty()) {
+            graphics.drawString(font, Component.translatable("message.tabletoprpg.initiative.empty").getString(),
+                    x, y, 0xFFAAAAAA, false);
+            return;
+        }
+        int lineY = y;
+        for (InitiativeSync.Entry entry : entries) {
+            if (lineY + font.lineHeight > bottom) {
+                break;
+            }
+            String line = Component.translatable("message.tabletoprpg.initiative.list_line",
+                    entry.name(), entry.value()).getString();
+            graphics.drawString(font, line, x, lineY, 0xFFFFFFFF, false);
+            lineY += font.lineHeight + 4;
+        }
     }
 
     private Component stateLabel() {
@@ -118,11 +162,11 @@ public class InitiativeScreen extends Screen {
     /** Adiciona um botao da coluna e devolve a proxima posicao Y. */
     private int addMenuButton(int x, int y, Component label, boolean enabled, Runnable onPress) {
         Button button = Button.builder(label, b -> onPress.run())
-                .bounds(x, y, InitiativeListScreen.BUTTON_W, InitiativeListScreen.BUTTON_H)
+                .bounds(x, y, BUTTON_W, BUTTON_H)
                 .build();
         button.active = enabled;
         addRenderableWidget(button);
-        return y + InitiativeListScreen.BUTTON_H + GAP;
+        return y + BUTTON_H + GAP;
     }
 
     private void sendCommand(String command) {

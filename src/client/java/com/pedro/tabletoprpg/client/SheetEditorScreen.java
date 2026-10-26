@@ -1,6 +1,5 @@
 package com.pedro.tabletoprpg.client;
 
-import com.pedro.tabletoprpg.InitiativeRoller;
 import com.pedro.tabletoprpg.RpgNetworking;
 import com.pedro.tabletoprpg.SheetModel;
 import com.pedro.tabletoprpg.SheetModelHolder;
@@ -263,7 +262,6 @@ public class SheetEditorScreen extends Screen {
                         staged.attributeValueMin(), staged.attributeValueMax(), v));
         y = header(y, "initiative");
         y = initiativeUseDefaultField(y);
-        y = initiativeFormulaField(y);
 
         y = header(y, "attributes");
         for (SheetModel.AttributeDef def : staged.attributes()) {
@@ -307,27 +305,6 @@ public class SheetEditorScreen extends Screen {
         if (this.minecraft != null && this.minecraft.player != null) {
             this.minecraft.player.displayClientMessage(Component.translatable(key).withStyle(ChatFormatting.RED), false);
         }
-    }
-
-    /**
-     * Bonus padrao da mesa para a iniciativa: texto livre, aceita "3", "1d20+3" etc.
-     * Vale quando a caixa "usar iniciativa padrao" esta marcada.
-     */
-    private int initiativeFormulaField(int y) {
-        captions.add(new Caption(y + 6, tr("initiative_formula"), COL_CAPTION));
-        EditBox box = new EditBox(this.font, ctrlX(), y, ctrlW(), ROW_H - 4, tr("initiative_formula"));
-        box.setMaxLength(SheetModel.MAX_INITIATIVE_FORMULA);
-        box.setValue(staged.initiativeFormula());
-        box.setHint(Component.translatable("screen.tabletoprpg.sheet_editor.initiative_formula_hint"));
-        box.setEditable(staged.initiativeUseDefault());
-        box.setResponder(value -> {
-            if (!suppressNotify) {
-                staged = staged.withInitiativeFormula(value);
-            }
-        });
-        addRenderableWidget(box);
-        slots.add(new Slot(box, y));
-        return y + ROW_H;
     }
 
     /** Rotulo de um campo de sistema: texto a esquerda, caixa a direita. */
@@ -932,10 +909,6 @@ public class SheetEditorScreen extends Screen {
     private void save() {
         if (!staged.initiativeUseDefault() && staged.initiativePericiaId().isEmpty()) {
             warnSave("screen.tabletoprpg.sheet_editor.initiative_skill_required");
-            return;
-        }
-        if (staged.initiativeUseDefault() && !InitiativeRoller.isValidTableFormula(staged.initiativeFormula(), staged)) {
-            warnSave("screen.tabletoprpg.sheet_editor.initiative_formula_invalid");
             return;
         }
         ClientPlayNetworking.send(new RpgNetworking.SheetModelSavePayload(staged));
