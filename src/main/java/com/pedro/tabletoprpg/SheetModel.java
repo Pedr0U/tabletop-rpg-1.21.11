@@ -82,7 +82,7 @@ public record SheetModel(
         int attributeValueMin,
         int attributeValueMax,
         int periciaValueMax,
-        int defaultInitiative,
+        String initiativeFormula,
         boolean initiativeUseDefault,
         String initiativePericiaId
     ) {
@@ -152,19 +152,16 @@ public record SheetModel(
     public static final int DEFAULT_PERICIA_VALUE_MAX = 30;
 
     /**
-     * Iniciativa padrao da mesa (22/10/2026).
+     * Bonus padrao da mesa para a iniciativa: uma formula de texto que o Mestre
+     * digita no Sheet Editor (ex.: "3", "1d20+3"). Quando a caixa "usar iniciativa
+     * padrao" esta marcada, a rolagem e {@code 1d20 + esta formula}.
      *
-     * <p>E o valor que o Mestre coloca no Sheet Editor e que vale para TODOS os
-     * personagens que usam a iniciativa padrao. O personagem que quer um valor
-     * proprio desliga o "usar iniciativa padrao" na ficha dele e digita o seu.
-     *
-     * <p><b>Por que 0 e nao 10:</b> o padrao de uma ficha recem-criada tem de
-     * ser o mesmo que o de uma ficha salva antes deste campo existir, e o
-     * primeiro valor que o mundo ja usava era o "nada digitado" (0). Um mundo
-     * novo com a iniciativa em 0 e o mesmo mundo de antes, so que a linha
-     * existe.
+     * <p>Vazio significa "sem bonus". Trocou o campo numerico de 22/10/2026
+     * (Fase 2 da iniciativa, 25/10/2026); saves antigos caem em vazio.
      */
-    public static final int DEFAULT_INITIATIVE = 0;
+    public static final String DEFAULT_INITIATIVE_FORMULA = "";
+    /** Teto de caracteres da formula de bonus da mesa. */
+    public static final int MAX_INITIATIVE_FORMULA = 40;
 
     /**
      * Teto <b>absoluto</b> de um limite de valor escolhido pelo Mestre.
@@ -314,7 +311,7 @@ public record SheetModel(
                 DEFAULT_ATTRIBUTE_VALUE_MIN,
                 DEFAULT_ATTRIBUTE_VALUE_MAX,
                 DEFAULT_PERICIA_VALUE_MAX,
-                DEFAULT_INITIATIVE,
+                DEFAULT_INITIATIVE_FORMULA,
                 true,
                 ""
         );
@@ -375,10 +372,11 @@ public record SheetModel(
         // investimento do jogador e um numero negativo ali seria penalidade, e
         // penalidade pertence ao atributo.
         periciaValueMax = clamp(periciaValueMax, 0, VALUE_LIMIT_MAX);
-        // 22/10/2026: a iniciativa padrao da mesa e um numero COM sinal (o
-        // modificador de iniciativa do personagem pode ser negativo), entao ela
-        // usa o mesmo teto absoluto dos limites de valor.
-        defaultInitiative = clamp(defaultInitiative, VALUE_LIMIT_MIN, VALUE_LIMIT_MAX);
+        // A formula de bonus da mesa e texto livre: so tira espacos e corta no teto.
+        initiativeFormula = initiativeFormula == null ? DEFAULT_INITIATIVE_FORMULA : initiativeFormula.trim();
+        if (initiativeFormula.length() > MAX_INITIATIVE_FORMULA) {
+            initiativeFormula = initiativeFormula.substring(0, MAX_INITIATIVE_FORMULA);
+        }
         // 22/10/2026: a pericia marcada como iniciativa precisa existir na lista.
         // Se a pericia foi removida (ou o id veio de um payload forjado), a marca
         // cai para "nenhuma" em vez de apontar para uma linha que nao existe.
@@ -387,7 +385,7 @@ public record SheetModel(
 
     /**
      * Construtor de 16 campos, sem o {@code caLabel} e sem a
-     * {@code defaultInitiative}, para quem so quer o modelo com os rotulos
+     * {@code initiativeFormula}, para quem so quer o modelo com os rotulos
      * padrao.
      *
      * <p><b>Por que ele existe (01/10/2026):</b> o {@code caLabel} foi o
@@ -400,7 +398,7 @@ public record SheetModel(
      * copia que muda outra coisa nao deve trocar o rotulo por acidente.
      *
      * <p><b>22/10/2026:</b> com a iniciativa padrao no record, esta sobrecarga
-     * tambem deixa a iniciativa em {@link #DEFAULT_INITIATIVE}. As copias
+     * tambem deixa a iniciativa em {@link #DEFAULT_INITIATIVE_FORMULA}. As copias
      * internas do modelo NAO usam mais esta sobrecarga: elas usam o
      * {@link #copy}, que preserva o rotulo do CA e a iniciativa padrao do modelo
      * que esta sendo copiado.
@@ -425,7 +423,7 @@ public record SheetModel(
     ) {
         this(nameLabel, raceLabel, raceEnabled, classLabel, backgroundLabel, hpLabel, manaLabel,
                 manaEnabled, levelLabel, xpLabel, "CA", xp, attributes, pericias, attributeValueMin,
-                attributeValueMax, periciaValueMax, DEFAULT_INITIATIVE, true, "");
+                attributeValueMax, periciaValueMax, DEFAULT_INITIATIVE_FORMULA, true, "");
     }
 
     /**
@@ -460,7 +458,7 @@ public record SheetModel(
     ) {
         return new SheetModel(nameLabel, raceLabel, raceEnabled, classLabel, backgroundLabel, hpLabel,
                 manaLabel, manaEnabled, levelLabel, xpLabel, caLabel, xp, attributes, pericias,
-                attributeValueMin, attributeValueMax, periciaValueMax, defaultInitiative,
+                attributeValueMin, attributeValueMax, periciaValueMax, initiativeFormula,
                 initiativeUseDefault, initiativePericiaId);
     }
 
@@ -699,7 +697,7 @@ public record SheetModel(
             case "ca" -> new SheetModel(nameLabel, raceLabel, raceEnabled, classLabel,
                     backgroundLabel, hpLabel, manaLabel, manaEnabled, levelLabel, xpLabel,
                     value.isEmpty() ? caLabel : value, xp, attributes, pericias,
-                    attributeValueMin, attributeValueMax, periciaValueMax, defaultInitiative,
+                    attributeValueMin, attributeValueMax, periciaValueMax, initiativeFormula,
                     initiativeUseDefault, initiativePericiaId);
             default -> this;
         };
@@ -757,7 +755,7 @@ public record SheetModel(
      * limites de valor), entao o numero que entra no modelo esta sempre em
      * faixa.
      */
-    public SheetModel withDefaultInitiative(int value) {
+    public SheetModel withInitiativeFormula(String value) {
         return new SheetModel(nameLabel, raceLabel, raceEnabled, classLabel, backgroundLabel, hpLabel,
                 manaLabel, manaEnabled, levelLabel, xpLabel, caLabel, xp, attributes, pericias,
                 attributeValueMin, attributeValueMax, periciaValueMax, value,
@@ -773,7 +771,7 @@ public record SheetModel(
     public SheetModel withInitiativeUseDefault(boolean useDefault) {
         return new SheetModel(nameLabel, raceLabel, raceEnabled, classLabel, backgroundLabel, hpLabel,
                 manaLabel, manaEnabled, levelLabel, xpLabel, caLabel, xp, attributes, pericias,
-                attributeValueMin, attributeValueMax, periciaValueMax, defaultInitiative,
+                attributeValueMin, attributeValueMax, periciaValueMax, initiativeFormula,
                 useDefault, initiativePericiaId);
     }
 
@@ -786,7 +784,7 @@ public record SheetModel(
     public SheetModel withInitiativePericia(String id) {
         return new SheetModel(nameLabel, raceLabel, raceEnabled, classLabel, backgroundLabel, hpLabel,
                 manaLabel, manaEnabled, levelLabel, xpLabel, caLabel, xp, attributes, pericias,
-                attributeValueMin, attributeValueMax, periciaValueMax, defaultInitiative,
+                attributeValueMin, attributeValueMax, periciaValueMax, initiativeFormula,
                 initiativeUseDefault, id == null ? "" : id);
     }
 
@@ -1254,7 +1252,7 @@ public record SheetModel(
                             // mapa (a mesma posicao do record). Um Sheet Model
                             // gravado antes dela nao tem a chave, e a ausencia
                             // significa "o Mestre ainda nao configurou" (0).
-                            .add("defaultInitiative", model.defaultInitiative(), Codec.INT)
+                            .add("initiativeFormula", model.initiativeFormula(), Codec.STRING)
                             // 22/10/2026: a caixa "usar iniciativa padrao" e a pericia marcada.
                             // Save antigo nao tem as chaves: o padrao e marcada e nenhuma.
                             .add("initiativeUseDefault", model.initiativeUseDefault(), Codec.BOOL)
@@ -1283,7 +1281,7 @@ public record SheetModel(
                             read(ops, map, "attributeValueMin", Codec.INT, DEFAULT_ATTRIBUTE_VALUE_MIN),
                             read(ops, map, "attributeValueMax", Codec.INT, DEFAULT_ATTRIBUTE_VALUE_MAX),
                             read(ops, map, "periciaValueMax", Codec.INT, DEFAULT_PERICIA_VALUE_MAX),
-                            read(ops, map, "defaultInitiative", Codec.INT, DEFAULT_INITIATIVE),
+                            read(ops, map, "initiativeFormula", Codec.STRING, DEFAULT_INITIATIVE_FORMULA),
                             read(ops, map, "initiativeUseDefault", Codec.BOOL, true),
                             read(ops, map, "initiativePericiaId", Codec.STRING, "")
                     )).map(decoded -> Pair.of(decoded, input));
@@ -1382,7 +1380,7 @@ public record SheetModel(
         // 22/10/2026: a iniciativa padrao da mesa, depois dos tres limites, como
         // no record. O VAR_INT aceita numero negativo (o Minecraft escreve o
         // sinal em 5 bytes), entao a iniciativa pode ser negativa.
-        ByteBufCodecs.VAR_INT.encode(buf, model.defaultInitiative());
+        ByteBufCodecs.stringUtf8(MAX_INITIATIVE_FORMULA).encode(buf, model.initiativeFormula());
         // 22/10/2026: a caixa "usar iniciativa padrao" e a pericia marcada, por
         // ultimo, na mesma ordem do DECODER abaixo.
         ByteBufCodecs.BOOL.encode(buf, model.initiativeUseDefault());
@@ -1413,7 +1411,7 @@ public record SheetModel(
             // iniciativa, na MESMA posicao do ENCODER acima (os ultimos).
             // Se um dos lados mudar de lugar, o
             // round-trip do SheetModelCodecTest quebra.
-            ByteBufCodecs.VAR_INT.decode(buf),
+            ByteBufCodecs.stringUtf8(MAX_INITIATIVE_FORMULA).decode(buf),
             ByteBufCodecs.BOOL.decode(buf),
             ByteBufCodecs.stringUtf8(32).decode(buf)
     );

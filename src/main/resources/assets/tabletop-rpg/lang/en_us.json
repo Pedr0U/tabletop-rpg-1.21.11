@@ -98,6 +98,7 @@
   "screen.tabletoprpg.sheet_editor.initiative": "Initiative",
   "screen.tabletoprpg.sheet_editor.initiative_use_default": "Use default initiative?",
   "screen.tabletoprpg.sheet_editor.initiative_column": "Initiative",
+  "screen.tabletoprpg.sheet_editor.initiative_formula": "Table bonus (e.g. 3 or 1d20+3)",
   "screen.tabletoprpg.sheet_editor.attributes": "Attributes",
   "screen.tabletoprpg.sheet_editor.pericias": "Skills",
   "screen.tabletoprpg.sheet_editor.field_name": "Name label",

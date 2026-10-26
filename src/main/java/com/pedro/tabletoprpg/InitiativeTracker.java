@@ -2,6 +2,7 @@ package com.pedro.tabletoprpg;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.List;
 
 /**
@@ -14,8 +15,7 @@ import java.util.List;
  * exibicao; todos os mobs com o mesmo nome compartilham o mesmo valor rolado, e o
  * mestre pode repetir a entrada (cada repeticao e um turno a mais no grupo).
  *
- * <p>A ordenacao (maior valor primeiro) entra na Fase 2; por enquanto a lista fica
- * na ordem de entrada.
+ * <p>A leitura sai ordenada do maior para o menor (ver {@link #entries()}).
  */
 public final class InitiativeTracker {
 
@@ -51,8 +51,14 @@ public final class InitiativeTracker {
         state = State.IDLE;
     }
 
+    /**
+     * Participantes do maior valor para o menor. Empate mantem a ordem de entrada,
+     * porque {@link List#sort} e estavel.
+     */
     public List<Entry> entries() {
-        return Collections.unmodifiableList(entries);
+        List<Entry> sorted = new ArrayList<>(entries);
+        sorted.sort(Comparator.comparingInt(Entry::value).reversed());
+        return Collections.unmodifiableList(sorted);
     }
 
     /** Valor ja rolado para um nome (jogador ou grupo de mob), ou {@code null}. */

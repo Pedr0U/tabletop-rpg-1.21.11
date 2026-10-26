@@ -2459,8 +2459,8 @@ public class StatusScreen extends CharacterSheetScreen {
      * <p>So e usada com "usar iniciativa padrao" desmarcada: o valor e o da
      * pericia marcada no modelo ({@link SheetModel#initiativePericiaId()}). Sem
      * pericia marcada, ou sem o valor dela na ficha, mostra 0 -- o mesmo que o
-     * {@code align} usa para uma pericia sem valor gravado. Com a caixa marcada, a
-     * iniciativa e digitada pelo jogador (ver applyExtraState).
+     * {@code align} usa para uma pericia sem valor gravado. Com a caixa marcada, o
+     * campo mostra a formula do bonus da mesa (ver applySheetToWidgets).
      */
     private int derivedInitiative() {
         SheetModel m = model();
@@ -4213,22 +4213,19 @@ public class StatusScreen extends CharacterSheetScreen {
         // 01/10/2026 (pagina 3): a caixa da CD e a linha do Modificador tambem
         // nao estao no `fieldBoxes` da base, entao recebem o eco do servidor aqui.
         applySpellHeader();
-        // 22/10/2026: caixa marcada no modelo -> o jogador digita a propria
-        // iniciativa (o valor vem do eco do servidor em applySheetToWidgets).
-        // Desmarcada -> derivada da pericia marcada, so leitura; escrever aqui
-        // nao manda payload, porque applySheetToWidgets roda com a notificacao
-        // desligada.
+        // Marcada no modelo -> mostra o bonus padrao da mesa (formula), so leitura;
+        // a rolagem e 1d20 + esta formula. Desmarcada -> derivada da pericia
+        // marcada, tambem so leitura. Escrever aqui nao manda payload, porque
+        // applySheetToWidgets roda com a notificacao desligada.
         EditBox initiativeBox = fieldBoxes.get("initiative");
         if (initiativeBox != null && sheet != null) {
-            if (model().initiativeUseDefault()) {
-                applyEditable(initiativeBox);
-            } else {
-                String shown = Integer.toString(derivedInitiative());
-                if (!shown.equals(initiativeBox.getValue())) {
-                    initiativeBox.setValue(shown);
-                }
-                initiativeBox.setEditable(false);
+            String shown = model().initiativeUseDefault()
+                    ? (model().initiativeFormula().isEmpty() ? "0" : model().initiativeFormula())
+                    : Integer.toString(derivedInitiative());
+            if (!shown.equals(initiativeBox.getValue())) {
+                initiativeBox.setValue(shown);
             }
+            initiativeBox.setEditable(false);
         }
     }
 

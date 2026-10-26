@@ -1030,6 +1030,9 @@ public class MasterCommands {
             total += outcome.total();
         }
 
+        if (outcome == null) {
+            InitiativeCommands.onPericiaRolled(ctx.getSource().getServer(), player, pericia.id(), total);
+        }
         MutableComponent message = Component.translatable("message.tabletoprpg.roll.skill",
                 "§6§l" + player.getName().getString(), "§6" + pericia.name(), breakdown);
         if (outcome != null && outcome.critical() && !hasGrid(outcome)) {
@@ -1114,6 +1117,11 @@ public class MasterCommands {
     private static int rollSkill(CommandContext<CommandSourceStack> ctx, ServerPlayer player,
                                  SheetData.Pericia pericia) {
         return rollPericia(ctx, player, pericia, "");
+    }
+
+    /** Total de uma rolagem de pericia (d20 + pericia + atributo), usado pela iniciativa. */
+    static long periciaRollTotal(ServerPlayer player, SheetData.Pericia pericia) {
+        return periciaTotal(player, pericia).total();
     }
 
     /**
