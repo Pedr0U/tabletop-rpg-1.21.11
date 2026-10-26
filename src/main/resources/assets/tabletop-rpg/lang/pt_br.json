@@ -101,6 +101,7 @@
   "screen.tabletoprpg.sheet_editor.initiative_formula": "Iniciativa da mesa",
   "screen.tabletoprpg.sheet_editor.initiative_formula_hint": "Ex: 1d20 + 3",
   "screen.tabletoprpg.sheet_editor.initiative_formula_invalid": "Nao foi possivel reconhecer a formula de iniciativa.",
+  "screen.tabletoprpg.sheet_editor.initiative_skill_required": "E obrigatorio marcar uma pericia como iniciativa padrao quando a caixa da iniciativa da mesa estiver desmarcada.",
   "screen.tabletoprpg.sheet_editor.attributes": "Atributos",
   "screen.tabletoprpg.sheet_editor.pericias": "Perícias",
   "screen.tabletoprpg.sheet_editor.field_name": "Rótulo do nome",
@@ -425,6 +426,9 @@
   "message.tabletoprpg.initiative.empty": "A lista de iniciativa esta vazia.",
   "message.tabletoprpg.initiative.list_header": "Lista de iniciativa:",
   "message.tabletoprpg.initiative.list_line": "%s - %s",
+  "message.tabletoprpg.initiative.skill_roll": "Com a iniciativa padrao da mesa desmarcada, role a iniciativa com /rpg roll %s.",
+  "message.tabletoprpg.initiative.skill_roll_for_player": "Com a iniciativa padrao da mesa desmarcada, o jogador precisa rolar com /rpg roll %s.",
+  "message.tabletoprpg.initiative.no_skill": "Nenhuma pericia esta marcada como iniciativa padrao.",
   "screen.tabletoprpg.label.character_appearance": "Aparência do Personagem",
   "screen.tabletoprpg.label.character_backstory": "Histórico do Personagem"
 }
