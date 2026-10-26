@@ -2178,7 +2178,11 @@ public final class RpgNetworking {
             if (next == null) {
                 return;
             }
-            // Formula da iniciativa da mesa nao reconhecida: a tela ja avisa e nao envia.
+            // Iniciativa da mesa: sem a caixa marcada, uma pericia precisa estar marcada,
+            // e a formula precisa ser reconhecida. A tela ja avisa; aqui so recusa.
+            if (!next.initiativeUseDefault() && next.initiativePericiaId().isEmpty()) {
+                return;
+            }
             if (next.initiativeUseDefault() && !InitiativeRoller.isValidTableFormula(next.initiativeFormula(), next)) {
                 return;
             }

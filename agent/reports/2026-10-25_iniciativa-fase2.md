@@ -43,3 +43,9 @@ Data: 25/10/2026. Branch: `feature/iniciativa`. Fase 1: tag `iniciativa-fase1`.
 - Caixa desmarcada: campo de texto desabilitado (cinza). StatusScreen mostra 1d20 quando a formula esta vazia.
 - Refatoracao: MasterCommands.periciaResult e formulaMessage, sem mudar o texto do /rpg roll.
 - Build exit 0; InitiativeRollerTest 3/3 (formula vazia, formula digitada, sinal). Nao validado em jogo.
+
+## Regra da pericia de iniciativa (25/10/2026, segundo feedback)
+- Caixa desmarcada: o jogador NAO rola pelo /rpg initiative roll (nem com formula extra). A recusa diz para rolar com /rpg roll <pericia marcada>. O mestre tambem nao adiciona jogador por add nesse caso (mesma regra: o jogador rola com a propria pericia). Sem pericia marcada, a recusa diz que nenhuma pericia esta marcada.
+- Mestre no Sheet Editor: com a caixa desmarcada e nenhuma pericia marcada, o salvamento e bloqueado com mensagem no chat. O servidor tambem recusa a gravacao nesse caso.
+- Formula vazia com a caixa marcada continua rolando 1d20 seco.
+- Build exit 0. Nao validado em jogo.

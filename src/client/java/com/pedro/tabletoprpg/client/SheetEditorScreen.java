@@ -302,6 +302,13 @@ public class SheetEditorScreen extends Screen {
         return y + HEADER_H;
     }
 
+    /** Mostra no chat o motivo de o salvamento ter sido recusado. */
+    private void warnSave(String key) {
+        if (this.minecraft != null && this.minecraft.player != null) {
+            this.minecraft.player.displayClientMessage(Component.translatable(key).withStyle(ChatFormatting.RED), false);
+        }
+    }
+
     /**
      * Bonus padrao da mesa para a iniciativa: texto livre, aceita "3", "1d20+3" etc.
      * Vale quando a caixa "usar iniciativa padrao" esta marcada.
@@ -923,11 +930,12 @@ public class SheetEditorScreen extends Screen {
      * gravar.
      */
     private void save() {
+        if (!staged.initiativeUseDefault() && staged.initiativePericiaId().isEmpty()) {
+            warnSave("screen.tabletoprpg.sheet_editor.initiative_skill_required");
+            return;
+        }
         if (staged.initiativeUseDefault() && !InitiativeRoller.isValidTableFormula(staged.initiativeFormula(), staged)) {
-            if (this.minecraft != null && this.minecraft.player != null) {
-                this.minecraft.player.displayClientMessage(Component.translatable(
-                        "screen.tabletoprpg.sheet_editor.initiative_formula_invalid").withStyle(ChatFormatting.RED), false);
-            }
+            warnSave("screen.tabletoprpg.sheet_editor.initiative_formula_invalid");
             return;
         }
         ClientPlayNetworking.send(new RpgNetworking.SheetModelSavePayload(staged));
