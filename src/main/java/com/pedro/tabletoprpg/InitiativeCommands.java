@@ -74,6 +74,7 @@ public final class InitiativeCommands {
         TRACKER.end();
         server.getPlayerList().broadcastSystemMessage(
                 Component.translatable("message.tabletoprpg.initiative.ended_by_mode"), false);
+        InitiativeSync.sendAll(server);
     }
 
     /**
@@ -97,6 +98,7 @@ public final class InitiativeCommands {
         TRACKER.add(name, false, (int) total);
         server.getPlayerList().broadcastSystemMessage(
                 Component.translatable("message.tabletoprpg.initiative.added", name, (int) total), false);
+        InitiativeSync.sendAll(server);
     }
 
     private static int start(CommandContext<CommandSourceStack> ctx) {
@@ -362,8 +364,20 @@ public final class InitiativeCommands {
         broadcast(ctx, Component.translatable("message.tabletoprpg.initiative.added", name, (int) roll.total()));
     }
 
+    /** Toda mensagem de mudanca da iniciativa tambem atualiza a lista nos clientes. */
     private static void broadcast(CommandContext<CommandSourceStack> ctx, Component message) {
-        ctx.getSource().getServer().getPlayerList().broadcastSystemMessage(message, false);
+        MinecraftServer server = ctx.getSource().getServer();
+        server.getPlayerList().broadcastSystemMessage(message, false);
+        InitiativeSync.sendAll(server);
+    }
+
+    /** Estado atual para os clientes: coleta aberta e participantes na ordem de exibicao. */
+    public static InitiativeSync.Payload snapshot() {
+        List<InitiativeSync.Entry> entries = new ArrayList<>();
+        for (InitiativeTracker.Entry entry : TRACKER.entries()) {
+            entries.add(new InitiativeSync.Entry(entry.name(), entry.mob(), entry.value()));
+        }
+        return new InitiativeSync.Payload(TRACKER.isCollecting(), entries);
     }
 
     // ------------------------------------------------------------------
