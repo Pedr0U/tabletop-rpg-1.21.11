@@ -149,7 +149,8 @@ public class RpgMenuScreen extends Screen {
                         })
                 .bounds(x, y, buttonWidth, BUTTON_HEIGHT)
                 .build();
-        initiativeButton.active = true;
+        // Desabilitado (cinza) no modo FREE, como o botao "Configurar iniciativa".
+        initiativeButton.active = initiativeAllowed();
         this.addRenderableWidget(initiativeButton);
         y += BUTTON_GAP;
         y = addButton(Component.translatable("screen.tabletoprpg.rpg_menu.diary"), x, y, () -> {

@@ -7,16 +7,18 @@ import net.minecraft.world.entity.Mob;
 import java.util.Random;
 
 /**
- * Rolagem de iniciativa (Fase 2).
+ * Rolagem de iniciativa.
  *
- * <p>A caixa "usar iniciativa padrao" da mesa decide qual formula vale:
+ * <p>A caixa "usar iniciativa padrao" do <b>modelo</b> (Sheet Editor do Mestre)
+ * decide qual regra vale para a mesa inteira:
  * <ul>
- *   <li>Marcada: a formula que o Mestre digitou no Sheet Editor e a rolagem
- *       inteira (vazia vira {@code 1d20}).</li>
+ *   <li>Marcada: cada jogador rola a <b>propria</b> formula de iniciativa, que ele
+ *       digita na ficha (campo "Initiative"). Vazia rola {@code 1d20} seco.</li>
  *   <li>Desmarcada: a pericia marcada como iniciativa, com a mesma conta do
  *       {@code /rpg roll <pericia>}; sem pericia marcada, {@code 1d20}.</li>
  * </ul>
- * Mob segue a mesma regra, mas le a pericia da propria ficha.
+ * Mob nao tem formula propria: com a caixa marcada rola {@code 1d20}; desmarcada,
+ * usa a pericia marcada na propria ficha.
  */
 public final class InitiativeRoller {
 
@@ -33,23 +35,25 @@ public final class InitiativeRoller {
     static Roll playerRoll(ServerPlayer player, String extra) throws DiceFormula.SyntaxException {
         SheetData sheet = SessionManager.getSheet(player.getUUID());
         SheetModel model = SheetModelHolder.current();
+        String name = player.getName().getString();
         if (model.initiativeUseDefault()) {
-            return formulaRoll(player.getName().getString(), resolve(tableFormula(model) + extra, sheet, model));
+            String own = sheet == null ? "" : sheet.progress().initiativeFormula();
+            return formulaRoll(name, resolve(compact(formulaOrDefault(own) + extra), sheet, model));
         }
         SheetData.Pericia pericia = sheet == null ? null : sheet.periciaById(model.initiativePericiaId());
         if (pericia != null) {
             MasterCommands.PericiaResult result = MasterCommands.periciaResult(player, pericia, extra);
             return new Roll(result.total(), result.message());
         }
-        return formulaRoll(player.getName().getString(), "1d20" + extra);
+        return formulaRoll(name, "1d20" + extra);
     }
 
-    /** Rolagem de um mob, sem ficha de jogador: a formula da mesa ou a pericia da ficha dele. */
+    /** Rolagem de um mob, sem ficha de jogador. */
     static Roll mobRoll(Mob mob) throws DiceFormula.SyntaxException {
         SheetModel model = SheetModelHolder.current();
         String name = mob.getName().getString();
         if (model.initiativeUseDefault()) {
-            return formulaRoll(name, tableFormula(model));
+            return formulaRoll(name, "1d20");
         }
         String periciaId = model.initiativePericiaId();
         ThreatSheet ficha = ThreatSheetStore.findAnyById(ThreatSheetBinding.sheetOf(mob));
@@ -65,44 +69,38 @@ public final class InitiativeRoller {
         return formulaRoll(name, "1d20");
     }
 
-    /** Formula da mesa como foi digitada; vazia vira {@code 1d20}. */
-    static String tableFormula(SheetModel model) {
-        return formulaOrDefault(model.initiativeFormula());
+    /**
+     * Confere se uma formula de iniciativa e reconhecida: nomes de atributo e
+     * pericia precisam existir no modelo, e a estrutura precisa passar no parser de
+     * dados. Vazia e valida (rola 1d20). Espacos sao ignorados, como no /rpg roll.
+     */
+    public static boolean isValidFormula(String raw, SheetModel model) {
+        String formula = compact(raw);
+        if (formula.isEmpty()) {
+            return true;
+        }
+        try {
+            DiceFormula.parse(FormulaResolver.placeholderFormula(formula, model));
+            return true;
+        } catch (FormulaResolver.ResolveException | DiceFormula.SyntaxException e) {
+            return false;
+        }
     }
 
+    /** Formula como o jogador digitou; vazia vira {@code 1d20}. */
     static String formulaOrDefault(String raw) {
         String formula = raw == null ? "" : raw.trim();
         return formula.isEmpty() ? "1d20" : formula;
     }
 
-    /**
-     * Confere se a formula da mesa e reconhecida: nomes de atributo ou pericia
-     * precisam existir no modelo, e a estrutura precisa passar no parser de dados.
-     * Vazia e valida (vira 1d20).
-     */
-    public static void validateTableFormula(String raw, SheetModel model) throws DiceFormula.SyntaxException {
-        String formula = raw == null ? "" : raw.trim();
-        if (formula.isEmpty()) {
-            return;
-        }
-        try {
-            DiceFormula.parse(FormulaResolver.placeholderFormula(formula, model));
-        } catch (FormulaResolver.ResolveException e) {
-            throw new DiceFormula.SyntaxException(e.getMessage(), e.getKey(), e.getArgs());
-        }
-    }
-
-    public static boolean isValidTableFormula(String raw, SheetModel model) {
-        try {
-            validateTableFormula(raw, model);
-            return true;
-        } catch (DiceFormula.SyntaxException e) {
-            return false;
-        }
+    /** Tira espacos, igual ao {@code /rpg roll}, para o parser ver so dados e sinais. */
+    static String compact(String raw) {
+        return raw == null ? "" : raw.replace(" ", "");
     }
 
     private static Roll formulaRoll(String name, String formula) throws DiceFormula.SyntaxException {
-        DiceFormula.Outcome outcome = DiceFormula.parse(formula).evaluate(sides -> RANDOM.nextInt(sides) + 1);
+        DiceFormula.Outcome outcome = DiceFormula.parse(compact(formula))
+                .evaluate(sides -> RANDOM.nextInt(sides) + 1);
         return new Roll(outcome.total(), MasterCommands.formulaMessage(name, outcome));
     }
 

@@ -1,7 +1,10 @@
 package com.pedro.tabletoprpg.client;
 
+import com.pedro.tabletoprpg.InitiativeRoller;
+import net.minecraft.ChatFormatting;
 import com.pedro.tabletoprpg.RpgNetworking;
 import com.pedro.tabletoprpg.SheetData;
+import com.pedro.tabletoprpg.SheetModelHolder;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Font;
@@ -207,6 +210,8 @@ public abstract class CharacterSheetScreen extends Screen {
      * as caixas -> setValue dispara o responder -> o cliente reenvia a edicao.
      */
     private boolean suppressNotify;
+    /** A caixa de iniciativa estava com foco no tick anterior (para detectar a saida). */
+    private boolean initiativeWasFocused;
 
     // ------------------------------------------------------------------
     // GEOMETRIA (preenchida em init(), usada no render)
@@ -569,6 +574,31 @@ public abstract class CharacterSheetScreen extends Screen {
                 hold.tick();
             }
         }
+        checkInitiativeFormulaOnBlur();
+    }
+
+    /**
+     * Quando a caixa da formula de iniciativa perde o foco com um texto nao
+     * reconhecido, avisa no chat e volta ao valor gravado. Quem digita nao ve nada
+     * enquanto digita (so reconhecida vai ao servidor), entao o aviso sai na saida.
+     */
+    private void checkInitiativeFormulaOnBlur() {
+        EditBox box = fieldBoxes.get("initiative");
+        boolean focused = box != null && box.isFocused();
+        if (initiativeWasFocused && !focused && box != null && canEdit && sheet != null
+                && !InitiativeRoller.isValidFormula(box.getValue(), SheetModelHolder.current())) {
+            if (this.minecraft != null && this.minecraft.player != null) {
+                this.minecraft.player.displayClientMessage(Component.translatable(
+                        "screen.tabletoprpg.initiative.formula_invalid").withStyle(ChatFormatting.RED), false);
+            }
+            suppressNotify = true;
+            try {
+                box.setValue(sheet.getText("initiative"));
+            } finally {
+                suppressNotify = false;
+            }
+        }
+        initiativeWasFocused = focused;
     }
 
     /**
@@ -886,12 +916,17 @@ public abstract class CharacterSheetScreen extends Screen {
             box.setFilter(s -> s.matches("-?\\d{0,9}")
                     && (ceiling == NO_CEILING || withinCeiling(s, ceiling)));
             box.setMaxLength(10);
+        } else if ("initiative".equals(field)) {
+            box.setMaxLength(SheetData.MAX_INITIATIVE_FORMULA);
         } else {
             box.setMaxLength(SheetData.MAX_NAME);
         }
         box.setTextColor(COL_BOX_TEXT);
         box.setTextColorUneditable(COL_BOX_TEXT_OFF);
-        box.setHint(Component.translatable("screen.tabletoprpg.character_sheet.click_to_edit"));
+        String hintKey = "initiative".equals(field)
+                ? "screen.tabletoprpg.initiative.formula_hint"
+                : "screen.tabletoprpg.character_sheet.click_to_edit";
+        box.setHint(Component.translatable(hintKey));
         applyEditable(box);
         box.setResponder(value -> {
             if (suppressNotify || !canEdit) {
@@ -902,6 +937,11 @@ public abstract class CharacterSheetScreen extends Screen {
             // o valor antigo), reenviaria a ficha e o eco apagaria de novo o
             // campo. Sem envio nao ha eco, e a digitacao fica possivel.
             if (numeric && !isCompleteNumber(value)) {
+                return;
+            }
+            // Mesma ideia para a formula da iniciativa: so envia quando e reconhecida.
+            // Um texto parcial ("1d2") seria recusado e o eco apagaria a digitacao.
+            if ("initiative".equals(field) && !InitiativeRoller.isValidFormula(value, SheetModelHolder.current())) {
                 return;
             }
             ClientPlayNetworking.send(new RpgNetworking.SheetFieldPayload(
