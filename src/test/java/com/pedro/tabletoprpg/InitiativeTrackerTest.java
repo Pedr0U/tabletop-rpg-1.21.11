@@ -78,8 +78,22 @@ class InitiativeTrackerTest {
     }
 
     @Test
-    @DisplayName("entrada na ordem de chegada (ordenacao e da Fase 2)")
-    void keepsInsertionOrder() {
+    @DisplayName("lista sai do maior valor para o menor")
+    void sortsDescending() {
+        InitiativeTracker tracker = new InitiativeTracker();
+        tracker.start();
+        tracker.add("Ana", false, 9);
+        tracker.add("Bruno", false, 18);
+        tracker.add("Goblin", true, 12);
+
+        assertEquals("Bruno", tracker.entries().get(0).name());
+        assertEquals("Goblin", tracker.entries().get(1).name());
+        assertEquals("Ana", tracker.entries().get(2).name());
+    }
+
+    @Test
+    @DisplayName("empate mantem a ordem de entrada")
+    void keepsInsertionOrderOnTie() {
         InitiativeTracker tracker = new InitiativeTracker();
         tracker.start();
         tracker.add("X", false, 15);

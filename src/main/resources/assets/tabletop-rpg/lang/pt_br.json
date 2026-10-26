@@ -98,6 +98,7 @@
   "screen.tabletoprpg.sheet_editor.initiative": "Iniciativa",
   "screen.tabletoprpg.sheet_editor.initiative_use_default": "Usar iniciativa padrão?",
   "screen.tabletoprpg.sheet_editor.initiative_column": "Iniciativa",
+  "screen.tabletoprpg.sheet_editor.initiative_formula": "Bonus padrao da mesa (ex.: 3 ou 1d20+3)",
   "screen.tabletoprpg.sheet_editor.attributes": "Atributos",
   "screen.tabletoprpg.sheet_editor.pericias": "Perícias",
   "screen.tabletoprpg.sheet_editor.field_name": "Rótulo do nome",
