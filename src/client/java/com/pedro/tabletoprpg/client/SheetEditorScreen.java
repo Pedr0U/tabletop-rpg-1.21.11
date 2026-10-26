@@ -1,5 +1,6 @@
 package com.pedro.tabletoprpg.client;
 
+import com.pedro.tabletoprpg.InitiativeRoller;
 import com.pedro.tabletoprpg.RpgNetworking;
 import com.pedro.tabletoprpg.SheetModel;
 import com.pedro.tabletoprpg.SheetModelHolder;
@@ -10,6 +11,7 @@ import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.Checkbox;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.ChatFormatting;
 import net.minecraft.network.chat.Component;
 
 import java.util.ArrayList;
@@ -309,6 +311,8 @@ public class SheetEditorScreen extends Screen {
         EditBox box = new EditBox(this.font, ctrlX(), y, ctrlW(), ROW_H - 4, tr("initiative_formula"));
         box.setMaxLength(SheetModel.MAX_INITIATIVE_FORMULA);
         box.setValue(staged.initiativeFormula());
+        box.setHint(Component.translatable("screen.tabletoprpg.sheet_editor.initiative_formula_hint"));
+        box.setEditable(staged.initiativeUseDefault());
         box.setResponder(value -> {
             if (!suppressNotify) {
                 staged = staged.withInitiativeFormula(value);
@@ -919,6 +923,13 @@ public class SheetEditorScreen extends Screen {
      * gravar.
      */
     private void save() {
+        if (staged.initiativeUseDefault() && !InitiativeRoller.isValidTableFormula(staged.initiativeFormula(), staged)) {
+            if (this.minecraft != null && this.minecraft.player != null) {
+                this.minecraft.player.displayClientMessage(Component.translatable(
+                        "screen.tabletoprpg.sheet_editor.initiative_formula_invalid").withStyle(ChatFormatting.RED), false);
+            }
+            return;
+        }
         ClientPlayNetworking.send(new RpgNetworking.SheetModelSavePayload(staged));
         baseline = staged;
         // O que foi gravado e o novo ponto de partida: nem o rascunho nem as

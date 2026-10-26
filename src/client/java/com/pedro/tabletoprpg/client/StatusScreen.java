@@ -4220,7 +4220,7 @@ public class StatusScreen extends CharacterSheetScreen {
         EditBox initiativeBox = fieldBoxes.get("initiative");
         if (initiativeBox != null && sheet != null) {
             String shown = model().initiativeUseDefault()
-                    ? (model().initiativeFormula().isEmpty() ? "0" : model().initiativeFormula())
+                    ? (model().initiativeFormula().isEmpty() ? "1d20" : model().initiativeFormula())
                     : Integer.toString(derivedInitiative());
             if (!shown.equals(initiativeBox.getValue())) {
                 initiativeBox.setValue(shown);

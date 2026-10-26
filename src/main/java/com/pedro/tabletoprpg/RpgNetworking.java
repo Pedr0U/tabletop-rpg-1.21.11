@@ -2178,6 +2178,10 @@ public final class RpgNetworking {
             if (next == null) {
                 return;
             }
+            // Formula da iniciativa da mesa nao reconhecida: a tela ja avisa e nao envia.
+            if (next.initiativeUseDefault() && !InitiativeRoller.isValidTableFormula(next.initiativeFormula(), next)) {
+                return;
+            }
             if (next.equals(store.model())) {
                 return; // nada mudou de fato
             }

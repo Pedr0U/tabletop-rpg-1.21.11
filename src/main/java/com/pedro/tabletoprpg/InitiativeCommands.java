@@ -141,15 +141,15 @@ public final class InitiativeCommands {
             ctx.getSource().sendFailure(Component.translatable("message.tabletoprpg.initiative.already_in", name));
             return 0;
         }
-        int value;
+        InitiativeRoller.Roll roll;
         try {
-            value = (int) (InitiativeRoller.playerTotal(player) + extraTotal(extra));
+            roll = InitiativeRoller.playerRoll(player, extra);
         } catch (DiceFormula.SyntaxException e) {
             ctx.getSource().sendFailure(e.toComponent());
             return 0;
         }
-        TRACKER.add(name, false, value);
-        broadcast(ctx, Component.translatable("message.tabletoprpg.initiative.rolled", name, value));
+        TRACKER.add(name, false, (int) roll.total());
+        announceEntry(ctx, roll, name);
         return 1;
     }
 
@@ -173,15 +173,15 @@ public final class InitiativeCommands {
             ctx.getSource().sendFailure(Component.translatable("message.tabletoprpg.initiative.already_in", name));
             return 0;
         }
-        int value;
+        InitiativeRoller.Roll roll;
         try {
-            value = (int) InitiativeRoller.mobTotal(mob);
+            roll = InitiativeRoller.mobRoll(mob);
         } catch (DiceFormula.SyntaxException e) {
             ctx.getSource().sendFailure(e.toComponent());
             return 0;
         }
-        TRACKER.add(name, true, value);
-        broadcast(ctx, Component.translatable("message.tabletoprpg.initiative.rolled", name, value));
+        TRACKER.add(name, true, (int) roll.total());
+        announceEntry(ctx, roll, name);
         return 1;
     }
 
@@ -200,15 +200,15 @@ public final class InitiativeCommands {
                 ctx.getSource().sendFailure(Component.translatable("message.tabletoprpg.initiative.already_in", name));
                 return 0;
             }
-            int value;
+            InitiativeRoller.Roll roll;
             try {
-                value = (int) InitiativeRoller.playerTotal(online);
+                roll = InitiativeRoller.playerRoll(online, "");
             } catch (DiceFormula.SyntaxException e) {
                 ctx.getSource().sendFailure(e.toComponent());
                 return 0;
             }
-            TRACKER.add(name, false, value);
-            broadcast(ctx, Component.translatable("message.tabletoprpg.initiative.added", name, value));
+            TRACKER.add(name, false, (int) roll.total());
+            announceEntry(ctx, roll, name);
             return 1;
         }
 
@@ -218,15 +218,20 @@ public final class InitiativeCommands {
             return 0;
         }
         Integer groupValue = TRACKER.valueOf(name);
-        int value;
+        if (groupValue != null) {
+            TRACKER.add(name, true, groupValue);
+            broadcast(ctx, Component.translatable("message.tabletoprpg.initiative.added", name, groupValue));
+            return 1;
+        }
+        InitiativeRoller.Roll roll;
         try {
-            value = groupValue != null ? groupValue : (int) InitiativeRoller.mobTotal(mob);
+            roll = InitiativeRoller.mobRoll(mob);
         } catch (DiceFormula.SyntaxException e) {
             ctx.getSource().sendFailure(e.toComponent());
             return 0;
         }
-        TRACKER.add(name, true, value);
-        broadcast(ctx, Component.translatable("message.tabletoprpg.initiative.added", name, value));
+        TRACKER.add(name, true, (int) roll.total());
+        announceEntry(ctx, roll, name);
         return 1;
     }
 
@@ -255,15 +260,6 @@ public final class InitiativeCommands {
                     "message.tabletoprpg.initiative.list_line", entry.name(), entry.value()), false);
         }
         return 1;
-    }
-
-    /** Total da formula extra com sinal: "+1d20" soma, "-2" subtrai. Vazio e zero. */
-    private static long extraTotal(String extra) throws DiceFormula.SyntaxException {
-        if (extra.isEmpty()) {
-            return 0;
-        }
-        long sign = extra.charAt(0) == '-' ? -1 : 1;
-        return sign * InitiativeRoller.evaluate(extra.substring(1).trim());
     }
 
     // ------------------------------------------------------------------
@@ -336,6 +332,12 @@ public final class InitiativeCommands {
             }
         }
         return null;
+    }
+
+    /** Mensagem da rolagem (mesmo formato do /rpg roll) e, logo depois, a entrada na lista. */
+    private static void announceEntry(CommandContext<CommandSourceStack> ctx, InitiativeRoller.Roll roll, String name) {
+        broadcast(ctx, roll.message());
+        broadcast(ctx, Component.translatable("message.tabletoprpg.initiative.added", name, (int) roll.total()));
     }
 
     private static void broadcast(CommandContext<CommandSourceStack> ctx, Component message) {

@@ -34,3 +34,12 @@ Data: 25/10/2026. Branch: `feature/iniciativa`. Fase 1: tag `iniciativa-fase1`.
 ## Rollback
 - Fase 2 inteira: `git revert <hash-da-fase2>` ou `git checkout iniciativa-fase1` (somente leitura).
 - Mudanca de dado: o bonus da mesa agora fica na chave `initiativeFormula`. Se a fase for revertida depois de o mestre digitar um bonus, a build antiga ignora essa chave e o bonus volta ao padrao vazio (nao ha erro ao abrir o mundo).
+
+## Ajustes de feedback (25/10/2026, depois da revisao em jogo)
+- Mensagem da rolagem de iniciativa agora segue o formato do /rpg roll: a rolagem de pericia usa a mesma mensagem do /rpg roll <pericia>; a formula da mesa usa a mesma mensagem do /rpg roll <formula>. Depois da rolagem, aparece "X entrou na iniciativa com N".
+- Semantica da formula da mesa: a formula digitada e a rolagem INTEIRA ("1d20 + 3"), nao mais um bonus somado a 1d20. Vazia vira 1d20. Consequencia: "3" sozinho rola 3 (valor fixo), nao 1d20+3.
+- Sheet Editor: rotulo "Table Initiative" / "Iniciativa da mesa"; placeholder "Ex: 1d20 + 3" dentro da caixa.
+- Formula nao reconhecida: o salvamento e bloqueado no cliente com a mensagem "Nao foi possivel reconhecer a formula de iniciativa." e o servidor tambem recusa a gravacao. A validacao so vale com a caixa marcada (com ela desmarcada, a caixa fica desabilitada e a formula nao e usada).
+- Caixa desmarcada: campo de texto desabilitado (cinza). StatusScreen mostra 1d20 quando a formula esta vazia.
+- Refatoracao: MasterCommands.periciaResult e formulaMessage, sem mudar o texto do /rpg roll.
+- Build exit 0; InitiativeRollerTest 3/3 (formula vazia, formula digitada, sinal). Nao validado em jogo.
