@@ -459,6 +459,8 @@ public class TabletopRpgClient implements ClientModInitializer {
 
     private void registerNetworking() {
         // Resposta do servidor com os dados da sessão -> abre o menu.
+        InitiativeClientState.register();
+
         ClientPlayNetworking.registerGlobalReceiver(RpgNetworking.MenuDataPayload.TYPE, (payload, context) -> {
             context.client().execute(() -> {
                 if (context.client().player == null) {

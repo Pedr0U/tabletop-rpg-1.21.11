@@ -43,7 +43,8 @@ class ThreatSheetStoreTest {
                 List.of(new ThreatSheet.Ability("Passiva", "efeito")),
                 List.of(new ThreatSheet.Action("Acao", "+5", "1d8", "golpe")),
                 "",
-                false);
+                false,
+                "");
     }
 
     /** Salva e devolve a ficha com o id que o servidor atribuiu. */

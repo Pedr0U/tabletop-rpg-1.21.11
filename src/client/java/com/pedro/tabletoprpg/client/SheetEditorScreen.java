@@ -10,6 +10,7 @@ import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.Checkbox;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.ChatFormatting;
 import net.minecraft.network.chat.Component;
 
 import java.util.ArrayList;
@@ -297,6 +298,13 @@ public class SheetEditorScreen extends Screen {
     private int header(int y, String key) {
         captions.add(new Caption(y + 6, tr(key), COL_HEADER));
         return y + HEADER_H;
+    }
+
+    /** Mostra no chat o motivo de o salvamento ter sido recusado. */
+    private void warnSave(String key) {
+        if (this.minecraft != null && this.minecraft.player != null) {
+            this.minecraft.player.displayClientMessage(Component.translatable(key).withStyle(ChatFormatting.RED), false);
+        }
     }
 
     /** Rotulo de um campo de sistema: texto a esquerda, caixa a direita. */
@@ -899,6 +907,10 @@ public class SheetEditorScreen extends Screen {
      * gravar.
      */
     private void save() {
+        if (!staged.initiativeUseDefault() && staged.initiativePericiaId().isEmpty()) {
+            warnSave("screen.tabletoprpg.sheet_editor.initiative_skill_required");
+            return;
+        }
         ClientPlayNetworking.send(new RpgNetworking.SheetModelSavePayload(staged));
         baseline = staged;
         // O que foi gravado e o novo ponto de partida: nem o rascunho nem as

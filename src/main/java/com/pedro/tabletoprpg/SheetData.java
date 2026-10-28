@@ -140,18 +140,10 @@ public record SheetData(
     public static final int MAX_XP = 999_999;
 
     /**
-     * Piso e teto do valor <b>proprio</b> de iniciativa do personagem (22/10/2026).
-     *
-     * <p><b>Por que tem sinal:</b> a iniciativa e um modificador somado ao d20,
-     * e modificador negativo e regra de RPG (destreza baixa, armadura pesada).
-     *
-     * <p><b>E o mesmo teto dos limites de valor do Mestre</b>
-     * ({@link SheetModel#VALUE_LIMIT_MAX}), pelo mesmo motivo: e o numero
-     * absurdo que a rede e o NBT editado a mao poderiam trazer, nao uma regra.
+     * Teto da formula de iniciativa do personagem (ex.: "2d20+3"). Igual ao teto
+     * da caixa no Sheet Editor e na tela da ficha.
      */
-    public static final int MIN_INITIATIVE = SheetModel.VALUE_LIMIT_MIN;
-    /** Teto do valor proprio de iniciativa; ver {@link #MIN_INITIATIVE}. */
-    public static final int MAX_INITIATIVE = SheetModel.VALUE_LIMIT_MAX;
+    public static final int MAX_INITIATIVE_FORMULA = 40;
 
     /**
      * Campos de texto livre (editaveis), mais o XP quando o modelo esta em modo
@@ -168,7 +160,7 @@ public record SheetData(
      */
     public static final List<String> TEXT_FIELDS =
             List.of("playerName", "characterName", "race", "characterClass", "background",
-                    "appearance", "backstory", "xptext");
+                    "appearance", "backstory", "xptext", "initiative");
     /**
      * Campos com rotulo <b>desenhado na ficha</b>: os de texto, os numericos
      * com rotulo proprio e o XP em modo TEXT.
@@ -309,11 +301,10 @@ public record SheetData(
             // ficha salva ANTES do CA existir continua abrindo -- e abre com CA 0,
             // que e o mesmo que uma ficha recem-criada.
             Codec.INT.optionalFieldOf("ca", 0).forGetter(Progress::ca),
-            // 22/10/2026: a iniciativa do personagem e a flag do "usar a
-            // iniciativa do Mestre". As duas entram como optionalFieldOf: uma
-            // ficha salva antes delas continua abrindo, com a iniciativa em 0 e
-            // com a flag LIGADA (que e o estado de uma ficha recem-criada).
-            Codec.INT.optionalFieldOf("initiative", 0).forGetter(Progress::initiative),
+            // Iniciativa do personagem: a formula que ele digita (ex.: "2d20+3").
+            // Chave NOVA ("initiativeFormula"): a antiga "initiative", numerica,
+            // continua no save sem ser lida, e a ficha abre com formula vazia (1d20).
+            Codec.STRING.optionalFieldOf("initiativeFormula", "").forGetter(Progress::initiativeFormula),
             Codec.BOOL.optionalFieldOf("useDefaultInitiative", true)
                     .forGetter(Progress::useDefaultInitiative)
     ).apply(i, Progress::new));
@@ -742,23 +733,20 @@ public record SheetData(
      * leitura em regra de RPG, e o campo serve para mostrar a classe de armadura,
      * nao um modificador (modificadores vivem nos atributos, que vao a -30).
      *
-     * <p><b>22/10/2026, a iniciativa do personagem:</b> o {@code initiative} e o
-     * valor <b>proprio</b> do personagem, digitado pelo jogador quando a caixa
-     * "usar iniciativa padrao" do modelo esta marcada (ver {@code initiativeShown}).
-     * O {@code useDefaultInitiative} continua no save por compatibilidade, mas
-     * nao decide mais o que a ficha mostra.
+     * <p><b>Iniciativa do personagem:</b> o {@code initiativeFormula} e a formula
+     * que o proprio jogador digita (ex.: "2d20+3"), usada quando a caixa "usar
+     * iniciativa padrao" do modelo esta marcada. Vazia rola 1d20. O
+     * {@code useDefaultInitiative} continua no save por compatibilidade, mas nao
+     * decide mais o que a ficha mostra.
      */
-    public record Progress(int level, int xp, String xpText, int ca, int initiative,
+    public record Progress(int level, int xp, String xpText, int ca, String initiativeFormula,
                            boolean useDefaultInitiative) {
         public static final StreamCodec<FriendlyByteBuf, Progress> STREAM_CODEC = StreamCodec.composite(
                 ByteBufCodecs.VAR_INT, Progress::level,
                 ByteBufCodecs.VAR_INT, Progress::xp,
                 ByteBufCodecs.stringUtf8(MAX_NAME), Progress::xpText,
                 ByteBufCodecs.VAR_INT, Progress::ca,
-                // 22/10/2026: a iniciativa e a flag do "usar a iniciativa do
-                // Mestre". O VAR_INT aceita negativo (o Minecraft escreve o
-                // sinal em 5 bytes), e a flag e um byte.
-                ByteBufCodecs.VAR_INT, Progress::initiative,
+                ByteBufCodecs.stringUtf8(MAX_INITIATIVE_FORMULA), Progress::initiativeFormula,
                 ByteBufCodecs.BOOL, Progress::useDefaultInitiative,
                 Progress::new
         );
@@ -768,7 +756,10 @@ public record SheetData(
             xp = clamp(xp, 0, MAX_XP);
             xpText = clean(xpText);
             ca = clamp(ca, 0, MAX_RESOURCE);
-            initiative = clamp(initiative, MIN_INITIATIVE, MAX_INITIATIVE);
+            initiativeFormula = initiativeFormula == null ? "" : initiativeFormula;
+            if (initiativeFormula.length() > MAX_INITIATIVE_FORMULA) {
+                initiativeFormula = initiativeFormula.substring(0, MAX_INITIATIVE_FORMULA);
+            }
         }
 
         /**
@@ -782,11 +773,11 @@ public record SheetData(
          * so o codigo que realmente mexe no CA precisa falar dele.
          */
         public Progress(int level, int xp, String xpText) {
-            this(level, xp, xpText, 0, 0, true);
+            this(level, xp, xpText, 0, "", true);
         }
 
         public static Progress defaults() {
-            return new Progress(1, 0, "", 0, 0, true);
+            return new Progress(1, 0, "", 0, "", true);
         }
     }
 
@@ -2071,7 +2062,7 @@ public record SheetData(
             // facil de encontrar e impossivel de explicar.
             case "level" -> new SheetData(identity, vitals,
                     new Progress(parseInt(value, progress.level()), progress.xp(), progress.xpText(),
-                            progress.ca(), progress.initiative(), progress.useDefaultInitiative()),
+                            progress.ca(), progress.initiativeFormula(), progress.useDefaultInitiative()),
                     attributes, skills, pericias, attributeValueMin, attributeValueMax, periciaValueMax, inventory, spellbook);
             // 01/10/2026: o CA (Classe de Armadura), na mesma linha do Level na
             // ficha. Fica ANTES do `default` pelo mesmo motivo do "level": sem
@@ -2080,20 +2071,22 @@ public record SheetData(
             // proximo eco do servidor.
             case "ca" -> new SheetData(identity, vitals,
                     new Progress(progress.level(), progress.xp(), progress.xpText(),
-                            parseInt(value, progress.ca()), progress.initiative(),
+                            parseInt(value, progress.ca()), progress.initiativeFormula(),
                             progress.useDefaultInitiative()),
                     attributes, skills, pericias, attributeValueMin, attributeValueMax, periciaValueMax, inventory, spellbook);
-            // 22/10/2026: a iniciativa do personagem, o valor proprio gravado em
-            // "initiative". A caixa do modelo decide se ele e mostrado (ver
-            // initiativeShown). A flag por personagem ("usedefaultinitiative")
+            // Iniciativa do personagem: a formula que ele digita (ex.: "2d20+3").
+            // Formula nao reconhecida nao e gravada (devolve a propria ficha, e o
+            // servidor nao manda eco). A flag por personagem ("usedefaultinitiative")
             // continua aceita aqui, mas nao muda a ficha.
-            case "initiative" -> new SheetData(identity, vitals,
-                    new Progress(progress.level(), progress.xp(), progress.xpText(), progress.ca(),
-                            parseInt(value, progress.initiative()), progress.useDefaultInitiative()),
-                    attributes, skills, pericias, attributeValueMin, attributeValueMax, periciaValueMax, inventory, spellbook);
+            case "initiative" -> InitiativeRoller.isValidFormula(rawValue, SheetModelHolder.current())
+                    ? new SheetData(identity, vitals,
+                            new Progress(progress.level(), progress.xp(), progress.xpText(), progress.ca(),
+                                    rawValue.trim(), progress.useDefaultInitiative()),
+                            attributes, skills, pericias, attributeValueMin, attributeValueMax, periciaValueMax, inventory, spellbook)
+                    : this;
             case "usedefaultinitiative" -> new SheetData(identity, vitals,
                     new Progress(progress.level(), progress.xp(), progress.xpText(), progress.ca(),
-                            progress.initiative(),
+                            progress.initiativeFormula(),
                             parseBoolean(value, progress.useDefaultInitiative())),
                     attributes, skills, pericias, attributeValueMin, attributeValueMax, periciaValueMax, inventory, spellbook);
             // Com o modelo em modo TEXT, o campo da barra mostra o texto que o
@@ -2101,12 +2094,12 @@ public record SheetData(
             // para quando o modelo voltar para NUMBER.
             case "xp" -> SheetModelHolder.current().xp() == SheetModel.XpMode.TEXT
                 ? new SheetData(identity, vitals, new Progress(progress.level(), progress.xp(), value,
-                        progress.ca(), progress.initiative(), progress.useDefaultInitiative()),
+                        progress.ca(), progress.initiativeFormula(), progress.useDefaultInitiative()),
                         attributes, skills, pericias,
                             attributeValueMin, attributeValueMax, periciaValueMax, inventory, spellbook)
                     : new SheetData(identity, vitals,
                 new Progress(progress.level(), parseInt(value, progress.xp()), progress.xpText(),
-                        progress.ca(), progress.initiative(), progress.useDefaultInitiative()),
+                        progress.ca(), progress.initiativeFormula(), progress.useDefaultInitiative()),
                             attributes, skills, pericias,
                             attributeValueMin, attributeValueMax, periciaValueMax, inventory, spellbook);
 
@@ -2122,7 +2115,7 @@ public record SheetData(
             // vir de um cliente forjado.
             case "xptext" -> SheetModelHolder.current().xp() == SheetModel.XpMode.TEXT
                 ? new SheetData(identity, vitals, new Progress(progress.level(), progress.xp(), value,
-                        progress.ca(), progress.initiative(), progress.useDefaultInitiative()),
+                        progress.ca(), progress.initiativeFormula(), progress.useDefaultInitiative()),
                         attributes, skills, pericias,
                             attributeValueMin, attributeValueMax, periciaValueMax, inventory, spellbook)
                     : this;
@@ -2434,6 +2427,9 @@ public record SheetData(
             // linha, a caixa de texto da tela de Status cairia no `default` e o
             // Mestre nao veria o que digitou.
             case "xptext" -> progress.xpText();
+            // Iniciativa do personagem, como texto (a formula). Com a caixa desmarcada
+            // a tela mostra a pericia no lugar; ver StatusScreen.applyExtraState.
+            case "initiative" -> progress.initiativeFormula();
             // 30/09/2026 (FASE 2B): o limite de peso e lido como texto (e nao
             // por getNumeric, que devolve int) justamente porque tem 2 casas
             // decimais. O formato e o mesmo da linha de resumo do inventario.
@@ -2478,17 +2474,15 @@ public record SheetData(
     }
 
     /**
-     * Iniciativa que a ficha mostra e a caixa edita (22/10/2026).
-     *
-     * <p>Com "usar iniciativa padrao" marcada no modelo, e o valor proprio do
-     * personagem ({@code progress.initiative}), que o jogador digita. Desmarcada,
-     * e o valor da pericia marcada no modelo, ou 0 sem pericia marcada. A regra
-     * usa a caixa <b>do modelo</b>, e nao a flag por personagem.
+     * Valor numerico da iniciativa mostrado na ficha, so com a caixa do modelo
+     * DESMARCADA: o valor da pericia marcada como iniciativa, ou 0 sem pericia.
+     * Com a caixa marcada a ficha mostra a formula do proprio personagem (ver
+     * {@link #getText}), que nao e um numero.
      */
     private int initiativeShown() {
         SheetModel model = SheetModelHolder.current();
         if (model.initiativeUseDefault()) {
-            return progress.initiative();
+            return 0;
         }
         Pericia pericia = periciaById(model.initiativePericiaId());
         return pericia == null ? 0 : pericia.value();

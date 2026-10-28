@@ -2178,6 +2178,11 @@ public final class RpgNetworking {
             if (next == null) {
                 return;
             }
+            // Iniciativa da mesa: sem a caixa marcada, uma pericia precisa estar marcada.
+            // A tela ja avisa; aqui so recusa.
+            if (!next.initiativeUseDefault() && next.initiativePericiaId().isEmpty()) {
+                return;
+            }
             if (next.equals(store.model())) {
                 return; // nada mudou de fato
             }

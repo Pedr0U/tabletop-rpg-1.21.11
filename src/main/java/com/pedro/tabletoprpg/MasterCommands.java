@@ -86,6 +86,9 @@ public class MasterCommands {
                     .then(Commands.literal("finish")
                         .executes(MasterCommands::finishTurn)))
 
+                // /rpg initiative <start|end|roll|add|remove> -> lista de iniciativa (Fase 1)
+                .then(InitiativeCommands.node())
+
                 // /rpg roll                  -> lista as pericias da ficha
                 // /rpg roll <pericia>         -> 1d20 + valor da pericia + atributo
                 // /rpg roll <formula>         -> d20, 2d6, d20+10, 2d6+d4+3
@@ -294,6 +297,7 @@ public class MasterCommands {
     private static int setMode(CommandContext<CommandSourceStack> ctx, SessionManager.GameMode mode) {
         if (!verifyMasterPermission(ctx)) return 0;
 
+        InitiativeCommands.onModeChanged(ctx.getSource().getServer(), mode);
         SessionManager.setMode(mode);
         if (mode == SessionManager.GameMode.FREE) {
             // Fim do encontro: limpa seleção, âncoras e monstros controlados.
@@ -999,16 +1003,36 @@ public class MasterCommands {
      * rolagem nenhuma. A leitura da ficha e do atributo nao sorteia nada e pode
      * ficar onde esta.
      */
+    /** Total e mensagem de uma rolagem de pericia, ja formatada. */
+    record PericiaResult(long total, Component message) {
+    }
+
     private static int rollPericia(CommandContext<CommandSourceStack> ctx, ServerPlayer player,
                                    SheetData.Pericia pericia, String tail) {
+        PericiaResult result;
+        try {
+            result = periciaResult(player, pericia, tail);
+        } catch (DiceFormula.SyntaxException e) {
+            ctx.getSource().sendFailure(Component.empty().append(e.toComponent()).withStyle(ChatFormatting.RED));
+            return 0;
+        }
+        if (SessionManager.isMaster(player)) {
+            player.sendSystemMessage(result.message());
+        } else {
+            broadcast(ctx, result.message());
+        }
+        if (tail.isEmpty()) {
+            InitiativeCommands.onPericiaRolled(ctx.getSource().getServer(), player, pericia.id(), result.total());
+        }
+        return 1;
+    }
+
+    /** Rola a pericia (com cauda opcional) e monta a mensagem, sem enviar nada. */
+    static PericiaResult periciaResult(ServerPlayer player, SheetData.Pericia pericia, String tail)
+            throws DiceFormula.SyntaxException {
         DiceFormula.Outcome outcome = null;
         if (!tail.isEmpty()) {
-            try {
-                outcome = DiceFormula.parse(tail).evaluate(sides -> RANDOM.nextInt(sides) + 1);
-            } catch (DiceFormula.SyntaxException e) {
-                ctx.getSource().sendFailure(Component.empty().append(e.toComponent()).withStyle(ChatFormatting.RED));
-                return 0;
-            }
+            outcome = DiceFormula.parse(tail).evaluate(sides -> RANDOM.nextInt(sides) + 1);
         }
 
         SheetData sheet = SessionManager.getSheet(player.getUUID());
@@ -1038,13 +1062,7 @@ public class MasterCommands {
         } else {
             message.append(Component.literal(" = §e§l" + total));
         }
-
-        if (SessionManager.isMaster(player)) {
-            player.sendSystemMessage(message);
-        } else {
-            broadcast(ctx, message);
-        }
-        return 1;
+        return new PericiaResult(total, message);
     }
 
     /**
@@ -1111,6 +1129,7 @@ public class MasterCommands {
                                  SheetData.Pericia pericia) {
         return rollPericia(ctx, player, pericia, "");
     }
+
 
     /**
      * {@code /rpg roll} sem argumento: lista as <b>perícias</b> com o quanto cada
@@ -1740,10 +1759,14 @@ public class MasterCommands {
         // RANDOM e a unica fonte de aleatoriedade do comando: o cliente nao
         // pode prever a rolagem.
         outcome = DiceFormula.parse(formula).evaluate(sides -> RANDOM.nextInt(sides) + 1);
+        return formulaMessage(player.getName().getString(), outcome);
+    }
 
+    /** Mensagem de uma rolagem por formula: nome, dados, soma e critico. */
+    static Component formulaMessage(String playerName, DiceFormula.Outcome outcome) {
         // Com '#' o total vai para a linha propria: colado no fim da ultima volta
         // ele se confunde com o subtotal dela (30/09/2026, pedido do jogador).
-        String name = "§6§e" + player.getName().getString();
+        String name = "§6§e" + playerName;
         String parts = "§b" + joinParts(outcome);
         String total = "§l§a" + outcome.total();
         if (hasGrid(outcome)) {

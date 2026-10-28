@@ -1,0 +1,559 @@
+
+> Configure project :
+Fabric Loom: 1.17.21
+
+> Task :compileJava UP-TO-DATE
+> Task :processResources UP-TO-DATE
+> Task :classes UP-TO-DATE
+> Task :compileClientJava UP-TO-DATE
+> Task :processClientResources UP-TO-DATE
+> Task :jar UP-TO-DATE
+> Task :processIncludeJars UP-TO-DATE
+> Task :remapJar UP-TO-DATE
+> Task :sourcesJar UP-TO-DATE
+> Task :remapSourcesJar UP-TO-DATE
+> Task :assemble UP-TO-DATE
+
+> Task :scanEncoding
+[scanEncoding] INFO: 10861 caractere(s) nao-ASCII em 145 arquivo(s) -- acentos latinos e tipografia, legitimos, nao falha o build. Maiores: memory/project-memory.md=718, reports/2026-09-24_fase2.md=597, reports/2026-09-27_fase3-parte1-resiliencia-keybinds.md=455, client/java/com/pedro/tabletoprpg/client/SpectatorCameraController.java=421, main/java/com/pedro/tabletoprpg/RpgNetworking.java=387
+[scanEncoding] OK: 216 arquivo(s) verificados em src/ e agent/, 0 mojibake, 0 ideograma, 0 U+FFFD.
+
+> Task :clientClasses UP-TO-DATE
+> Task :compileTestJava
+> Task :processTestResources NO-SOURCE
+> Task :testClasses
+
+> Task :test
+
+DiaryDraftsTest > no sem rascunho devolve null PASSED
+
+DiaryDraftsTest > limpar um no que nao tem rascunho nao estraga o cache de ids PASSED
+
+DiaryDraftsTest > a marcacao desce por toda a descendencia PASSED
+
+DiaryDraftsTest > a IRMA nao acende: e o defeito que a jogadora reportou PASSED
+
+DiaryDraftsTest > o mapa de rascunhos devolvido e uma copia: mexer nele nao muda o cache PASSED
+
+DiaryDraftsTest > a marcacao sobe: o no, o ancestral e a raiz acendem PASSED
+
+DiaryDraftsTest > o cache de ids e invalidado quando o mapa muda PASSED
+
+DiaryDraftsTest > limpar um no apaga so ele, e o resto continua PASSED
+
+DiaryDraftsTest > sem rascunho nada acende PASSED
+
+DiaryDraftsTest > o rascunho volta exatamente como a jogadora digitou PASSED
+
+DiaryDraftsTest > um titulo vazio e devolvido vazio: e o que a jogadora digitou PASSED
+
+DiaryDraftsTest > digitar de novo sobrescreve, e nao acumula PASSED
+
+DiaryStatePayloadTest > um payload legitimo nao pode ser confundido com layout errado PASSED
+
+DiaryStatePayloadTest > estado do diario sobrevive ao round-trip pelo STREAM_CODEC PASSED
+
+DiaryStatePayloadTest > layout desconhecido nao estoura: vira payload vazio com a versao recebida PASSED
+
+DiaryStoreTest > Modificado sobe niveis: um tataraneto leva o tio ao topo, mas nao o irmao PASSED
+
+DiaryStoreTest > no caminho do NBT o titulo e a descricao sao cortados, e nunca dao excecao PASSED
+
+DiaryStoreTest > titulo vazio e recusado, com pai que nao existe tambem PASSED
+
+DiaryStoreTest > acento pesa dois bytes em UTF-8, e a conta respeita isso PASSED
+
+DiaryStoreTest > aceitar limpa a pendencia e o Reverter, e o texto continua no diario PASSED
+
+DiaryStoreTest > o titulo automatico da subsecao numera dentro daquele pai PASSED
+
+DiaryStoreTest > a conta de bytes soma texto UTF-8 mais o pior caso dos outros campos PASSED
+
+DiaryStoreTest > criar antes de editar nao impede as secoes antigas de virarem pendentes PASSED
+
+DiaryStoreTest > Reverter so existe depois de apagar, e devolve a subarvore inteira uma vez PASSED
+
+DiaryStoreTest > Reverter e uma pilha: cada delecao volta na sua vez, do mais novo ao mais velho PASSED
+
+DiaryStoreTest > a profundidade nao tem teto: 40 niveis encadeados sobem todos PASSED
+
+DiaryStoreTest > Modificado e do mais recente para o mais antigo; Alfabetico e de A a Z PASSED
+
+DiaryStoreTest > Modificado usa a subarvore do galho, nao o maximo do diario inteiro PASSED
+
+DiaryStoreTest > desfixar devolve a anotacao a ordenacao do momento PASSED
+
+DiaryStoreTest > Reverter devolve o texto anterior de uma edicao, e a pendencia some PASSED
+
+DiaryStoreTest > editar a secao acende a pendencia nela e em toda a descendencia, e so nela PASSED
+
+DiaryStoreTest > fixados vao para o topo, e o ultimo fixado fica acima dos anteriores PASSED
+
+DiaryStoreTest > Modificado sobe: editar dentro de uma subsecao leva a mae para o topo PASSED
+
+DiaryStoreTest > a busca ignora maiuscula e acento, e vazio devolve tudo PASSED
+
+DiaryStoreTest > o teto inteiro de 2048 anotacoes no maximo estoura com folga PASSED
+
+DiaryStoreTest > apagar uma secao leva junto a subarvore inteira, nao deixa orfa PASSED
+
+DiaryStoreTest > NBT com parentId apontando para si mesmo nao trava o breadcrumb PASSED
+
+DiaryStoreTest > criar uma secao nao e rascunho: ela nasce aceita PASSED
+
+DiaryStoreTest > titulo grande demais e recusado ao criar e ao salvar, com a contagem na mensagem PASSED
+
+DiaryStoreTest > gravar o mesmo texto de novo nao cria pendencia nem empilha no Reverter PASSED
+
+DiaryStoreTest > subir a partir de um pai que nao existe para no no, sem laco PASSED
+
+DiaryStoreTest > o diario sobrevive a ida e volta pelo codec, e pin ausente vira 0 PASSED
+
+DiaryStoreTest > a partir de um certo volume o diario passa do teto e o aviso dispara PASSED
+
+DiaryStoreTest > desfazer a delecao devolve a subarvore, que continua marcada se tinha rascunho PASSED
+
+DiaryStoreTest > mil anotacoes de mil caracteres ainda cabem no pacote PASSED
+
+DiaryStoreTest > no teto de anotacoes, criar e recusado em vez de gravar PASSED
+
+DiaryStoreTest > subsecao criada dentro de secao monta o caminho da raiz ate ela PASSED
+
+DiaryUndoTest > digitar, apagar tudo e voltar ao texto original nao deixa passo nenhum PASSED
+
+DiaryUndoTest > exclusoes voltam na ordem, e cada uma volta a subtree inteira PASSED
+
+DiaryUndoTest > limpar esvazia e reinicia a contagem PASSED
+
+DiaryUndoTest > a ordem dos passos e sempre crescente, mesmo no mesmo quadro PASSED
+
+DiaryUndoTest > o servidor sem pilha tira as exclusoes do cliente e preserva as edicoes PASSED
+
+DiaryUndoTest > pilha vazia nao tem passo do topo PASSED
+
+DiaryUndoTest > digitar 30 vezes empilha UM passo, nao 30 PASSED
+
+DiaryUndoTest > a ordem e a ordem dela: edicao, edicao, exclusao, e volta na ordem inversa PASSED
+
+DiaryUndoTest > duas anotacoes diferentes dao dois passos, cada um desfaz o seu PASSED
+
+DiceFormulaTest > no limite exato a formula e aceita PASSED
+
+DiceFormulaTest > 4d6--2 subtrai o modificador uma vez por dado PASSED
+
+DiceFormulaTest > termo negativo no meio guarda o sinal na peca PASSED
+
+DiceFormulaTest > 6#4d6dl1 soma o subtotal das seis voltas PASSED
+
+DiceFormulaTest > quando tudo e descartado o detalhe mostra todas as faces marcadas e o total e zero PASSED
+
+DiceFormulaTest > o roller precisa devolver um valor dentro de 1..faces PASSED
+
+DiceFormulaTest > 2#d20+5 repete a constante tambem, e o rotulo mostra a formula do grupo PASSED
+
+DiceFormulaTest > contagem de dados fora de 1-100 e recusada PASSED
+
+DiceFormulaTest > d6! explode quando a face e o maximo PASSED
+
+DiceFormulaTest > d20 rola uma vez e devolve a face PASSED
+
+DiceFormulaTest > tudo descartado ainda lista as faces, marcadas, em vez de [none] PASSED
+
+DiceFormulaTest > o rotulo inclui os sufixos, para o chat mostrar a formula rolada PASSED
+
+DiceFormulaTest > 2#d20+3#d4 fecha o primeiro grupo no proximo '#' e vira dois blocos PASSED
+
+DiceFormulaTest > explosao garantida e recusada, nunca ignorada em silencio PASSED
+
+DiceFormulaTest > sufixo repetido e recusado, em vez de sobrescrever em silencio PASSED
+
+DiceFormulaTest > a repeticao respeita o sinal do termo e repete a formula inteira PASSED
+
+DiceFormulaTest > '!' fora de 1-1000 e recusado, como c e >> PASSED
+
+DiceFormulaTest > o orcamento conta o grupo inteiro: cada volta cabe, o total e que nao PASSED
+
+DiceFormulaTest > a volta com formula dentro guarda um termo por peca, na ordem PASSED
+
+DiceFormulaTest > numero enorme e recusado, em vez de estourar o int PASSED
+
+DiceFormulaTest > 2d6 soma os dois dados PASSED
+
+DiceFormulaTest > 4#(2d6+1d8+5) rola o grupo inteiro quatro vezes, com os dados de cada volta PASSED
+
+DiceFormulaTest > 4d6kl2 mantem os dois menores PASSED
+
+DiceFormulaTest > explosao nao estoura o orcamento quando a face seguinte nao explode PASSED
+
+DiceFormulaTest > d20+10 soma um termo fixo positivo PASSED
+
+DiceFormulaTest > d6!5 explode com limiar explicito PASSED
+
+DiceFormulaTest > '!' acima das faces e valido: nao explode, mas nao e erro PASSED
+
+DiceFormulaTest > a ordem digitada manda: 4d6dl1kh3 descarta o menor antes de manter 3 PASSED
+
+DiceFormulaTest > a cauda com sinal no inicio distribui o sinal por termo PASSED
+
+DiceFormulaTest > o teto de faces e o de dados sao os declarados na classe PASSED
+
+DiceFormulaTest > os dois contadores juntos sao recusados PASSED
+
+DiceFormulaTest > 4d6dh1 joga fora o maior PASSED
+
+DiceFormulaTest > parentese que nao fecha, ou que nao tem nada dentro, e recusado PASSED
+
+DiceFormulaTest > 10d6>>4dl2 conta so os sobreviventes, nao os dois descartados PASSED
+
+DiceFormulaTest > ++N entra antes de dl: 4d6++2dl1 fica 4+5+6 PASSED
+
+DiceFormulaTest > numero faltando depois de ++ e recusado PASSED
+
+DiceFormulaTest > o rotulo sai na ordem digitada, com o sinal de ++N e --N PASSED
+
+DiceFormulaTest > numero que estoura o int e recusado, em vez de virar outro PASSED
+
+DiceFormulaTest > 4d6kh3 mantem os tres maiores e marca o descartado no detalhe PASSED
+
+DiceFormulaTest > numero negativo puro vale o proprio numero PASSED
+
+DiceFormulaTest > mais de DISPLAY_LIMIT dados vira reticencias no detalhe PASSED
+
+DiceFormulaTest > sufixo repetido e recusado, em vez de sobrescrever em silencio PASSED
+
+DiceFormulaTest > sem cN o critico e a face maxima, e cN manda no lugar dela PASSED
+
+DiceFormulaTest > parenteses aninhados: 2#(1#d6+2) repete o grupo interno PASSED
+
+DiceFormulaTest > 4d20kh2 mantem a ordem em que os dados sairam, com os dois menores marcados PASSED
+
+DiceFormulaTest > repeticao sem dado depois e recusada PASSED
+
+DiceFormulaTest > 6#4d6dl1 expoe uma volta por repeticao, e a soma dos subtotais e o total PASSED
+
+DiceFormulaTest > 10d6>>4 devolve quantos dados passaram do limiar, nao a soma PASSED
+
+DiceFormulaTest > o detalhe mostra o rotulo do dado e a lista de faces entre colchetes PASSED
+
+DiceFormulaTest > caractere invalido e recusado PASSED
+
+DiceFormulaTest > kh e dl aplicados nesta ordem: 4d6kh3dl1 mantem 3 e descarta o menor dos 3 PASSED
+
+DiceFormulaTest > o critico aparece como asterisco no detalhe PASSED
+
+DiceFormulaTest > CRIT so vem de dado que sobrou: o 6 descartado por dh1 nao marca PASSED
+
+DiceFormulaTest > 4d6dl1 mantem a ordem em que os dados sairam, com o menor marcado na frente PASSED
+
+DiceFormulaTest > espacos sao ignorados: ' 4d6 ++ 2 ' e igual a 4d6++2 PASSED
+
+DiceFormulaTest > dado descartado nunca marca critico, nem na volta que o cortou PASSED
+
+DiceFormulaTest > o nome mais longo e o separador: 'Pericia 0-2' corta em 'Pericia 0' PASSED
+
+DiceFormulaTest > a volta que repete um dado so tem um termo, e o rotulo continua o do dado PASSED
+
+DiceFormulaTest > o CRIT so vem de dado que sobrou depois do descarte PASSED
+
+DiceFormulaTest > a cadeia inteira conta como um dado: 6!6!2 vale 14 PASSED
+
+DiceFormulaTest > os sufixos sao aplicados na ordem em que o jogador digitou PASSED
+
+DiceFormulaTest > formula vazia e recusada PASSED
+
+DiceFormulaTest > sem nome de pericia no comeco, nao ha separador PASSED
+
+DiceFormulaTest > o nome casado com o mais longo, e nao com um prefixo curto PASSED
+
+DiceFormulaTest > d8-1 subtrai um termo fixo PASSED
+
+DiceFormulaTest > faces fora de 1-1000 sao recusadas PASSED
+
+DiceFormulaTest > ate DISPLAY_LIMIT dados o detalhe mostra todas as faces PASSED
+
+DiceFormulaTest > 10d6<<3 devolve quantos dados ficaram no limite PASSED
+
+DiceFormulaTest > cauda so com menos continua negativa PASSED
+
+DiceFormulaTest > d20c18 marca critico sem mexer no total PASSED
+
+DiceFormulaTest > repeticao acima de DISPLAY_ROUNDS mantem todas as voltas para o chat resumir PASSED
+
+DiceFormulaTest > numero faltando depois de dl e recusado PASSED
+
+DiceFormulaTest > 6#4d6dl1 mantem a formula no detalhe e repete o subtotal PASSED
+
+DiceFormulaTest > 4d6++2 soma o modificador uma vez por dado PASSED
+
+DiceFormulaTest > repeticao fora de 1-100 e recusada PASSED
+
+DiceFormulaTest > ++N aparece entre parenteses no detalhe PASSED
+
+DiceFormulaTest > a volta marca o critico dela, e so dela PASSED
+
+DiceFormulaTest > limiar de explosao acima das faces e aceito, mas nao explode PASSED
+
+DiceFormulaTest > 4d6dl1 joga fora o menor PASSED
+
+DiceFormulaTest > numero faltando depois de kh e recusado PASSED
+
+DiceFormulaTest > a contagem olha o valor ja modificado por ++N PASSED
+
+DiceFormulaTest > a face no maximo e marcada como critica, para o chat poder pintar de amarelo PASSED
+
+FormulaResolverTest > os cinco operadores comecados em letra passam, com e sem numero PASSED
+
+FormulaResolverTest > atributo com espaco no nome casa inteiro, e dentro de parenteses PASSED
+
+FormulaResolverTest > o placeholder sobrevive ao DiceFormula, e e isso que o save usa PASSED
+
+FormulaResolverTest > atributo que a ficha nao tem e recusado, nao somado como zero PASSED
+
+FormulaResolverTest > o placeholder troca o nome por 0 e mantem dados e sinais PASSED
+
+FormulaResolverTest > o placeholder tambem recusa nome de pericia PASSED
+
+FormulaResolverTest > nome de pericia e recusado: a formula aceita so atributo PASSED
+
+FormulaResolverTest > o mesmo atributo casa por id, por label e por nome PASSED
+
+FormulaResolverTest > nome que nao existe e recusado, com a lista de nomes validos PASSED
+
+FormulaResolverTest > sem ficha o nome e recusado em vez de virar zero PASSED
+
+FormulaResolverTest > minuscula e maiscula do d contam igual: D6 continua dado PASSED
+
+FormulaResolverTest > o mesmo atributo pode aparecer mais de uma vez PASSED
+
+FormulaResolverTest > +Strength vira o valor cru do atributo da ficha PASSED
+
+FormulaResolverTest > nome usado como quantidade de dados (DEXd20+3) passa na validacao PASSED
+
+FormulaResolverTest > letra solta que nao forma nome nenhum e recusada PASSED
+
+FormulaResolverTest > operador novo nao engole atributo que comeca pela mesma letra PASSED
+
+FormulaResolverTest > '4#2d6c4' da jogadora passa inteiro: nem o # nem o c viram nome PASSED
+
+FormulaResolverTest > quando dois atributos têm o mesmo nome, o primeiro do modelo vence PASSED
+
+FormulaResolverTest > o d de d20 e de d6 nao e lido como nome PASSED
+
+FormulaResolverTest > formula com mais nomes que o teto e recusada PASSED
+
+FormulaResolverTest > a formula resolvida continua sendo aceita pelo DiceFormula PASSED
+
+FormulaResolverTest > '2d6c4+Forca' atravessa o resolver e chega ao critico na rolagem PASSED
+
+FormulaResolverTest > o placeholder tambem respeita o teto de nomes PASSED
+
+FormulaResolverTest > o nome casa sem acento e sem diferenciar maiuscula PASSED
+
+InitiativeRollerTest > formulas de dado com ou sem espacos sao reconhecidas PASSED
+
+InitiativeRollerTest > texto que nao e formula e recusado PASSED
+
+InitiativeRollerTest > formula digitada pelo mestre e a rolagem inteira, sem 1d20 extra PASSED
+
+InitiativeRollerTest > formula com sinal inicial e mantida como digitada PASSED
+
+InitiativeRollerTest > formula vazia e valida (rola 1d20 seco) PASSED
+
+InitiativeRollerTest > formula vazia rola 1d20 puro PASSED
+
+InitiativeTrackerTest > empate mantem a ordem de entrada PASSED
+
+InitiativeTrackerTest > mestre pode repetir a entrada de um jogador para dar mais turnos PASSED
+
+InitiativeTrackerTest > remove tira todas as entradas com o nome e devolve a contagem PASSED
+
+InitiativeTrackerTest > lista sai do maior valor para o menor PASSED
+
+InitiativeTrackerTest > comeca ocioso; start abre a coleta e limpa a lista PASSED
+
+InitiativeTrackerTest > mob pode entrar varias vezes com o mesmo valor do grupo PASSED
+
+InitiativeTrackerTest > end zera a lista e volta para ocioso PASSED
+
+LangKeyArgsTest > toda chave nova do preset de rolagem existe no en_us.json PASSED
+
+LangKeyArgsTest > toda Component.translatable passa pelo menos os %s que a mensagem usa FAILED
+    org.opentest4j.AssertionFailedError at LangKeyArgsTest.java:219
+
+PtBrLangTest > pt_br.json tem as mesmas chaves, placeholders e cores do en_us.json PASSED
+
+RollPresetTest > a lista inteira de presets sobrevive a ida e volta, NA ordem PASSED
+
+RollPresetTest > create aceita formula valida e guarda o que foi digitado PASSED
+
+RollPresetTest > o erro de estrutura cita a formula que a jogadora digitou, nao o placeholder PASSED
+
+RollPresetTest > a chave ignora caixa, acento e espaco: e o mesmo preset PASSED
+
+RollPresetTest > NBT gravado no formato ANTIGO (mapa) ainda e lido, ordenado por nome PASSED
+
+RollPresetTest > create recusa nome de atributo que nao existe, com a lista de validos PASSED
+
+RollPresetTest > create aceita cor em qualquer caixa e com espaco no lugar do _ PASSED
+
+RollPresetTest > create recusa nome de pericia: a formula aceita so atributo PASSED
+
+RollPresetTest > NBT com nome grande ou cor inventada nao derruba a carga: ele e cortado PASSED
+
+RollPresetTest > create aceita repeticao e keep/drop: 6#2d6dl1 nao e atributo 'dl' PASSED
+
+RollPresetTest > no comando o espaco vem como _ e a caixa do nome se mantem PASSED
+
+RollPresetTest > create remove os espacos da formula, como a rolagem da tela mostra PASSED
+
+RollPresetTest > indexOf devolve a posicao na ordem da lista, e -1 quando nao existe PASSED
+
+RollPresetTest > os presets de uma jogadora nao vazam para a outra PASSED
+
+RollPresetTest > a lista devolvida e uma copia: mexer nela nao muda o cache PASSED
+
+RollPresetTest > o preset guarda o nome, nunca o valor nem o placeholder PASSED
+
+RollPresetTest > create recusa nome vazio e nome grande demais PASSED
+
+RollPresetTest > create aceita 1d6+Strength e guarda a formula com o nome PASSED
+
+RollPresetTest > store grava, acha pela chave normalizada, substitui e remove PASSED
+
+RollPresetTest > as 16 cores existem, na ordem pedida, e nenhuma se repete PASSED
+
+RollPresetTest > o round-trip novo NAO volta pelo caminho do formato antigo PASSED
+
+RollPresetTest > espaco sobrando ou do meio nao vira dois _ PASSED
+
+RollPresetTest > create recusa formula que o DiceFormula nao reconhece, com a mensagem dele PASSED
+
+RollPresetTest > list sai na ordem em que a jogadora gravou, NAO em ordem de nome PASSED
+
+RollPresetTest > editar um preset nao muda a posicao dele na lista PASSED
+
+RollPresetTest > create nao aceita formula com mais nomes que o teto do resolver PASSED
+
+RollPresetTest > a forma de comando acha o preset salvo, que a do chat nao alcança PASSED
+
+RollPresetTest > create recusa texto solto que nao e rolagem PASSED
+
+RollPresetTest > create aceita o nome por id, por label e sem acento PASSED
+
+RollPresetTest > o preset sobrevive a ida e volta pelo NBT PASSED
+
+RollPresetTest > create recusa cor fora das 16 e lista as validas no erro PASSED
+
+SheetDataInventoryTest > overweight() e so cor: o excesso nunca bloqueia a gravacao PASSED
+
+SheetDataInventoryTest > O peso e arredondado na entrada, e a soma arredonda so no final PASSED
+
+SheetDataInventoryTest > O inventario sobrevive ao round-trip pelo STREAM_CODEC da ficha PASSED
+
+SheetDataInventoryTest > Um save anterior a Fase 2B abre com o inventario vazio PASSED
+
+SheetDataInventoryTest > UPDATE/REMOVE com indice fora da lista nao mudam nada PASSED
+
+SheetDataInventoryTest > O item e o inventario sobrevivem a um round-trip pelo CODEC de NBT PASSED
+
+SheetDataInventoryTest > O peso e cortado em [0, 9999] e NaN/Infinito viram 0 PASSED
+
+SheetDataInventoryTest > O align do modelo copia o inventario em vez de apagalo PASSED
+
+SheetDataInventoryTest > Item sem nome e descartado, e o limite de peso vai por withField PASSED
+
+SheetDataInventoryTest > A lista corta em 50 itens e o 51o devolve a propria instancia PASSED
+
+SheetModelCodecTest > Limites de valor sobrevivem a rede e o NBT antigo abre no padrao PASSED
+
+SheetModelCodecTest > Renomear duas vezes: o id atravessa as duas e o nome repetido entra PASSED
+
+SheetModelCodecTest > Lista mista: as pericias sem id recebem ids novos, sem colidir com os ja gravados PASSED
+
+SheetModelCodecTest > NBT antigo sem id de pericia: os valores sobrevivem e o id e preenchido PASSED
+
+SheetModelCodecTest > Renomear um atributo preserva o valor na ficha PASSED
+
+SheetModelCodecTest > align e idempotente PASSED
+
+SheetModelCodecTest > Ficha com id desconhecido: o valor e 0 e o align nao casa pelo nome PASSED
+
+SheetModelCodecTest > SheetModel sobrevive a um round-trip pelo STREAM_CODEC PASSED
+
+SheetModelCodecTest > O rotulo do CA sobrevive ao NBT e a rede, e NBT antigo abre no padrao PASSED
+
+SheetModelCodecTest > Pericias sem id nao colapsam: o id e preenchido antes da deduplicacao PASSED
+
+SheetModelCodecTest > withAttributeText nao troca o id do atributo PASSED
+
+SheetModelCodecTest > addAttribute gera um id novo, nunca um id que o modelo ja tem PASSED
+
+SheetModelCodecTest > Renomear uma pericia preserva o valor e o atributo dela PASSED
+
+SheetModelCodecTest > Baixar o limite no editor corta o valor ja salvo, no piso e no teto PASSED
+
+SheetModelCodecTest > SheetData sobrevive a um round-trip pelo STREAM_CODEC PASSED
+
+SheetModelCodecTest > O construtor compacto corta rotulos, duplicatas e listas grandes PASSED
+
+SheetModelCodecTest > O id da pericia sobrevive ao rename, a troca de atributo e ao removeAttribute PASSED
+
+SheetModelCodecTest > Round-trip preserva rotulos, modo de XP e listas PASSED
+
+SheetModelCodecTest > Teto abaixo do piso vira o proprio piso, e nao um intervalo vazio PASSED
+
+SheetModelCodecTest > NBT antigo com nomes de lixo: os valores sobrevivem por posicao, nao por nome PASSED
+
+SheetModelCodecTest > Nao da para remover o ultimo atributo nem a ultima pericia PASSED
+
+SheetModelCodecTest > Editar Level ou XP nao apaga o CA, e vice-versa PASSED
+
+ThreatSheetStoreTest > STREAM_CODEC round-trip preserva o Modo Horda PASSED
+
+ThreatSheetStoreTest > NBT antigo sem o campo horde_mode carrega com o Modo Horda desligado PASSED
+
+ThreatSheetStoreTest > apagar a mae apaga mae e copias juntas PASSED
+
+ThreatSheetStoreTest > nome ocupado empurra a copia para o proximo numero livre PASSED
+
+ThreatSheetStoreTest > copia herda o conteudo e nasce com o menor numero livre PASSED
+
+ThreatSheetStoreTest > STREAM_CODEC round-trip preserva o copy_of PASSED
+
+ThreatSheetStoreTest > NBT antigo sem o campo copy_of carrega como ficha original PASSED
+
+ThreatSheetStoreTest > apagar uma copia nao toca na mae nem nas irmas PASSED
+
+ThreatSheetStoreTest > NBT round-trip preserva o copy_of da copia PASSED
+
+ThreatSheetStoreTest > copia de copia e recusada no servidor PASSED
+
+ThreatSheetStoreTest > renomear a mae nao renomeia copias existentes, so as novas PASSED
+
+ThreatSheetStoreTest > NBT round-trip preserva o Modo Horda PASSED
+
+ThreatSheetStoreTest > nome da mae no tamanho maximo ainda cabe com o sufixo PASSED
+
+254 tests completed, 1 failed
+
+> Task :test FAILED
+
+[Incubating] Problems report is available at: file:///C:/Users/Pedro/Downloads/ModTableTop/tabletop-rpg-1.21.11/build/reports/problems/problems-report.html
+
+FAILURE: Build failed with an exception.
+
+* What went wrong:
+Execution failed for task ':test'.
+> There were failing tests. See the report at: file:///C:/Users/Pedro/Downloads/ModTableTop/tabletop-rpg-1.21.11/build/reports/tests/test/index.html
+
+* Try:
+> Run with --scan to get full insights from a Build Scan (powered by Develocity).
+
+Deprecated Gradle features were used in this build, making it incompatible with Gradle 10.
+
+You can use '--warning-mode all' to show the individual deprecation warnings and determine if they come from your own scripts or plugins.
+
+For more on this, please refer to https://docs.gradle.org/9.5.1/userguide/command_line_interface.html#sec:command_line_warnings in the Gradle documentation.
+
+BUILD FAILED in 7s
+12 actionable tasks: 3 executed, 9 up-to-date

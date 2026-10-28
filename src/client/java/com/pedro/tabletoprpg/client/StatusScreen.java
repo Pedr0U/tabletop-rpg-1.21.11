@@ -2459,8 +2459,8 @@ public class StatusScreen extends CharacterSheetScreen {
      * <p>So e usada com "usar iniciativa padrao" desmarcada: o valor e o da
      * pericia marcada no modelo ({@link SheetModel#initiativePericiaId()}). Sem
      * pericia marcada, ou sem o valor dela na ficha, mostra 0 -- o mesmo que o
-     * {@code align} usa para uma pericia sem valor gravado. Com a caixa marcada, a
-     * iniciativa e digitada pelo jogador (ver applyExtraState).
+     * {@code align} usa para uma pericia sem valor gravado. Com a caixa marcada, o
+     * campo mostra a formula do bonus da mesa (ver applySheetToWidgets).
      */
     private int derivedInitiative() {
         SheetModel m = model();
@@ -2739,10 +2739,10 @@ public class StatusScreen extends CharacterSheetScreen {
             y += rowH;
         }
 
-        // 22/10/2026: com "usar iniciativa padrao" marcada no modelo, a caixa e
-        // do jogador (editavel). Desmarcada, e derivada da pericia marcada e so
-        // leitura; ver applyExtraState.
-        addField("initiative", x0, drawY(y), boxX, boxW, labelW, true);
+        // Iniciativa: com "usar iniciativa padrao" marcada no modelo, a caixa e a
+        // formula deste personagem (texto, editavel por quem tem permissao).
+        // Desmarcada, mostra a pericia marcada e fica so leitura; ver applyExtraState.
+        addField("initiative", x0, drawY(y), boxX, boxW, labelW, false);
         y += rowH;
 
         // ---------------- Attributes ----------------
@@ -4213,21 +4213,20 @@ public class StatusScreen extends CharacterSheetScreen {
         // 01/10/2026 (pagina 3): a caixa da CD e a linha do Modificador tambem
         // nao estao no `fieldBoxes` da base, entao recebem o eco do servidor aqui.
         applySpellHeader();
-        // 22/10/2026: caixa marcada no modelo -> o jogador digita a propria
-        // iniciativa (o valor vem do eco do servidor em applySheetToWidgets).
-        // Desmarcada -> derivada da pericia marcada, so leitura; escrever aqui
-        // nao manda payload, porque applySheetToWidgets roda com a notificacao
-        // desligada.
+        // Marcada no modelo: a caixa e a formula deste personagem; o texto vem do
+        // servidor (getText) em applySheetToWidgets, e quem tem permissao edita.
+        // Desmarcada: mostra a pericia marcada, so leitura. Escrever aqui nao manda
+        // payload, porque applySheetToWidgets roda com a notificacao desligada.
         EditBox initiativeBox = fieldBoxes.get("initiative");
         if (initiativeBox != null && sheet != null) {
             if (model().initiativeUseDefault()) {
                 applyEditable(initiativeBox);
             } else {
+                initiativeBox.setEditable(false);
                 String shown = Integer.toString(derivedInitiative());
                 if (!shown.equals(initiativeBox.getValue())) {
                     initiativeBox.setValue(shown);
                 }
-                initiativeBox.setEditable(false);
             }
         }
     }

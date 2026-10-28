@@ -57,6 +57,7 @@ public class TabletopRpg implements ModInitializer {
 
 		// Registra os payloads de rede (comum) e os receptores do lado servidor
 		RpgNetworking.registerPayloads();
+		InitiativeSync.register();
 		RpgNetworking.registerServerReceivers();
 
 		// Liga o modelo global da ficha ao ciclo de vida do servidor: carrega do

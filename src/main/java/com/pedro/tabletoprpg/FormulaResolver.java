@@ -8,6 +8,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.function.Function;
 
 /**
  * Troca o <b>nome</b> de um atributo dentro de uma formula de rolagem pelo numero que
@@ -98,7 +99,6 @@ public final class FormulaResolver {
      */
     public static String resolve(String formula, SheetData sheet, SheetModel model)
             throws ResolveException {
-
         if (formula == null || formula.isEmpty()) {
             return "";
         }
@@ -110,7 +110,21 @@ public final class FormulaResolver {
                     + " without a character sheet",
                     "message.tabletoprpg.formula.resolve.no_sheet");
         }
+        return resolve(formula, id -> attributeValue(sheet, id), model);
+    }
 
+    /**
+     * Mesma troca de {@link #resolve(String, SheetData, SheetModel)}, com o valor de
+     * cada atributo vindo de uma busca por id. Serve a ficha de mob, que tem os
+     * proprios atributos e nao um {@link SheetData}.
+     *
+     * @param valueById valor do atributo pelo id, ou {@code null} se a ficha nao tem
+     */
+    public static String resolve(String formula, Function<String, Integer> valueById, SheetModel model)
+            throws ResolveException {
+        if (formula == null || formula.isEmpty()) {
+            return "";
+        }
         Map<String, Token> table = table(model);
         List<int[]> spans = scanWords(formula, table);
         StringBuilder out = new StringBuilder(formula.length());
@@ -134,7 +148,7 @@ public final class FormulaResolver {
             if (token == null) {
                 throw unknownAttribute(raw, table);
             }
-            Integer value = attributeValue(sheet, token.id);
+            Integer value = valueById.apply(token.id);
             if (value == null) {
                 throw new ResolveException("this sheet has no '" + token.display
                         + "' to add to the roll", "message.tabletoprpg.formula.resolve.missing_value",
@@ -186,7 +200,10 @@ public final class FormulaResolver {
             if (table.get(key(raw)) == null) {
                 throw unknownAttribute(raw, table);
             }
-            out.append(formula, cursor, span[0]).append('0');
+            // Quando o nome e a QUANTIDADE de dados ("DEXd20"), o placeholder precisa de
+            // 1: o DiceFormula recusa 0 dados. Nos demais casos o 0 e so um numero.
+            boolean diceCount = span[1] < formula.length() && isDiceAt(formula, span[1]);
+            out.append(formula, cursor, span[0]).append(diceCount ? '1' : '0');
             cursor = span[1];
         }
         return out.append(formula, cursor, formula.length()).toString();
