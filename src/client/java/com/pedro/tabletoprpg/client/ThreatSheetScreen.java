@@ -1,10 +1,12 @@
 package com.pedro.tabletoprpg.client;
 
+import com.pedro.tabletoprpg.InitiativeRoller;
 import com.pedro.tabletoprpg.RpgNetworking;
 import com.pedro.tabletoprpg.SheetModel;
 import com.pedro.tabletoprpg.SheetModelHolder;
 import com.pedro.tabletoprpg.ThreatSheet;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
+import net.minecraft.ChatFormatting;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.AbstractWidget;
 import net.minecraft.client.gui.components.Button;
@@ -270,6 +272,8 @@ public class ThreatSheetScreen extends Screen {
     /** A ficha vale para varios mobs ao mesmo tempo (1:N). 22/10/2026. */
     private boolean hordeMode;
     private int activeTab;
+    private EditBox threatInitiativeBox;
+    private boolean threatInitiativeWasFocused;
     /** Quantos px da coluna esquerda estao rolados para cima. */
     private int colOffset;
 
@@ -400,6 +404,7 @@ public class ThreatSheetScreen extends Screen {
             this.hp = sheet.vitals().hp();
             this.showDisplayName = sheet.identity().showDisplayName();
             this.hordeMode = sheet.hordeMode();
+            values.put("initiative", sheet.initiativeFormula());
             this.features.addAll(sheet.features());
             this.passives.addAll(sheet.passives());
             this.actions.addAll(sheet.actions());
@@ -426,6 +431,11 @@ public class ThreatSheetScreen extends Screen {
             this.showDisplayName = draft.showDisplayName();
             this.hordeMode = draft.hordeMode();
             this.hp = draft.hp();
+            if (draft.initiativeFormula() != null && !draft.initiativeFormula().isEmpty()) {
+                values.put("initiative", draft.initiativeFormula());
+            } else if (!values.containsKey("initiative")) {
+                values.put("initiative", "");
+            }
         }
         // A base da bolinha e o estado da ABERTURA (ou do ultimo save aceito).
         // Precisou ser aqui e nao no init: o init roda a cada troca de aba e
@@ -478,6 +488,7 @@ public class ThreatSheetScreen extends Screen {
         labels.clear();
         hpBar = null;
         descriptionBox = null;
+        threatInitiativeBox = null;
 
         layout();
         addArrows();
@@ -757,6 +768,40 @@ public class ThreatSheetScreen extends Screen {
             addColWidget(horde);
         }
         y += CHECKBOX_H + GAP;
+
+        // 2c) Iniciativa: mesma logica do jogador (formula propria quando "usar
+        // iniciativa padrao" marcada no modelo).
+        if (inColumn(y, LABEL_H + FIELD_H)) {
+            labels.add(new Label(Component.translatable("screen.tabletoprpg.character_sheet.field.initiative").getString(), leftX, y, COL_TEXT));
+            SheetModel m = model();
+            if (m.initiativeUseDefault()) {
+                EditBox box = new EditBox(this.font, leftX, y + LABEL_H, colW, FIELD_H,
+                        Component.translatable("screen.tabletoprpg.character_sheet.field.initiative"));
+                box.setMaxLength(ThreatSheet.MAX_INITIATIVE_FORMULA);
+                box.setValue(values.getOrDefault("initiative", ""));
+                box.setHint(Component.translatable("screen.tabletoprpg.initiative.formula_hint"));
+                box.setResponder(v -> {
+                    pushUndo();
+                    values.put("initiative", v);
+                });
+                addColWidget(box);
+                boxes.put("initiative", box);
+                threatInitiativeBox = box;
+            } else {
+                String periciaId = m.initiativePericiaId();
+                SheetModel.PericiaDef def = m.periciaById(periciaId);
+                String shown = def == null || def.name() == null || def.name().isBlank()
+                        ? (periciaId == null ? "" : periciaId)
+                        : def.name();
+                EditBox box = new EditBox(this.font, leftX, y + LABEL_H, colW, FIELD_H,
+                        Component.translatable("screen.tabletoprpg.character_sheet.field.initiative"));
+                box.setMaxLength(40);
+                box.setValue(shown);
+                box.setEditable(false);
+                addColWidget(box);
+            }
+        }
+        y += LABEL_H + FIELD_H + GAP;
 
         // 3) tipo, tamanho e deslocamento.
         if (inColumn(y, LABEL_H + FIELD_H)) {
@@ -1382,7 +1427,7 @@ public class ThreatSheetScreen extends Screen {
     private ThreatSheetDraft capture() {
         syncFromWidgets();
         return new ThreatSheetDraft(values, features, passives, actions, pericias,
-                showDisplayName, hordeMode, hp);
+                showDisplayName, hordeMode, hp, values.getOrDefault("initiative", ""));
     }
 
     /**
@@ -1431,6 +1476,7 @@ public class ThreatSheetScreen extends Screen {
         this.showDisplayName = step.showDisplayName();
         this.hordeMode = step.hordeMode();
         this.hp = step.hp();
+        values.put("initiative", step.initiativeFormula());
         for (String key : values.keySet()) {
             EditBox box = boxes.get(key);
             if (box != null) {
@@ -1590,7 +1636,8 @@ String name = values.getOrDefault("name", "");
                 // Modo Horda: a ficha vale para varios monstros ao mesmo tempo. O
                 // servidor e quem decide o efeito do vinculo; o cliente so manda o
                 // que o Mestre marcou na tela.
-                hordeMode);
+                hordeMode,
+                values.getOrDefault("initiative", ""));
 
         if (this.minecraft == null || this.minecraft.getConnection() == null) {
             return;
@@ -1954,6 +2001,7 @@ String name = values.getOrDefault("name", "");
                     region.thumbTop() + region.thumbHeight(), 0xFF6B4A2A);
         }
 
+        checkThreatInitiativeFormulaOnBlur();
         if (activeTab == 0 && colMaxOffset() > 0) {
             int x = colBarX();
             graphics.fill(x, contentTop, x + 3, contentBottom, 0xFF101010);
@@ -2161,6 +2209,42 @@ String name = values.getOrDefault("name", "");
                 bar.x() + (bar.w() - this.font.width(text)) / 2,
                 bar.y() + (bar.h() - 8) / 2,
                 over ? CharacterSheetScreen.COL_HP_OVER : 0xFFFFFFFF, true);
+    }
+
+    private void checkThreatInitiativeFormulaOnBlur() {
+        SheetModel m = model();
+        if (!m.initiativeUseDefault()) {
+            threatInitiativeWasFocused = false;
+            return;
+        }
+        EditBox box = threatInitiativeBox != null ? threatInitiativeBox : boxes.get("initiative");
+        if (box == null) {
+            threatInitiativeWasFocused = false;
+            return;
+        }
+        boolean focused = box.isFocused();
+        if (threatInitiativeWasFocused && !focused) {
+            String value = box.getValue();
+            if (!InitiativeRoller.isValidFormula(value, m)) {
+                if (this.minecraft != null && this.minecraft.player != null) {
+                    this.minecraft.player.displayClientMessage(Component.translatable(
+                            "screen.tabletoprpg.initiative.formula_invalid").withStyle(ChatFormatting.RED), false);
+                }
+                String old = sheet == null ? values.getOrDefault("initiative", "") : sheet.initiativeFormula();
+                if (old == null) {
+                    old = values.getOrDefault("initiative", "");
+                }
+                box.setValue(old);
+                values.put("initiative", old);
+            } else {
+                String compact = InitiativeRoller.compact(value);
+                values.put("initiative", compact);
+                if (!compact.equals(box.getValue())) {
+                    box.setValue(compact);
+                }
+            }
+        }
+        threatInitiativeWasFocused = focused;
     }
 
     @Override

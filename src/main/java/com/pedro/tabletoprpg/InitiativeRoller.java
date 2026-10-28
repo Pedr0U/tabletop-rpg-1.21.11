@@ -48,15 +48,19 @@ public final class InitiativeRoller {
         return formulaRoll(name, "1d20" + extra);
     }
 
-    /** Rolagem de um mob, sem ficha de jogador. */
+    /**
+     * Rolagem de um mob: com a caixa marcada, a formula da propria ficha do mob
+     * (atributos da ficha dele); desmarcada, a pericia marcada na ficha dele.
+     */
     static Roll mobRoll(Mob mob) throws DiceFormula.SyntaxException {
         SheetModel model = SheetModelHolder.current();
         String name = mob.getName().getString();
+        ThreatSheet ficha = ThreatSheetStore.findAnyById(ThreatSheetBinding.sheetOf(mob));
         if (model.initiativeUseDefault()) {
-            return formulaRoll(name, "1d20");
+            String own = ficha == null ? "" : ficha.initiativeFormula();
+            return formulaRoll(name, resolveMob(compact(formulaOrDefault(own)), ficha, model));
         }
         String periciaId = model.initiativePericiaId();
-        ThreatSheet ficha = ThreatSheetStore.findAnyById(ThreatSheetBinding.sheetOf(mob));
         if (periciaId.isEmpty() || ficha == null) {
             return formulaRoll(name, "1d20");
         }
@@ -94,7 +98,7 @@ public final class InitiativeRoller {
     }
 
     /** Tira espacos, igual ao {@code /rpg roll}, para o parser ver so dados e sinais. */
-    static String compact(String raw) {
+    public static String compact(String raw) {
         return raw == null ? "" : raw.replace(" ", "");
     }
 
@@ -102,6 +106,28 @@ public final class InitiativeRoller {
         DiceFormula.Outcome outcome = DiceFormula.parse(compact(formula))
                 .evaluate(sides -> RANDOM.nextInt(sides) + 1);
         return new Roll(outcome.total(), MasterCommands.formulaMessage(name, outcome));
+    }
+
+    /** Troca os nomes de atributo pelos valores da ficha do mob. */
+    private static String resolveMob(String formula, ThreatSheet ficha, SheetModel model)
+            throws DiceFormula.SyntaxException {
+        try {
+            return FormulaResolver.resolve(formula, id -> mobValue(ficha, id), model);
+        } catch (FormulaResolver.ResolveException e) {
+            throw new DiceFormula.SyntaxException(e.getMessage(), e.getKey(), e.getArgs());
+        }
+    }
+
+    private static Integer mobValue(ThreatSheet ficha, String attributeId) {
+        if (ficha == null) {
+            return null;
+        }
+        for (ThreatSheet.AttributeValue attribute : ficha.attributes()) {
+            if (attribute.id().equals(attributeId)) {
+                return attribute.value();
+            }
+        }
+        return null;
     }
 
     private static String resolve(String formula, SheetData sheet, SheetModel model)

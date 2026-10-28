@@ -250,7 +250,7 @@ class FormulaResolverTest {
     void rejectsWhenNoSheet() {
         // Zero silencioso daria a jogadora o resultado errado sem pista nenhuma.
         FormulaResolver.ResolveException error = assertThrows(FormulaResolver.ResolveException.class,
-                () -> FormulaResolver.resolve("1d6+Strength", null, model));
+                () -> FormulaResolver.resolve("1d6+Strength", (com.pedro.tabletoprpg.SheetData) null, model));
         assertTrue(error.getMessage().contains("sheet"), error.getMessage());
     }
 
@@ -306,6 +306,15 @@ class FormulaResolverTest {
         assertEquals("2d6+d20+0-0", FormulaResolver.placeholderFormula("2d6+d20+Strength-Dex", model));
         assertEquals("(0+0)", FormulaResolver.placeholderFormula("(Strength+Dex)", model));
         assertEquals("1d20+5", FormulaResolver.placeholderFormula("1d20+5", model));
+    }
+
+    @Test
+    @DisplayName("nome usado como quantidade de dados (DEXd20+3) passa na validacao")
+    void attributeAsDiceCountPassesValidation() throws Exception {
+        // O atributo vira 1 (e nao 0) quando e a quantidade de dados: o DiceFormula
+        // recusa 0 dados, e a caixa de iniciativa ficava so com "Dex".
+        assertEquals("1d20+3", FormulaResolver.placeholderFormula("Dexd20+3", model));
+        DiceFormula.parse(FormulaResolver.placeholderFormula("Dexd20+3", model));
     }
 
     @Test

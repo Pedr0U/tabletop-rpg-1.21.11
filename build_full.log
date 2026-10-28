@@ -1,0 +1,44 @@
+
+> Configure project :
+Fabric Loom: 1.17.21
+
+> Task :compileJava UP-TO-DATE
+> Task :processResources UP-TO-DATE
+> Task :classes UP-TO-DATE
+
+> Task :compileClientJava
+C:\Users\Pedro\Downloads\ModTableTop\tabletop-rpg-1.21.11\src\client\java\com\pedro\tabletoprpg\client\ThreatSheetScreen.java:784: error: cannot find symbol
+                    if (!suppressNotify) {
+                         ^
+  symbol:   variable suppressNotify
+  location: class ThreatSheetScreen
+C:\Users\Pedro\Downloads\ModTableTop\tabletop-rpg-1.21.11\src\client\java\com\pedro\tabletoprpg\client\ThreatSheetScreen.java:2242: error: compact(String) is not public in InitiativeRoller; cannot be accessed from outside package
+                String compact = InitiativeRoller.compact(value);
+                                                 ^
+2 errors
+
+> Task :compileClientJava FAILED
+
+[Incubating] Problems report is available at: file:///C:/Users/Pedro/Downloads/ModTableTop/tabletop-rpg-1.21.11/build/reports/problems/problems-report.html
+
+FAILURE: Build failed with an exception.
+
+* What went wrong:
+Execution failed for task ':compileClientJava' (registered by plugin class 'org.gradle.api.plugins.JavaBasePlugin').
+> Compilation failed; see the compiler output below.
+  C:\Users\Pedro\Downloads\ModTableTop\tabletop-rpg-1.21.11\src\client\java\com\pedro\tabletoprpg\client\ThreatSheetScreen.java:784: error: cannot find symbol
+                      if (!suppressNotify) {
+                           ^
+    symbol:   variable suppressNotify
+    location: class ThreatSheetScreen
+  C:\Users\Pedro\Downloads\ModTableTop\tabletop-rpg-1.21.11\src\client\java\com\pedro\tabletoprpg\client\ThreatSheetScreen.java:2242: error: compact(String) is not public in InitiativeRoller; cannot be accessed from outside package
+                  String compact = InitiativeRoller.compact(value);
+                                                   ^
+  2 errors
+
+* Try:
+> Check your code and dependencies to fix the compilation error(s)
+> Run with --scan to get full insights from a Build Scan (powered by Develocity).
+
+BUILD FAILED in 4s
+3 actionable tasks: 1 executed, 2 up-to-date

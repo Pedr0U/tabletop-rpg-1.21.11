@@ -1,0 +1,13 @@
+Starting a Gradle Daemon, 2 busy and 1 incompatible and 1 stopped Daemons could not be reused, use --status for details
+
+> Configure project :
+Fabric Loom: 1.17.21
+
+> Task :compileJava
+Note: Some input files use or override a deprecated API.
+Note: Recompile with -Xlint:deprecation for details.
+
+[Incubating] Problems report is available at: file:///C:/Users/Pedro/Downloads/ModTableTop/tabletop-rpg-1.21.11/build/reports/problems/problems-report.html
+
+BUILD SUCCESSFUL in 15s
+1 actionable task: 1 executed

@@ -47,7 +47,11 @@ public record ThreatSheet(
         List<Ability> passives,
         List<Action> actions,
         String copyOf,
-        boolean hordeMode) {
+        boolean hordeMode,
+        String initiativeFormula) {
+
+    /** Teto da formula de iniciativa da ameaca: o mesmo do jogador. */
+    public static final int MAX_INITIATIVE_FORMULA = SheetData.MAX_INITIATIVE_FORMULA;
 
     // ------------------------------------------------------------------
     // LIMITES
@@ -397,7 +401,8 @@ public record ThreatSheet(
                     List<Action> acts = ACTIONS_STREAM.decode(buf);
                     String copy = ByteBufCodecs.stringUtf8(MAX_ID).decode(buf);
                     boolean horde = ByteBufCodecs.BOOL.decode(buf);
-                    return new ThreatSheet(sheetId, id, vit, desc, attrs, per, feats, pass, acts, copy, horde);
+                    String init = ByteBufCodecs.stringUtf8(MAX_INITIATIVE_FORMULA).decode(buf);
+                    return new ThreatSheet(sheetId, id, vit, desc, attrs, per, feats, pass, acts, copy, horde, init);
                 }
 
                 @Override
@@ -413,6 +418,7 @@ public record ThreatSheet(
                     ACTIONS_STREAM.encode(buf, value.actions());
                     ByteBufCodecs.stringUtf8(MAX_ID).encode(buf, value.copyOf());
                     ByteBufCodecs.BOOL.encode(buf, value.hordeMode());
+                    ByteBufCodecs.stringUtf8(MAX_INITIATIVE_FORMULA).encode(buf, value.initiativeFormula());
                 }
     };
 
@@ -430,7 +436,9 @@ public record ThreatSheet(
             Codec.STRING.optionalFieldOf("copy_of", "").forGetter(ThreatSheet::copyOf),
             // Opcional: ficha gravada antes do Modo Horda existir carrega com ele
             // desligado, sem erro de codec.
-            Codec.BOOL.optionalFieldOf("horde_mode", false).forGetter(ThreatSheet::hordeMode)
+            Codec.BOOL.optionalFieldOf("horde_mode", false).forGetter(ThreatSheet::hordeMode),
+            // Opcional: ficha gravada antes da iniciativa da ameaca abre com formula vazia (1d20).
+            Codec.STRING.optionalFieldOf("initiative_formula", "").forGetter(ThreatSheet::initiativeFormula)
     ).apply(i, ThreatSheet::new));
 
     // ------------------------------------------------------------------
@@ -451,6 +459,7 @@ public record ThreatSheet(
                 : identity;
         vitals = vitals == null ? new Vitals(0, 0, 0) : vitals;
         description = text(description, MAX_DESCRIPTION);
+        initiativeFormula = text(initiativeFormula, MAX_INITIATIVE_FORMULA);
         attributes = cap(attributes, MAX_ATTRIBUTES);
         pericias = cap(pericias, MAX_PERICIAS);
         features = capText(features, MAX_FEATURES, MAX_FEATURE);
@@ -488,7 +497,8 @@ public record ThreatSheet(
                 List.of(),
                 List.of(),
                 "",
-                false);
+                false,
+                "");
     }
 
     /**
@@ -567,7 +577,7 @@ public record ThreatSheet(
             return this;
         }
         return new ThreatSheet(newId, identity, vitals, description, attributes, pericias,
-                features, passives, actions, copyOf, hordeMode);
+                features, passives, actions, copyOf, hordeMode, initiativeFormula);
     }
 
     /**
@@ -586,7 +596,7 @@ public record ThreatSheet(
             return this;
         }
         return new ThreatSheet(id, identity, vitals, description, attributes, pericias,
-                features, passives, actions, clean, hordeMode);
+                features, passives, actions, clean, hordeMode, initiativeFormula);
     }
 
     /**
@@ -603,7 +613,7 @@ public record ThreatSheet(
                         identity.showDisplayName(), identity.type(), identity.size(),
                         identity.speed()),
                 vitals, description, attributes, pericias, features, passives, actions, copyOf,
-                hordeMode);
+                hordeMode, initiativeFormula);
     }
 
     /**
@@ -619,7 +629,20 @@ public record ThreatSheet(
             return this;
         }
         return new ThreatSheet(id, identity, vitals, description, attributes, pericias,
-                features, passives, actions, copyOf, horde);
+                features, passives, actions, copyOf, horde, initiativeFormula);
+    }
+
+    /**
+     * Devolve esta ficha com a formula de iniciativa trocada, mantendo o resto.
+     * Vazia rola 1d20 (quando a caixa "usar iniciativa padrao" do modelo esta marcada).
+     */
+    public ThreatSheet withInitiativeFormula(String formula) {
+        String clean = text(formula, MAX_INITIATIVE_FORMULA);
+        if (clean.equals(initiativeFormula)) {
+            return this;
+        }
+        return new ThreatSheet(id, identity, vitals, description, attributes, pericias,
+                features, passives, actions, copyOf, hordeMode, clean);
     }
 
     /**
@@ -673,7 +696,7 @@ public record ThreatSheet(
             return this;
         }
         return new ThreatSheet(id, identity, vitals, description, aligned, kept,
-                features, passives, actions, copyOf, hordeMode);
+                features, passives, actions, copyOf, hordeMode, initiativeFormula);
     }
 
     private static String text(String value, int max) {
