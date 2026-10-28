@@ -17,7 +17,7 @@ import java.util.Map;
  *
  * <p><b>Modo Horda (22/10/2026):</b> {@code hordeMode} entra no rascunho como
  * qualquer outro campo do formulario: a caixa desmarcada depois de marcada tem que
- * voltar ao estado anterior com o Reverter, e o rascunho de uma sessão fechada sem
+ * voltar ao estado anterior com o Reverter, e o rascunho de uma sessao fechada sem
  * salvar tem que lembrar do Modo Horda ligado.
  */
 public record ThreatSheetDraft(
@@ -28,7 +28,8 @@ public record ThreatSheetDraft(
         List<ThreatSheet.PericiaValue> pericias,
         boolean showDisplayName,
         boolean hordeMode,
-        int hp) {
+        int hp,
+        String initiativeFormula) {
 
     /** Copia defensiva: o snapshot nunca aponta para as listas vivas do editor. */
     public ThreatSheetDraft {
@@ -37,5 +38,14 @@ public record ThreatSheetDraft(
         passives = passives == null ? List.of() : List.copyOf(passives);
         actions = actions == null ? List.of() : List.copyOf(actions);
         pericias = pericias == null ? List.of() : List.copyOf(pericias);
+        initiativeFormula = initiativeFormula == null ? "" : initiativeFormula;
+    }
+
+    /** Compatibilidade com rascunhos antigos. */
+    public ThreatSheetDraft(Map<String, String> values, List<String> features,
+                            List<ThreatSheet.Ability> passives, List<ThreatSheet.Action> actions,
+                            List<ThreatSheet.PericiaValue> pericias, boolean showDisplayName,
+                            boolean hordeMode, int hp) {
+        this(values, features, passives, actions, pericias, showDisplayName, hordeMode, hp, "");
     }
 }
