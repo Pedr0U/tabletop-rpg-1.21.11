@@ -16,7 +16,10 @@ import java.util.List;
 public final class InitiativeClientState {
 
     private static boolean collecting = false;
+    /** Rodada atual enviada pelo servidor (04/11/2026). */
+    private static int round = 1;
     private static List<InitiativeSync.Entry> entries = List.of();
+    private static List<InitiativeSync.Candidate> candidates = List.of();
     private static boolean showPanel = false;
 
     private InitiativeClientState() {
@@ -30,12 +33,16 @@ public final class InitiativeClientState {
 
     private static void apply(InitiativeSync.Payload payload) {
         collecting = payload.collecting();
+        round = payload.round();
         entries = List.copyOf(payload.entries());
+        candidates = List.copyOf(payload.candidates());
     }
 
     private static void reset() {
         collecting = false;
+        round = 1;
         entries = List.of();
+        candidates = List.of();
         showPanel = false;
     }
 
@@ -43,8 +50,17 @@ public final class InitiativeClientState {
         return collecting;
     }
 
+    /** Rodada atual; vale quando a coleta esta aberta (04/11/2026). */
+    public static int round() {
+        return round;
+    }
+
     public static List<InitiativeSync.Entry> entries() {
         return entries;
+    }
+
+    public static List<InitiativeSync.Candidate> candidates() {
+        return candidates;
     }
 
     public static boolean isShowPanel() {
@@ -53,5 +69,10 @@ public final class InitiativeClientState {
 
     public static void toggleShowPanel() {
         showPanel = !showPanel;
+    }
+
+    /** Ligado/desligado direto: o X da janela de HUD usa o mesmo interruptor da tela. */
+    public static void setShowPanel(boolean visible) {
+        showPanel = visible;
     }
 }

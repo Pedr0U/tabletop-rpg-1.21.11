@@ -1,6 +1,7 @@
 package com.pedro.tabletoprpg.client;
 
 import com.mojang.blaze3d.platform.InputConstants;
+import com.pedro.tabletoprpg.InitiativeSync;
 import com.pedro.tabletoprpg.RpgNetworking;
 import com.pedro.tabletoprpg.SheetModel;
 import com.pedro.tabletoprpg.SheetModelHolder;
@@ -10,6 +11,7 @@ import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
+import net.fabricmc.fabric.api.client.rendering.v1.hud.HudElementRegistry;
 import net.minecraft.client.Camera;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
@@ -408,6 +410,12 @@ public class TabletopRpgClient implements ClientModInitializer {
         }
 
         registerNetworking();
+
+        // Janela de iniciativa na HUD (03/11/2026). Fica depois dos elementos
+        // vanilla e so desenha quando o interruptor "Mostrar iniciativas" esta
+        // ligado; arrastar/redimensionar/fechar acontecem na InitiativeHudScreen.
+        HudElementRegistry.addLast(Identifier.fromNamespaceAndPath("tabletop-rpg", "initiative_hud"),
+                (graphics, delta) -> InitiativeHud.render(graphics));
         registerConnectionCleanup();
         // Sem esta chamada nao existe passe de desenho: o estado das trancas chega
         // no cliente e ninguem le, entao a aura nunca aparece.
@@ -470,7 +478,16 @@ public class TabletopRpgClient implements ClientModInitializer {
                 LOGGER.info("[TabletopRPG] MenuDataPayload recebido -> abrindo RpgMenuScreen.");
                 // O menu sabe se quem abriu e o Mestre: e uma das fontes da
                 // flag local (a outra e o retrato das trancas, no JOIN).
+                // A flag e sempre atualizada, mas a tela aberta so e trocada se
+                // for o proprio menu (ou se nao houver tela): o servidor manda
+                // este payload tambem quando o cargo muda, e trocar a tela
+                // debaixo do jogador atrapalhava quem estava na iniciativa
+                // (03/11/2026).
                 isMaster = payload.isMaster();
+                if (context.client().screen != null
+                        && !(context.client().screen instanceof RpgMenuScreen)) {
+                    return;
+                }
                 RpgMenuScreen screen = new RpgMenuScreen(
                     payload.isMaster(),
                     payload.isMyTurn(),
@@ -493,6 +510,30 @@ public class TabletopRpgClient implements ClientModInitializer {
                         return;
                     }
                     context.client().setScreen(new SheetEditorScreen());
+                }));
+
+        // Pedido do servidor para abrir a tela de atrasar turno (Parte 4,
+        // 03/11/2026). O servidor so manda depois de validar modo, coleta e turno.
+        ClientPlayNetworking.registerGlobalReceiver(InitiativeSync.OpenDelayPayload.TYPE,
+                (payload, context) -> context.client().execute(() -> {
+                    if (context.client().player == null) {
+                        return;
+                    }
+                    context.client().setScreen(new InitiativeDelayScreen(
+                            context.client().screen));
+                }));
+
+        // Pedido do servidor para abrir o menu de dar turno (04/11/2026). Chega
+        // pelo botao "Dar turno" da tela de iniciativa e pelo "Nao" da confirmacao
+        // de proximo turno no chat; nos dois casos a tela anterior vira o pai, para
+        // o Voltar devolver o jogador aonde ele estava.
+        ClientPlayNetworking.registerGlobalReceiver(InitiativeSync.OpenTurnPickerPayload.TYPE,
+                (payload, context) -> context.client().execute(() -> {
+                    if (context.client().player == null) {
+                        return;
+                    }
+                    context.client().setScreen(new InitiativeTurnPickerScreen(
+                            context.client().screen));
                 }));
 
         // Resposta do `/rpg preset create` quando o comando entrega o item fora da tela

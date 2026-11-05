@@ -3,6 +3,8 @@ package com.pedro.tabletoprpg;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -100,5 +102,52 @@ class InitiativeTrackerTest {
 
         assertEquals("X", tracker.entries().get(0).name());
         assertEquals("Y", tracker.entries().get(1).name());
+    }
+
+    @Test
+    @DisplayName("move sobe e desce uma entrada preservando as demais")
+    void moveReorders() {
+        InitiativeTracker tracker = new InitiativeTracker();
+        tracker.start();
+        tracker.add("Ana", false, 9);
+        tracker.add("Bruno", false, 18);
+        tracker.add("Goblin", true, 12);
+
+        assertTrue(tracker.move(2, 0));
+        assertEquals(List.of("Ana", "Bruno", "Goblin"),
+                tracker.entries().stream().map(InitiativeTracker.Entry::name).toList());
+
+        assertTrue(tracker.move(0, 2));
+        assertEquals(List.of("Bruno", "Goblin", "Ana"),
+                tracker.entries().stream().map(InitiativeTracker.Entry::name).toList());
+    }
+
+    @Test
+    @DisplayName("move recusa posicao fora da lista ou lista vazia")
+    void moveRejectsOutOfRange() {
+        InitiativeTracker tracker = new InitiativeTracker();
+        assertTrue(!tracker.move(0, 0));
+
+        tracker.start();
+        tracker.add("Ana", false, 9);
+
+        assertTrue(!tracker.move(0, 1));
+        assertTrue(!tracker.move(-1, 0));
+        assertTrue(tracker.move(0, 0));
+    }
+
+    @Test
+    @DisplayName("entrada nova depois de uma reordenacao entra na posicao do valor")
+    void addAfterMoveKeepsValueOrder() {
+        InitiativeTracker tracker = new InitiativeTracker();
+        tracker.start();
+        tracker.add("Ana", false, 9);
+        tracker.add("Bruno", false, 18);
+        tracker.move(1, 0);
+
+        tracker.add("Goblin", true, 12);
+
+        assertEquals(List.of("Goblin", "Ana", "Bruno"),
+                tracker.entries().stream().map(InitiativeTracker.Entry::name).toList());
     }
 }

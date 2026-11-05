@@ -578,15 +578,20 @@ public abstract class CharacterSheetScreen extends Screen {
     }
 
     /**
-     * Quando a caixa da formula de iniciativa perde o foco com um texto nao
-     * reconhecido, avisa no chat e volta ao valor gravado. Quem digita nao ve nada
-     * enquanto digita (so reconhecida vai ao servidor), entao o aviso sai na saida.
+     * Quando a caixa da formula de iniciativa perde o foco com um texto que o
+     * parser nao reconhece, avisa no chat e volta ao valor gravado (04/11/2026).
+     * Quem digita nao ve nada enquanto digita (so formula reconhecida vai ao
+     * servidor), entao o aviso sai na saida.
+     *
+     * <p>A regra aqui e a mesma do servidor: {@link InitiativeRoller#isValidPlainFormula},
+     * ou seja, so dados e numeros. Se divergir, o cliente mandaria algo que o
+     * servidor descarta e o jogador nao saberia por que a ficha nao mudou.
      */
     private void checkInitiativeFormulaOnBlur() {
         EditBox box = fieldBoxes.get("initiative");
         boolean focused = box != null && box.isFocused();
         if (initiativeWasFocused && !focused && box != null && canEdit && sheet != null
-                && !InitiativeRoller.isValidFormula(box.getValue(), SheetModelHolder.current())) {
+                && !InitiativeRoller.isValidPlainFormula(box.getValue())) {
             if (this.minecraft != null && this.minecraft.player != null) {
                 this.minecraft.player.displayClientMessage(Component.translatable(
                         "screen.tabletoprpg.initiative.formula_invalid").withStyle(ChatFormatting.RED), false);
@@ -917,6 +922,8 @@ public abstract class CharacterSheetScreen extends Screen {
                     && (ceiling == NO_CEILING || withinCeiling(s, ceiling)));
             box.setMaxLength(10);
         } else if ("initiative".equals(field)) {
+            // Formula propria da ficha (04/11/2026): o teto e o da formula e o
+            // formato e validado ao sair da caixa (checkInitiativeFormulaOnBlur).
             box.setMaxLength(SheetData.MAX_INITIATIVE_FORMULA);
         } else {
             box.setMaxLength(SheetData.MAX_NAME);
@@ -924,7 +931,7 @@ public abstract class CharacterSheetScreen extends Screen {
         box.setTextColor(COL_BOX_TEXT);
         box.setTextColorUneditable(COL_BOX_TEXT_OFF);
         String hintKey = "initiative".equals(field)
-                ? "screen.tabletoprpg.initiative.formula_hint"
+                ? "screen.tabletoprpg.initiative.sheet_formula_hint"
                 : "screen.tabletoprpg.character_sheet.click_to_edit";
         box.setHint(Component.translatable(hintKey));
         applyEditable(box);
@@ -939,9 +946,9 @@ public abstract class CharacterSheetScreen extends Screen {
             if (numeric && !isCompleteNumber(value)) {
                 return;
             }
-            // Mesma ideia para a formula da iniciativa: so envia quando e reconhecida.
-            // Um texto parcial ("1d2") seria recusado e o eco apagaria a digitacao.
-            if ("initiative".equals(field) && !InitiativeRoller.isValidFormula(value, SheetModelHolder.current())) {
+            // Mesma ideia para a formula da iniciativa: so envia quando o parser
+            // reconhece. Um texto parcial ("1d2") seria recusado pelo servidor.
+            if ("initiative".equals(field) && !InitiativeRoller.isValidPlainFormula(value)) {
                 return;
             }
             ClientPlayNetworking.send(new RpgNetworking.SheetFieldPayload(

@@ -144,7 +144,7 @@ public class RpgMenuScreen extends Screen {
         Button initiativeButton = Button.builder(Component.translatable("screen.tabletoprpg.rpg_menu.initiative"),
                         b -> {
                             if (this.minecraft != null) {
-                                this.minecraft.setScreen(new InitiativeScreen(this, isMaster, initiativeAllowed()));
+                                this.minecraft.setScreen(new InitiativeScreen(this, initiativeAllowed()));
                             }
                         })
                 .bounds(x, y, buttonWidth, BUTTON_HEIGHT)

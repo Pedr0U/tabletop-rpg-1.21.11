@@ -83,8 +83,28 @@ public record SheetModel(
         int attributeValueMax,
         int periciaValueMax,
         boolean initiativeUseDefault,
-        String initiativePericiaId
+        String initiativePericiaId,
+        /**
+         * Formula padrao da mesa (04/11/2026), so com dados e numeros
+         * (ex.: "1d20", "2d6+3"). O bonus de cada personagem/mob vive na ficha
+         * dele e e somado a esta formula. Vazia ou invalida cai em
+         * {@link #DEFAULT_INITIATIVE_FORMULA}.
+         */
+        String initiativeFormula,
+        /**
+         * {@code true} libera o jogador a <b>trocar</b> a formula padrao na hora de
+         * rolar ({@code /rpg initiative roll 2d6}). Adicoes com sinal
+         * ({@code /rpg initiative roll +2d6}) continuam liberadas mesmo com o
+         * interruptor desligado, e o Mestre nunca e afetado (04/11/2026).
+         * Padrao {@code false}: o Mestre liga quando quiser.
+         */
+        boolean initiativePlayerFormulaRoll
     ) {
+
+    /** Teto da formula padrao, o mesmo do campo por personagem. */
+    public static final int MAX_INITIATIVE_FORMULA = 40;
+    /** Formula usada quando o Mestre nao configurou outra. */
+    public static final String DEFAULT_INITIATIVE_FORMULA = "1d20";
 
     /**
      * Os tres estados que o pedido do Mestre permite para XP: numero (com as
@@ -299,7 +319,9 @@ public record SheetModel(
                 DEFAULT_ATTRIBUTE_VALUE_MAX,
                 DEFAULT_PERICIA_VALUE_MAX,
                 true,
-                ""
+                "",
+                DEFAULT_INITIATIVE_FORMULA,
+                false
         );
     }
 
@@ -362,6 +384,20 @@ public record SheetModel(
         // Se a pericia foi removida (ou o id veio de um payload forjado), a marca
         // cai para "nenhuma" em vez de apontar para uma linha que nao existe.
         initiativePericiaId = hasPericiaId(pericias, initiativePericiaId) ? initiativePericiaId : "";
+        // 04/11/2026: formula padrao da mesa. Vazia ou nao reconhecida cai em
+        // 1d20, para o servidor nunca rolar uma formula que o parser nao entende.
+        initiativeFormula = sanitizeInitiativeFormula(initiativeFormula);
+    }
+
+    /** Formula da mesa normalizada: sem espacos, no teto e nunca vazia/invalida. */
+    private static String sanitizeInitiativeFormula(String raw) {
+        String formula = raw == null ? "" : raw.replace(" ", "");
+        if (formula.length() > MAX_INITIATIVE_FORMULA) {
+            formula = formula.substring(0, MAX_INITIATIVE_FORMULA);
+        }
+        return formula.isEmpty() || !InitiativeRoller.isValidPlainFormula(formula)
+                ? DEFAULT_INITIATIVE_FORMULA
+                : formula;
     }
 
     /**
@@ -401,7 +437,7 @@ public record SheetModel(
     ) {
         this(nameLabel, raceLabel, raceEnabled, classLabel, backgroundLabel, hpLabel, manaLabel,
                 manaEnabled, levelLabel, xpLabel, "CA", xp, attributes, pericias, attributeValueMin,
-                attributeValueMax, periciaValueMax, true, "");
+                attributeValueMax, periciaValueMax, true, "", DEFAULT_INITIATIVE_FORMULA, false);
     }
 
     /**
@@ -437,7 +473,8 @@ public record SheetModel(
         return new SheetModel(nameLabel, raceLabel, raceEnabled, classLabel, backgroundLabel, hpLabel,
                 manaLabel, manaEnabled, levelLabel, xpLabel, caLabel, xp, attributes, pericias,
                 attributeValueMin, attributeValueMax, periciaValueMax,
-                initiativeUseDefault, initiativePericiaId);
+                initiativeUseDefault, initiativePericiaId, initiativeFormula,
+                initiativePlayerFormulaRoll);
     }
 
     private static List<AttributeDef> sanitizeAttributes(List<AttributeDef> raw) {
@@ -676,7 +713,8 @@ public record SheetModel(
                     backgroundLabel, hpLabel, manaLabel, manaEnabled, levelLabel, xpLabel,
                     value.isEmpty() ? caLabel : value, xp, attributes, pericias,
                     attributeValueMin, attributeValueMax, periciaValueMax,
-                    initiativeUseDefault, initiativePericiaId);
+                    initiativeUseDefault, initiativePericiaId, initiativeFormula,
+                    initiativePlayerFormulaRoll);
             default -> this;
         };
     }
@@ -727,14 +765,15 @@ public record SheetModel(
     /**
      * Copia com a caixa "Usar iniciativa padrao?" trocada (22/10/2026).
      *
-     * <p>Marcada, cada personagem tem campo proprio de iniciativa na ficha.
+     * <p>Marcada, cada personagem tem o proprio <b>bonus</b> de iniciativa na ficha,
+     * somado a {@link #initiativeFormula} (04/11/2026).
      * Desmarcada, cada personagem usa a pericia marcada ({@link #initiativePericiaId}).
      */
     public SheetModel withInitiativeUseDefault(boolean useDefault) {
         return new SheetModel(nameLabel, raceLabel, raceEnabled, classLabel, backgroundLabel, hpLabel,
                 manaLabel, manaEnabled, levelLabel, xpLabel, caLabel, xp, attributes, pericias,
                 attributeValueMin, attributeValueMax, periciaValueMax,
-                useDefault, initiativePericiaId);
+                useDefault, initiativePericiaId, initiativeFormula, initiativePlayerFormulaRoll);
     }
 
     /**
@@ -747,7 +786,35 @@ public record SheetModel(
         return new SheetModel(nameLabel, raceLabel, raceEnabled, classLabel, backgroundLabel, hpLabel,
                 manaLabel, manaEnabled, levelLabel, xpLabel, caLabel, xp, attributes, pericias,
                 attributeValueMin, attributeValueMax, periciaValueMax,
-                initiativeUseDefault, id == null ? "" : id);
+                initiativeUseDefault, id == null ? "" : id, initiativeFormula,
+                initiativePlayerFormulaRoll);
+    }
+
+    /**
+     * Copia com a formula padrao da mesa trocada (04/11/2026).
+     *
+     * <p>So dados e numeros: quem digita um nome de atributo/pericia tem a
+     * formula recusada pelo construtor compacto, que cai em
+     * {@link #DEFAULT_INITIATIVE_FORMULA}. A validacao tambem existe no servidor,
+     * para um cliente forjado nao gravar formula quebrada no mundo.
+     */
+    public SheetModel withInitiativeFormula(String formula) {
+        return new SheetModel(nameLabel, raceLabel, raceEnabled, classLabel, backgroundLabel, hpLabel,
+                manaLabel, manaEnabled, levelLabel, xpLabel, caLabel, xp, attributes, pericias,
+                attributeValueMin, attributeValueMax, periciaValueMax,
+                initiativeUseDefault, initiativePericiaId, formula, initiativePlayerFormulaRoll);
+    }
+
+    /**
+     * Copia com a liberacao da formula propria na rolagem dos jogadores trocada
+     * (04/11/2026): ligada, o jogador pode trocar a formula padrao em
+     * {@code /rpg initiative roll 2d6}; desligada, so o Mestre troca.
+     */
+    public SheetModel withInitiativePlayerFormulaRoll(boolean allowed) {
+        return new SheetModel(nameLabel, raceLabel, raceEnabled, classLabel, backgroundLabel, hpLabel,
+                manaLabel, manaEnabled, levelLabel, xpLabel, caLabel, xp, attributes, pericias,
+                attributeValueMin, attributeValueMax, periciaValueMax,
+                initiativeUseDefault, initiativePericiaId, initiativeFormula, allowed);
     }
 
     /** Copia com outro rotulo/nome para um atributo. */
@@ -1214,6 +1281,13 @@ public record SheetModel(
                             // Save antigo nao tem as chaves: o padrao e marcada e nenhuma.
                             .add("initiativeUseDefault", model.initiativeUseDefault(), Codec.BOOL)
                             .add("initiativePericiaId", model.initiativePericiaId(), Codec.STRING)
+                            // 04/11/2026: formula padrao da mesa. Save antigo nao
+                            // tem a chave: o padrao e 1d20.
+                            .add("initiativeFormula", model.initiativeFormula(), Codec.STRING)
+                            // 04/11/2026: jogador pode TROCAR a formula no comando?
+                            // Padrao false (so o Mestre troca); adicoes com sinal
+                            // continuam liberadas sempre.
+                            .add("initiativePlayerFormulaRoll", model.initiativePlayerFormulaRoll(), Codec.BOOL)
                             .build(prefix);
                 }
             },
@@ -1239,7 +1313,9 @@ public record SheetModel(
                             read(ops, map, "attributeValueMax", Codec.INT, DEFAULT_ATTRIBUTE_VALUE_MAX),
                             read(ops, map, "periciaValueMax", Codec.INT, DEFAULT_PERICIA_VALUE_MAX),
                             read(ops, map, "initiativeUseDefault", Codec.BOOL, true),
-                            read(ops, map, "initiativePericiaId", Codec.STRING, "")
+                            read(ops, map, "initiativePericiaId", Codec.STRING, ""),
+                            read(ops, map, "initiativeFormula", Codec.STRING, DEFAULT_INITIATIVE_FORMULA),
+                            read(ops, map, "initiativePlayerFormulaRoll", Codec.BOOL, false)
                     )).map(decoded -> Pair.of(decoded, input));
                 }
             }
@@ -1337,6 +1413,10 @@ public record SheetModel(
         // ultimo, na mesma ordem do DECODER abaixo.
         ByteBufCodecs.BOOL.encode(buf, model.initiativeUseDefault());
         ByteBufCodecs.stringUtf8(32).encode(buf, model.initiativePericiaId());
+        // 04/11/2026: formula padrao da mesa e a liberacao da formula propria pelos
+        // jogadores, por ultimo (mesma ordem do DECODER).
+        ByteBufCodecs.stringUtf8(MAX_INITIATIVE_FORMULA).encode(buf, model.initiativeFormula());
+        ByteBufCodecs.BOOL.encode(buf, model.initiativePlayerFormulaRoll());
     };
 
     private static final StreamDecoder<FriendlyByteBuf, SheetModel> DECODER = buf -> new SheetModel(
@@ -1360,7 +1440,9 @@ public record SheetModel(
             ByteBufCodecs.VAR_INT.decode(buf),
             ByteBufCodecs.VAR_INT.decode(buf),
             ByteBufCodecs.BOOL.decode(buf),
-            ByteBufCodecs.stringUtf8(32).decode(buf)
+            ByteBufCodecs.stringUtf8(32).decode(buf),
+            ByteBufCodecs.stringUtf8(MAX_INITIATIVE_FORMULA).decode(buf),
+            ByteBufCodecs.BOOL.decode(buf)
     );
 
     public static final StreamCodec<FriendlyByteBuf, SheetModel> STREAM_CODEC =

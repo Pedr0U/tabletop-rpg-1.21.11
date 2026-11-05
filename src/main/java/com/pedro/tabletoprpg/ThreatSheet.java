@@ -437,7 +437,9 @@ public record ThreatSheet(
             // Opcional: ficha gravada antes do Modo Horda existir carrega com ele
             // desligado, sem erro de codec.
             Codec.BOOL.optionalFieldOf("horde_mode", false).forGetter(ThreatSheet::hordeMode),
-            // Opcional: ficha gravada antes da iniciativa da ameaca abre com formula vazia (1d20).
+            // Opcional: ficha gravada antes da iniciativa da ameaca existir abre com
+            // formula vazia, que nao muda a rolagem (so a formula da mesa). A chave
+            // numerica "initiative_bonus" nao e lida.
             Codec.STRING.optionalFieldOf("initiative_formula", "").forGetter(ThreatSheet::initiativeFormula)
     ).apply(i, ThreatSheet::new));
 
@@ -634,7 +636,8 @@ public record ThreatSheet(
 
     /**
      * Devolve esta ficha com a formula de iniciativa trocada, mantendo o resto.
-     * Vazia rola 1d20 (quando a caixa "usar iniciativa padrao" do modelo esta marcada).
+     * Somada a formula padrao da mesa quando a caixa "usar iniciativa padrao"
+     * esta marcada (04/11/2026). Vazia nao muda a rolagem.
      */
     public ThreatSheet withInitiativeFormula(String formula) {
         String clean = text(formula, MAX_INITIATIVE_FORMULA);

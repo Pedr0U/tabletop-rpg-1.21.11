@@ -140,8 +140,9 @@ public record SheetData(
     public static final int MAX_XP = 999_999;
 
     /**
-     * Teto da formula de iniciativa do personagem (ex.: "2d20+3"). Igual ao teto
-     * da caixa no Sheet Editor e na tela da ficha.
+     * Teto da formula de iniciativa do personagem (04/11/2026). O campo da ficha
+     * guarda uma formula curta (ex.: "2d6+1"), somada a formula padrao da mesa
+     * ({@link SheetModel#initiativeFormula()}).
      */
     public static final int MAX_INITIATIVE_FORMULA = 40;
 
@@ -301,9 +302,10 @@ public record SheetData(
             // ficha salva ANTES do CA existir continua abrindo -- e abre com CA 0,
             // que e o mesmo que uma ficha recem-criada.
             Codec.INT.optionalFieldOf("ca", 0).forGetter(Progress::ca),
-            // Iniciativa do personagem: a formula que ele digita (ex.: "2d20+3").
-            // Chave NOVA ("initiativeFormula"): a antiga "initiative", numerica,
-            // continua no save sem ser lida, e a ficha abre com formula vazia (1d20).
+            // Iniciativa do personagem: formula propria somada a formula padrao da
+            // mesa (04/11/2026). Ficha salva antes disso abre com formula vazia,
+            // que nao muda a rolagem (so a formula da mesa). A chave numerica
+            // "initiative" de versoes anteriores nunca foi lida aqui.
             Codec.STRING.optionalFieldOf("initiativeFormula", "").forGetter(Progress::initiativeFormula),
             Codec.BOOL.optionalFieldOf("useDefaultInitiative", true)
                     .forGetter(Progress::useDefaultInitiative)
@@ -734,10 +736,10 @@ public record SheetData(
      * nao um modificador (modificadores vivem nos atributos, que vao a -30).
      *
      * <p><b>Iniciativa do personagem:</b> o {@code initiativeFormula} e a formula
-     * que o proprio jogador digita (ex.: "2d20+3"), usada quando a caixa "usar
-     * iniciativa padrao" do modelo esta marcada. Vazia rola 1d20. O
-     * {@code useDefaultInitiative} continua no save por compatibilidade, mas nao
-     * decide mais o que a ficha mostra.
+     * propria (dados e numeros, ex.: "2d6+1") somada a formula padrao da mesa
+     * quando a caixa "usar iniciativa padrao" do modelo esta marcada (04/11/2026).
+     * Vazia nao muda a rolagem. O {@code useDefaultInitiative} continua no save
+     * por compatibilidade, mas nao decide mais o que a ficha mostra.
      */
     public record Progress(int level, int xp, String xpText, int ca, String initiativeFormula,
                            boolean useDefaultInitiative) {
@@ -2074,14 +2076,15 @@ public record SheetData(
                             parseInt(value, progress.ca()), progress.initiativeFormula(),
                             progress.useDefaultInitiative()),
                     attributes, skills, pericias, attributeValueMin, attributeValueMax, periciaValueMax, inventory, spellbook);
-            // Iniciativa do personagem: a formula que ele digita (ex.: "2d20+3").
-            // Formula nao reconhecida nao e gravada (devolve a propria ficha, e o
-            // servidor nao manda eco). A flag por personagem ("usedefaultinitiative")
-            // continua aceita aqui, mas nao muda a ficha.
-            case "initiative" -> InitiativeRoller.isValidFormula(rawValue, SheetModelHolder.current())
+            // Iniciativa do personagem: formula propria (dados e numeros, ex.:
+            // "2d6+1") somada a formula padrao da mesa (04/11/2026). Formula nao
+            // reconhecida nao e gravada (devolve a propria ficha, e o servidor nao
+            // manda eco). A flag por personagem ("usedefaultinitiative") continua
+            // aceita aqui, mas nao muda a ficha.
+            case "initiative" -> InitiativeRoller.isValidPlainFormula(value)
                     ? new SheetData(identity, vitals,
                             new Progress(progress.level(), progress.xp(), progress.xpText(), progress.ca(),
-                                    rawValue.trim(), progress.useDefaultInitiative()),
+                                    InitiativeRoller.compact(value), progress.useDefaultInitiative()),
                             attributes, skills, pericias, attributeValueMin, attributeValueMax, periciaValueMax, inventory, spellbook)
                     : this;
             case "usedefaultinitiative" -> new SheetData(identity, vitals,
@@ -2427,8 +2430,9 @@ public record SheetData(
             // linha, a caixa de texto da tela de Status cairia no `default` e o
             // Mestre nao veria o que digitou.
             case "xptext" -> progress.xpText();
-            // Iniciativa do personagem, como texto (a formula). Com a caixa desmarcada
-            // a tela mostra a pericia no lugar; ver StatusScreen.applyExtraState.
+            // Iniciativa do personagem, como texto: a formula propria (04/11/2026).
+            // Com a caixa desmarcada a tela mostra a pericia no lugar; ver
+            // StatusScreen.applyExtraState.
             case "initiative" -> progress.initiativeFormula();
             // 30/09/2026 (FASE 2B): o limite de peso e lido como texto (e nao
             // por getNumeric, que devolve int) justamente porque tem 2 casas
@@ -2476,8 +2480,8 @@ public record SheetData(
     /**
      * Valor numerico da iniciativa mostrado na ficha, so com a caixa do modelo
      * DESMARCADA: o valor da pericia marcada como iniciativa, ou 0 sem pericia.
-     * Com a caixa marcada a ficha mostra a formula do proprio personagem (ver
-     * {@link #getText}), que nao e um numero.
+     * Com a caixa marcada a ficha mostra a formula propria (ver {@link #getText}),
+     * que nao e um numero.
      */
     private int initiativeShown() {
         SheetModel model = SheetModelHolder.current();

@@ -769,8 +769,7 @@ public class ThreatSheetScreen extends Screen {
         }
         y += CHECKBOX_H + GAP;
 
-        // 2c) Iniciativa: mesma logica do jogador (formula propria quando "usar
-        // iniciativa padrao" marcada no modelo).
+        // 2c) Iniciativa: formula propria somada a formula padrao da mesa (04/11/2026).
         if (inColumn(y, LABEL_H + FIELD_H)) {
             labels.add(new Label(Component.translatable("screen.tabletoprpg.character_sheet.field.initiative").getString(), leftX, y, COL_TEXT));
             SheetModel m = model();
@@ -779,7 +778,7 @@ public class ThreatSheetScreen extends Screen {
                         Component.translatable("screen.tabletoprpg.character_sheet.field.initiative"));
                 box.setMaxLength(ThreatSheet.MAX_INITIATIVE_FORMULA);
                 box.setValue(values.getOrDefault("initiative", ""));
-                box.setHint(Component.translatable("screen.tabletoprpg.initiative.formula_hint"));
+                box.setHint(Component.translatable("screen.tabletoprpg.initiative.sheet_formula_hint"));
                 box.setResponder(v -> {
                     pushUndo();
                     values.put("initiative", v);
@@ -2224,8 +2223,10 @@ String name = values.getOrDefault("name", "");
         }
         boolean focused = box.isFocused();
         if (threatInitiativeWasFocused && !focused) {
+            // Formula da ameaca (04/11/2026): mesma regra do servidor, so dados e
+            // numeros. Texto fora do parser volta ao valor gravado com aviso no chat.
             String value = box.getValue();
-            if (!InitiativeRoller.isValidFormula(value, m)) {
+            if (!InitiativeRoller.isValidPlainFormula(value)) {
                 if (this.minecraft != null && this.minecraft.player != null) {
                     this.minecraft.player.displayClientMessage(Component.translatable(
                             "screen.tabletoprpg.initiative.formula_invalid").withStyle(ChatFormatting.RED), false);

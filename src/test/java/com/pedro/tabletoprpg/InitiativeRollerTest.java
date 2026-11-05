@@ -10,24 +10,26 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class InitiativeRollerTest {
 
     @Test
-    @DisplayName("formula vazia rola 1d20 puro")
-    void emptyFormulaIsPlainD20() {
-        assertEquals("1d20", InitiativeRoller.formulaOrDefault(""));
-        assertEquals("1d20", InitiativeRoller.formulaOrDefault("   "));
-        assertEquals("1d20", InitiativeRoller.formulaOrDefault(null));
+    @DisplayName("formula padrao da mesa vazia volta a 1d20")
+    void emptyModelFormulaFallsBackToD20() {
+        assertEquals("1d20", SheetModel.defaults().withInitiativeFormula("").initiativeFormula());
+        assertEquals("1d20", SheetModel.defaults().withInitiativeFormula("   ").initiativeFormula());
+        assertEquals("1d20", SheetModel.defaults().withInitiativeFormula(null).initiativeFormula());
     }
 
     @Test
-    @DisplayName("formula digitada pelo mestre e a rolagem inteira, sem 1d20 extra")
-    void typedFormulaIsTheWholeRoll() {
-        assertEquals("1d20+3", InitiativeRoller.formulaOrDefault("1d20+3"));
-        assertEquals("2d6+1", InitiativeRoller.formulaOrDefault("  2d6+1  "));
+    @DisplayName("formula padrao da mesa e guardada sem espacos, como o parser le")
+    void modelFormulaIsCompacted() {
+        assertEquals("1d20+3", SheetModel.defaults().withInitiativeFormula("1d20+3").initiativeFormula());
+        assertEquals("2d6+1", SheetModel.defaults().withInitiativeFormula(" 2d6 + 1 ").initiativeFormula());
     }
 
     @Test
-    @DisplayName("formula com sinal inicial e mantida como digitada")
-    void signedFormulaIsKept() {
-        assertEquals("-2", InitiativeRoller.formulaOrDefault("-2"));
+    @DisplayName("formula padrao da mesa so aceita dados e numeros")
+    void modelFormulaRejectsNames() {
+        assertEquals("1d20", SheetModel.defaults().withInitiativeFormula("1d20+Destreza").initiativeFormula());
+        assertFalse(InitiativeRoller.isValidPlainFormula("1d20+Destreza"));
+        assertTrue(InitiativeRoller.isValidPlainFormula("2d6+3"));
     }
 
     @Test
@@ -51,5 +53,22 @@ class InitiativeRollerTest {
         assertFalse(InitiativeRoller.isValidFormula("abc", SheetModel.defaults()));
         assertFalse(InitiativeRoller.isValidFormula("1d", SheetModel.defaults()));
         assertFalse(InitiativeRoller.isValidFormula("1d20+", SheetModel.defaults()));
+    }
+
+    @Test
+    @DisplayName("formula da ficha aceita dado, numero puro e sinal inicial")
+    void sheetFormulaAcceptsDiceAndSign() {
+        // O campo da ficha virou formula propria (04/11/2026) e a dica sugere
+        // "+3"; o parser precisa aceitar o sinal inicial, senao digitar o que a
+        // dica mostra seria recusado.
+        assertTrue(InitiativeRoller.isValidPlainFormula("1d4"));
+        assertTrue(InitiativeRoller.isValidPlainFormula("2d6+1"));
+        assertTrue(InitiativeRoller.isValidPlainFormula("3"));
+        assertTrue(InitiativeRoller.isValidPlainFormula("-2"));
+        assertTrue(InitiativeRoller.isValidPlainFormula("+3"));
+        // A soma da mesa com a ficha tem que continuar valida nos dois sinais.
+        assertTrue(InitiativeRoller.isValidPlainFormula("1d20-2"));
+        assertTrue(InitiativeRoller.isValidPlainFormula("1d20+3"));
+        assertFalse(InitiativeRoller.isValidPlainFormula("++3"));
     }
 }

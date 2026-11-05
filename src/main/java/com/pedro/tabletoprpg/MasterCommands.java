@@ -33,9 +33,11 @@ import net.minecraft.world.entity.MobCategory;
 import net.minecraft.world.item.ItemStack;
 
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Random;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 
@@ -75,16 +77,29 @@ public class MasterCommands {
                     .then(Commands.literal("combat")
                         .executes(ctx -> setMode(ctx, SessionManager.GameMode.COMBAT))))
 
-                // /rpg turn <give|revoke|finish>
+                // /rpg turn <give|revoke|finish|confirm|pick>
                 .then(Commands.literal("turn")
                     .then(Commands.literal("give")
-                        // Autocompletar nativo de jogadores do Minecraft
-                        .then(Commands.argument("player", EntityArgument.player())
+                        // Nome de jogador ou de uma entrada da iniciativa (mob incluso).
+                        // Nao da para usar EntityArgument.player(): ele so conhece
+                        // jogadores, e mob tambem recebe turno (vira vez do Mestre).
+                        // As sugestoes vem da iniciativa (06/11/2026).
+                        .then(Commands.argument("target", StringArgumentType.string())
+                            .suggests(MasterCommands::suggestTurnTargets)
                             .executes(MasterCommands::giveTurn)))
                     .then(Commands.literal("revoke")
                         .executes(MasterCommands::revokeTurn))
                     .then(Commands.literal("finish")
-                        .executes(MasterCommands::finishTurn)))
+                        .executes(MasterCommands::finishTurn))
+                    // Confirmacao do proximo turno quando a iniciativa mudou
+                    // durante o turno (Parte 4, 03/11/2026).
+                    .then(Commands.literal("confirm")
+                        .executes(MasterCommands::confirmTurn))
+                    // Abre o menu de dar turno no cliente do Mestre (04/11/2026).
+                    // E o alvo do botao "Nao" da confirmacao e o mesmo menu do
+                    // botao "Dar turno" da tela de iniciativa.
+                    .then(Commands.literal("pick")
+                        .executes(MasterCommands::pickTurn)))
 
                 // /rpg initiative <start|end|roll|add|remove> -> lista de iniciativa (Fase 1)
                 .then(InitiativeCommands.node())
@@ -248,6 +263,10 @@ public class MasterCommands {
             if (SessionManager.setMaster(player)) {
                 broadcast(ctx, Component.translatable("message.tabletoprpg.master_claimed_broadcast", player.getName().getString()));
                 RpgNetworking.sendToAll(ctx.getSource().getServer());
+                // O payload de iniciativa so leva a lista de candidatos para quem ja e
+                // mestre. Virar mestre depois do ultimo envio deixava a tela de
+                // adicionar/rolar mob vazia ate o proximo comando de iniciativa.
+                InitiativeSync.sendAll(ctx.getSource().getServer());
                 BlockLockManager.sendSnapshotTo(player);
                 refreshChatMenu(ctx);
                 return 1;
@@ -276,6 +295,9 @@ public class MasterCommands {
                 }
                 broadcast(ctx, Component.translatable("message.tabletoprpg.master_released_broadcast", player.getName().getString()));
                 RpgNetworking.sendToAll(ctx.getSource().getServer());
+                // Quem deixa o cargo perde a lista de candidatos; os outros mestres
+                // recebem a lista atualizada.
+                InitiativeSync.sendAll(ctx.getSource().getServer());
                 BlockLockManager.sendSnapshotTo(player);
                 RpgNetworking.sendAuraStateToAll(ctx.getSource().getServer());
                 // O reset limpou os mobs com cǽmera: atualiza o carrossel.
@@ -299,6 +321,8 @@ public class MasterCommands {
 
         InitiativeCommands.onModeChanged(ctx.getSource().getServer(), mode);
         SessionManager.setMode(mode);
+        // Sem iniciativa ativa nao ha cursor de turno para manter.
+        TurnManager.reset();
         if (mode == SessionManager.GameMode.FREE) {
             // Fim do encontro: limpa seleção, âncoras e monstros controlados.
             CombatController.reset(ctx.getSource().getServer());
@@ -314,26 +338,86 @@ public class MasterCommands {
 
     private static int giveTurn(CommandContext<CommandSourceStack> ctx) {
         if (!verifyMasterPermission(ctx)) return 0;
-
-        try {
-            ServerPlayer target = EntityArgument.getPlayer(ctx, "player");
-            SessionManager.setActivePlayer(target);
-            // Âncora do jogador ativo: onde ele começou o turno (limite da aura).
-            CombatController.setPlayerAnchor(target);
-            broadcast(ctx, Component.translatable("message.tabletoprpg.turn_granted", target.getName().getString()));
-            target.sendSystemMessage(Component.translatable("message.tabletoprpg.turn_your_turn"));
-            RpgNetworking.sendToAll(ctx.getSource().getServer());
-            RpgNetworking.sendAuraStateToAll(ctx.getSource().getServer());
-            refreshChatMenu(ctx);
-            return 1;
-        } catch (Exception e) {
+        MinecraftServer server = ctx.getSource().getServer();
+        String name = StringArgumentType.getString(ctx, "target").trim();
+        if (name.isEmpty()) {
             ctx.getSource().sendFailure(Component.translatable("message.tabletoprpg.turn_player_not_found"));
             return 0;
         }
+        ServerPlayer target = server.getPlayerList().getPlayerByName(name);
+        if (target != null) {
+            SessionManager.setActivePlayer(target);
+            // Âncora do jogador ativo: onde ele começou o turno (limite da aura).
+            CombatController.setPlayerAnchor(target);
+            // Cursor da iniciativa: daqui sai o "proximo turno" automatico.
+            TurnManager.onTurnGiven(target);
+            broadcast(ctx, Component.translatable("message.tabletoprpg.turn_granted", name));
+            target.sendSystemMessage(Component.translatable("message.tabletoprpg.turn_your_turn"));
+            RpgNetworking.sendToAll(server);
+            RpgNetworking.sendAuraStateToAll(server);
+            refreshChatMenu(ctx);
+            // Quem recebeu a vez precisa do menu com [Encerrar Turno] e [Atrasar Turno].
+            sendMenu(target);
+            return 1;
+        }
+        // Nao e jogador online: so uma entrada de mob da iniciativa pode receber a vez
+        // (o Mestre conduz o mob). Jogador offline com entrada nao recebe turno.
+        List<InitiativeTracker.Entry> entries = InitiativeCommands.entries();
+        for (int i = 0; i < entries.size(); i++) {
+            InitiativeTracker.Entry entry = entries.get(i);
+            if (entry.mob() && entry.name().equals(name)) {
+                TurnManager.grant(server, i);
+                refreshChatMenu(ctx);
+                return 1;
+            }
+        }
+        ctx.getSource().sendFailure(Component.translatable("message.tabletoprpg.turn_player_not_found"));
+        return 0;
     }
 
-    private static int revokeTurn(CommandContext<CommandSourceStack> ctx) {
+    /**
+     * Sugestoes de {@code /rpg turn give}: jogadores online e as entradas da
+     * iniciativa (mob incluso). Mob nao existe como argumento de entidade, entao a
+     * lista de iniciativa e a fonte certa para completar o nome (06/11/2026).
+     */
+    private static CompletableFuture<Suggestions> suggestTurnTargets(CommandContext<CommandSourceStack> ctx,
+                                                                      SuggestionsBuilder builder) {
+        Set<String> names = new LinkedHashSet<>();
+        for (ServerPlayer player : ctx.getSource().getServer().getPlayerList().getPlayers()) {
+            names.add(player.getName().getString());
+        }
+        for (InitiativeTracker.Entry entry : InitiativeCommands.entries()) {
+            names.add(entry.name());
+        }
+        for (String name : names) {
+            builder.suggest(name);
+        }
+        return builder.buildFuture();
+    }
+
+    /**
+     * {@code /rpg turn pick}: abre o menu de dar turno no cliente do Mestre
+     * (04/11/2026). E o alvo do botao "Nao" da confirmacao de proximo turno e o
+     * mesmo menu do botao "Dar turno" da tela de iniciativa; a escolha volta como
+     * {@link RpgNetworking.TurnGivePayload} e o servidor resolve a posicao.
+     */
+    private static int pickTurn(CommandContext<CommandSourceStack> ctx) {
         if (!verifyMasterPermission(ctx)) return 0;
+        if (!(ctx.getSource().getEntity() instanceof ServerPlayer player)) {
+            ctx.getSource().sendFailure(Component.translatable("message.tabletoprpg.roll_players_only"));
+            return 0;
+        }
+        if (InitiativeCommands.entries().isEmpty()) {
+            ctx.getSource().sendFailure(Component.translatable("message.tabletoprpg.initiative.empty"));
+            return 0;
+        }
+        // Estado fresco antes de abrir: a lista pode ter mudado neste turno.
+        InitiativeSync.sendTo(player);
+        InitiativeSync.sendOpenTurnPicker(player);
+        return 1;
+    }
+
+    private static int revokeTurn(CommandContext<CommandSourceStack> ctx) {        if (!verifyMasterPermission(ctx)) return 0;
 
         String prevPlayer = SessionManager.getActivePlayerName();
         UUID prevUuid = SessionManager.getActivePlayerUuid();
@@ -341,6 +425,8 @@ public class MasterCommands {
         if (prevUuid != null) {
             CombatController.clearPlayerAnchor(prevUuid);
         }
+        // Turno revogado a mao: o cursor da iniciativa nao vale mais.
+        TurnManager.reset();
         broadcast(ctx, Component.translatable("message.tabletoprpg.turn_revoked", prevPlayer));
         RpgNetworking.sendToAll(ctx.getSource().getServer());
         RpgNetworking.sendAuraStateToAll(ctx.getSource().getServer());
@@ -357,14 +443,9 @@ public class MasterCommands {
                 return 0;
             }
 
-            UUID prevUuid = SessionManager.getActivePlayerUuid();
-            SessionManager.clearActivePlayer();
-            if (prevUuid != null) {
-                CombatController.clearPlayerAnchor(prevUuid);
-            }
-            broadcast(ctx, Component.translatable("message.tabletoprpg.turn_finished", player.getName().getString()));
-            RpgNetworking.sendToAll(ctx.getSource().getServer());
-            RpgNetworking.sendAuraStateToAll(ctx.getSource().getServer());
+            // Limpa o turno e decide o proximo: automatico quando a iniciativa nao
+            // mudou, confirmacao do mestre quando mudou (Parte 4, 03/11/2026).
+            TurnManager.endTurn(ctx.getSource().getServer(), player);
             refreshChatMenu(ctx);
             return 1;
         } catch (Exception e) {
@@ -372,6 +453,17 @@ public class MasterCommands {
             ctx.getSource().sendFailure(Component.translatable("message.tabletoprpg.turn_finish_failed"));
             return 0;
         }
+    }
+
+    /** {@code /rpg turn confirm}: o mestre aceita o proximo turno sugerido. */
+    private static int confirmTurn(CommandContext<CommandSourceStack> ctx) {
+        if (!verifyMasterPermission(ctx)) return 0;
+        if (!TurnManager.confirm(ctx.getSource().getServer())) {
+            ctx.getSource().sendFailure(Component.translatable("message.tabletoprpg.turn.no_pending"));
+            return 0;
+        }
+        refreshChatMenu(ctx);
+        return 1;
     }
 
     private static int setSessionName(CommandContext<CommandSourceStack> ctx) {
@@ -1958,7 +2050,30 @@ public class MasterCommands {
      */
     private static void refreshChatMenu(CommandContext<CommandSourceStack> ctx) {
         if (ctx.getSource().getEntity() instanceof ServerPlayer player) {
-            player.sendSystemMessage(buildAsciiMenu(player, SessionManager.isMaster(player)));
+            sendMenu(player);
+        }
+    }
+
+    /** Reenvia o menu ASCII para um jogador (usado tambem quando ele ganha a vez). */
+    static void sendMenu(ServerPlayer player) {
+        player.sendSystemMessage(buildAsciiMenu(player, SessionManager.isMaster(player)));
+    }
+
+    /**
+     * Reenvia o menu para quem esta com a vez, quando a lista de iniciativa muda.
+     * Sem isso o botao [Atrasar Turno] so apareceria no proximo menu enviado, e o
+     * menu antigo continua no chat (reportado pelo usuario em 03/11/2026).
+     */
+    static void refreshTurnMenu(MinecraftServer server) {
+        UUID active = SessionManager.getActivePlayerUuid();
+        if (active == null) {
+            return;
+        }
+        for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+            if (player.getUUID().equals(active)) {
+                sendMenu(player);
+                return;
+            }
         }
     }
 
@@ -1993,6 +2108,12 @@ public class MasterCommands {
             menu.append(createSuggestBtn(Component.translatable("message.tabletoprpg.menu.give_turn"), ChatFormatting.LIGHT_PURPLE, "/rpg turn give ", Component.translatable("message.tabletoprpg.menu.hover.give_turn")));
             menu.append(Component.literal(" "));
             menu.append(createBtn(Component.translatable("message.tabletoprpg.menu.revoke_turn"), ChatFormatting.DARK_RED, "/rpg turn revoke", Component.translatable("message.tabletoprpg.menu.hover.revoke_turn")));
+            // O Mestre tambem pode estar com a vez (jogo solo, vez de mob ou turno
+            // dado a ele mesmo) e a acao de atrasar e da entrada dele na iniciativa.
+            if (SessionManager.isActivePlayer(player) && InitiativeCommands.hasDelayEntry(player)) {
+                menu.append(Component.literal(" "));
+                menu.append(createBtn(Component.translatable("message.tabletoprpg.menu.delay_turn"), ChatFormatting.YELLOW, "/rpg initiative delay", Component.translatable("message.tabletoprpg.menu.hover.delay_turn")));
+            }
             menu.append(Component.literal("\n\n"));
 
             // Ações Gerais
@@ -2024,6 +2145,10 @@ public class MasterCommands {
             if (isMyTurn) {
                 menu.append(createBtn(Component.translatable("message.tabletoprpg.menu.finish_turn"), ChatFormatting.GREEN, "/rpg turn finish", Component.translatable("message.tabletoprpg.menu.hover.finish_turn")));
                 menu.append(Component.literal(" "));
+                if (InitiativeCommands.hasDelayEntry(player)) {
+                    menu.append(createBtn(Component.translatable("message.tabletoprpg.menu.delay_turn"), ChatFormatting.YELLOW, "/rpg initiative delay", Component.translatable("message.tabletoprpg.menu.hover.delay_turn")));
+                    menu.append(Component.literal(" "));
+                }
             }
             if (!SessionManager.hasMaster()) {
                 menu.append(createBtn(Component.translatable("message.tabletoprpg.menu.claim_master"), ChatFormatting.GOLD, "/rpg master claim", Component.translatable("message.tabletoprpg.menu.hover.claim_master")));

@@ -172,8 +172,147 @@ public final class RpgNetworking {
         }
     }
 
-    /** Servidor -> Cliente: dados da sessão usados para montar o menu. */
-    public record MenuDataPayload(
+    /**
+     * Cliente -> Servidor: troca da formula padrao de iniciativa da mesa
+     * (04/11/2026). Payload pequeno de proposito: nao carrega o modelo inteiro,
+     * entao a tela de configuracao nao pode sobrescrever atributos ou pericias
+     * por engano.
+     *
+     * <p>Desde 04/11/2026 tambem leva a liberacao da <b>formula propria</b> na
+     * rolagem dos jogadores ({@code /rpg initiative roll 2d6}). Os dois campos vao
+     * juntos porque sao salvos pelo mesmo botao da tela de configuracao; separar
+     * em dois pacotes deixaria a tela pela metade se um deles se perdesse.
+     */
+    public record InitiativeFormulaPayload(String formula, boolean playerFormulaRoll)
+            implements CustomPacketPayload {
+        public static final Type<InitiativeFormulaPayload> TYPE =
+                new Type<>(TabletopRpg.id("initiative_formula"));
+        public static final StreamCodec<FriendlyByteBuf, InitiativeFormulaPayload> STREAM_CODEC =
+                StreamCodec.composite(
+                        ByteBufCodecs.stringUtf8(SheetModel.MAX_INITIATIVE_FORMULA),
+                        InitiativeFormulaPayload::formula,
+                        ByteBufCodecs.BOOL,
+                        InitiativeFormulaPayload::playerFormulaRoll,
+                        InitiativeFormulaPayload::new);
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
+    /**
+     * Cliente -> Servidor: o Mestre escolheu no menu quem recebe o turno
+     * (04/11/2026).
+     *
+     * <p>Vao o nome, o tipo da entrada e a <b>posicao</b> clicada. O nome sozinho
+     * nao basta: mobs repetidos na iniciativa compartilham o mesmo nome de
+     * exibicao, e resolver pelo nome daria o turno a primeira repeticao em vez da
+     * clicada. O servidor confere a posicao (e que ela ainda aponta para essa
+     * entrada) e, se nao bater, cai na busca por nome -- quem manda no estado
+     * continua sendo o servidor.
+     */
+    public record TurnGivePayload(String name, boolean mob, int position) implements CustomPacketPayload {
+        public static final Type<TurnGivePayload> TYPE = new Type<>(TabletopRpg.id("turn_give_entry"));
+        public static final StreamCodec<FriendlyByteBuf, TurnGivePayload> STREAM_CODEC =
+                StreamCodec.composite(ByteBufCodecs.stringUtf8(InitiativeSync.MAX_NAME),
+                        TurnGivePayload::name,
+                        ByteBufCodecs.BOOL, TurnGivePayload::mob,
+                        ByteBufCodecs.VAR_INT, TurnGivePayload::position,
+                        TurnGivePayload::new);
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
+    /**
+     * Cliente -> Servidor: o Mestre marcou varios mobs e pediu a rolagem de todos
+     * (06/11/2026). Vai uma lista de nomes; o servidor confere modo, coleta e
+     * permissao e ignora o nome que nao existe mais, entao o cliente so precisa
+     * mandar o que estava vendo.
+     */
+    public record InitiativeRollMobsPayload(List<String> names) implements CustomPacketPayload {
+        public static final Type<InitiativeRollMobsPayload> TYPE =
+                new Type<>(TabletopRpg.id("initiative_roll_mobs"));
+        public static final StreamCodec<FriendlyByteBuf, InitiativeRollMobsPayload> STREAM_CODEC =
+                StreamCodec.composite(
+                        ByteBufCodecs.stringUtf8(InitiativeSync.MAX_NAME).apply(ByteBufCodecs.list()),
+                        InitiativeRollMobsPayload::names,
+                        InitiativeRollMobsPayload::new);
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
+    /**
+     * Cliente -> Servidor: o Mestre escolheu como a entidade entra na iniciativa
+     * (06/11/2026). {@code value} nulo pede a rolagem da ficha; valor preenchido e
+     * o numero ditado pelo Mestre e nao rola nada.
+     */
+    public record InitiativeAddPayload(String name, Integer value) implements CustomPacketPayload {
+        public static final Type<InitiativeAddPayload> TYPE =
+                new Type<>(TabletopRpg.id("initiative_add"));
+        public static final StreamCodec<FriendlyByteBuf, InitiativeAddPayload> STREAM_CODEC =
+                StreamCodec.composite(
+                        ByteBufCodecs.stringUtf8(InitiativeSync.MAX_NAME), InitiativeAddPayload::name,
+                        OPTIONAL_INT, InitiativeAddPayload::value,
+                        InitiativeAddPayload::new);
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
+    /** Uma linha da tela "Editar valores": {@code value} nulo remove a entrada. */
+    public record InitiativeEntryEdit(int position, String name, Integer value) {
+        public static final StreamCodec<FriendlyByteBuf, InitiativeEntryEdit> STREAM_CODEC =
+                StreamCodec.composite(
+                        ByteBufCodecs.VAR_INT, InitiativeEntryEdit::position,
+                        ByteBufCodecs.stringUtf8(InitiativeSync.MAX_NAME), InitiativeEntryEdit::name,
+                        OPTIONAL_INT, InitiativeEntryEdit::value,
+                        InitiativeEntryEdit::new);
+    }
+
+    /**
+     * Cliente -> Servidor: valores editados de uma vez na tela "Editar valores"
+     * (06/11/2026). Posicao + nome identificam a linha; o servidor ignora o que
+     * ja nao aponta para aquela entrada.
+     */
+    public record InitiativeSetValuesPayload(List<InitiativeEntryEdit> edits)
+            implements CustomPacketPayload {
+        public static final Type<InitiativeSetValuesPayload> TYPE =
+                new Type<>(TabletopRpg.id("initiative_set_values"));
+        public static final StreamCodec<FriendlyByteBuf, InitiativeSetValuesPayload> STREAM_CODEC =
+                StreamCodec.composite(
+                        InitiativeEntryEdit.STREAM_CODEC.apply(ByteBufCodecs.list()),
+                        InitiativeSetValuesPayload::edits,
+                        InitiativeSetValuesPayload::new);
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
+    /**
+     * Inteiro que pode faltar no pacote: um booleano de presenca e o valor. Usado
+     * onde {@code null} tem significado (rolar a ficha, remover a entrada).
+     */
+    private static final StreamCodec<FriendlyByteBuf, Integer> OPTIONAL_INT = StreamCodec.of(
+            (buf, value) -> {
+                buf.writeBoolean(value != null);
+                if (value != null) {
+                    buf.writeVarInt(value);
+                }
+            },
+            buf -> buf.readBoolean() ? buf.readVarInt() : null);
+
+    /** Servidor -> Cliente: dados da sessão usados para montar o menu. */    public record MenuDataPayload(
             boolean isMaster,
             boolean isMyTurn,
             String sessionName,
@@ -1720,6 +1859,17 @@ public final class RpgNetworking {
         // e sempre do Mestre.
         PayloadTypeRegistry.playS2C().register(SheetModelPayload.TYPE, SheetModelPayload.STREAM_CODEC);
         PayloadTypeRegistry.playC2S().register(SheetModelSavePayload.TYPE, SheetModelSavePayload.STREAM_CODEC);
+        PayloadTypeRegistry.playC2S().register(InitiativeFormulaPayload.TYPE, InitiativeFormulaPayload.STREAM_CODEC);
+        // Menu de dar turno do Mestre (04/11/2026).
+        PayloadTypeRegistry.playC2S().register(TurnGivePayload.TYPE, TurnGivePayload.STREAM_CODEC);
+        // Rolagem de varios mobs marcados no menu (06/11/2026).
+        PayloadTypeRegistry.playC2S().register(InitiativeRollMobsPayload.TYPE,
+                InitiativeRollMobsPayload.STREAM_CODEC);
+        // Adicao com escolha entre rolar a ficha e usar o valor do Mestre, e a
+        // edicao de valores em lote (06/11/2026).
+        PayloadTypeRegistry.playC2S().register(InitiativeAddPayload.TYPE, InitiativeAddPayload.STREAM_CODEC);
+        PayloadTypeRegistry.playC2S().register(InitiativeSetValuesPayload.TYPE,
+                InitiativeSetValuesPayload.STREAM_CODEC);
 
         // Ficha na mao -> contorno dos mobs vinculados, so para o dono da ficha.
         PayloadTypeRegistry.playS2C().register(SheetHighlightPayload.TYPE, SheetHighlightPayload.STREAM_CODEC);
@@ -1810,6 +1960,9 @@ public final class RpgNetworking {
                 SessionManager.releaseMaster(player);
                 changed = true;
                 if (lastMaster) {
+                    // Encerra a iniciativa antes de voltar para FREE: sem mestre,
+                    // ninguém consegue continuar a lista (03/11/2026).
+                    InitiativeCommands.onModeChanged(server, SessionManager.GameMode.FREE);
                     SessionManager.setMode(SessionManager.GameMode.FREE);
                     CombatController.reset(server);
                     // Avisa todos que o mestre saiu (ninguém fica sem saber por
@@ -1840,6 +1993,9 @@ public final class RpgNetworking {
             if (changed) {
                 sendToAll(server);
                 sendAuraStateToAll(server);
+                // O cargo de mestre mudou (quem saiu deixou de ver os
+                // candidatos; os que ficaram recebem a lista de novo).
+                InitiativeSync.sendAll(server);
             }
             // A lista de alvos do carrossel mudou (um jogador saiu): atualiza
             // todos os clientes conectados.
@@ -2213,9 +2369,117 @@ public final class RpgNetworking {
             }
         });
 
+        // Formula padrao de iniciativa da mesa (04/11/2026): so o Mestre troca, e
+        // o servidor valida antes de gravar. Formula vazia ou fora do parser volta
+        // ao padrao pelo construtor compacto de SheetModel (nunca fica quebrada).
+        ServerPlayNetworking.registerGlobalReceiver(InitiativeFormulaPayload.TYPE, (payload, context) -> {
+            ServerPlayer sender = context.player();
+            if (!SessionManager.isMaster(sender)) {
+                return;
+            }
+            MinecraftServer server = sender.level().getServer();
+            SheetModelStore store = SheetModelStore.get(server);
+            String formula = payload.formula() == null ? "" : payload.formula();
+            if (!InitiativeRoller.isValidPlainFormula(formula)) {
+                return;
+            }
+            SheetModel next = store.model()
+                    .withInitiativeFormula(formula)
+                    .withInitiativePlayerFormulaRoll(payload.playerFormulaRoll());
+            if (next.equals(store.model())) {
+                return;
+            }
+            store.update(next);
+            TabletopRpg.LOGGER.info("[TabletopRPG] Mestre {} trocou a formula padrao de iniciativa para '{}'.",
+                    sender.getName().getString(), next.initiativeFormula());
+            broadcastSheetModel(server, next);
+        });
+
+        // Menu de dar turno (04/11/2026): o Mestre escolhe a entrada e o servidor
+        // resolve a posicao na lista. Entrada que saiu da iniciativa nao da turno
+        // a ninguem -- quem manda no estado e o servidor.
+        ServerPlayNetworking.registerGlobalReceiver(TurnGivePayload.TYPE, (payload, context) -> {
+            ServerPlayer sender = context.player();
+            if (!SessionManager.isMaster(sender)) {
+                return;
+            }
+            MinecraftServer server = sender.level().getServer();
+            String name = payload.name() == null ? "" : payload.name().trim();
+            if (name.isEmpty()) {
+                return;
+            }
+            if (!TurnManager.grantByName(server, name, payload.mob(), payload.position())) {
+                sender.sendSystemMessage(Component.translatable("message.tabletoprpg.turn.entry_gone"));
+            }
+        });
+
+        // Rolagem em lote do menu de rolar iniciativa de mob (06/11/2026): modo,
+        // coleta e permissao sao conferidos aqui de novo, e nome que saiu da lista
+        // de candidatos e ignorado em silencio pelo rollMobBulk.
+        ServerPlayNetworking.registerGlobalReceiver(InitiativeRollMobsPayload.TYPE, (payload, context) -> {
+            ServerPlayer sender = context.player();
+            if (!SessionManager.isMaster(sender)) {
+                return;
+            }
+            MinecraftServer server = sender.level().getServer();
+            Component block = InitiativeCommands.actionBlockReason(server);
+            if (block != null) {
+                sender.sendSystemMessage(block);
+                return;
+            }
+            List<String> names = payload.names() == null ? List.of() : payload.names();
+            if (names.size() > InitiativeCommands.MAX_BULK_ROLL) {
+                names = names.subList(0, InitiativeCommands.MAX_BULK_ROLL);
+            }
+            if (InitiativeCommands.rollMobBulk(server, names) == 0) {
+                sender.sendSystemMessage(Component.translatable(
+                        "message.tabletoprpg.initiative.bulk_none"));
+            }
+        });
+
+        // Adicao com valor escolhido (06/11/2026): o nome pode ser jogador online ou
+        // mob; quem ja esta na lista e recusado no proprio addEntry.
+        ServerPlayNetworking.registerGlobalReceiver(InitiativeAddPayload.TYPE, (payload, context) -> {
+            ServerPlayer sender = context.player();
+            if (!SessionManager.isMaster(sender)) {
+                return;
+            }
+            MinecraftServer server = sender.level().getServer();
+            Component block = InitiativeCommands.actionBlockReason(server);
+            if (block != null) {
+                sender.sendSystemMessage(block);
+                return;
+            }
+            Component error = InitiativeCommands.addEntry(server, payload.name(), payload.value());
+            if (error != null) {
+                sender.sendSystemMessage(error);
+            }
+        });
+
+        // Edicao de valores em lote (06/11/2026): campo vazio vem como nulo e remove.
+        ServerPlayNetworking.registerGlobalReceiver(InitiativeSetValuesPayload.TYPE, (payload, context) -> {
+            ServerPlayer sender = context.player();
+            if (!SessionManager.isMaster(sender)) {
+                return;
+            }
+            MinecraftServer server = sender.level().getServer();
+            Component block = InitiativeCommands.actionBlockReason(server);
+            if (block != null) {
+                sender.sendSystemMessage(block);
+                return;
+            }
+            List<InitiativeEntryEdit> edits = payload.edits() == null ? List.of() : payload.edits();
+            if (edits.size() > InitiativeCommands.MAX_BULK_ROLL) {
+                edits = edits.subList(0, InitiativeCommands.MAX_BULK_ROLL);
+            }
+            if (InitiativeCommands.setValues(server, edits) == 0) {
+                sender.sendSystemMessage(Component.translatable(
+                        "message.tabletoprpg.initiative.values_none"));
+            }
+        });
+
         // Registra o receptor de pausar/retomar ciclo dia e noite no servidor
         registerDayCycleReceiver();
-
         // Preset de rolagem criado pela tela de rolagem (01/10/2026).
         registerRollPresetReceiver();
         registerThreatSheetReceiver();

@@ -12,13 +12,15 @@ import java.util.Random;
  * <p>A caixa "usar iniciativa padrao" do <b>modelo</b> (Sheet Editor do Mestre)
  * decide qual regra vale para a mesa inteira:
  * <ul>
- *   <li>Marcada: cada jogador rola a <b>propria</b> formula de iniciativa, que ele
- *       digita na ficha (campo "Initiative"). Vazia rola {@code 1d20} seco.</li>
+ *   <li>Marcada: rola a <b>formula padrao da mesa</b> ({@link SheetModel#initiativeFormula()},
+ *       configurada na tela "Configurar iniciativa", ex.: {@code 1d20}) mais a
+ *       <b>formula de iniciativa da ficha</b> de quem rola (04/11/2026), ex.: {@code 2d6+1}.
+ *       Vazia na ficha = so a formula da mesa.</li>
  *   <li>Desmarcada: a pericia marcada como iniciativa, com a mesma conta do
  *       {@code /rpg roll <pericia>}; sem pericia marcada, {@code 1d20}.</li>
  * </ul>
- * Mob nao tem formula propria: com a caixa marcada rola {@code 1d20}; desmarcada,
- * usa a pericia marcada na propria ficha.
+ * Mob usa a mesma regra: formula padrao + bonus da ficha de ameaca, ou a pericia
+ * marcada na propria ficha.
  */
 public final class InitiativeRoller {
 
@@ -37,8 +39,8 @@ public final class InitiativeRoller {
         SheetModel model = SheetModelHolder.current();
         String name = player.getName().getString();
         if (model.initiativeUseDefault()) {
-            String own = sheet == null ? "" : sheet.progress().initiativeFormula();
-            return formulaRoll(name, resolve(compact(formulaOrDefault(own) + extra), sheet, model));
+            String own = sheet == null ? "" : sheetTerm(sheet.progress().initiativeFormula());
+            return formulaRoll(name, resolve(compact(model.initiativeFormula() + own + extra), sheet, model));
         }
         SheetData.Pericia pericia = sheet == null ? null : sheet.periciaById(model.initiativePericiaId());
         if (pericia != null) {
@@ -49,16 +51,29 @@ public final class InitiativeRoller {
     }
 
     /**
-     * Rolagem de um mob: com a caixa marcada, a formula da propria ficha do mob
-     * (atributos da ficha dele); desmarcada, a pericia marcada na ficha dele.
+     * Rolagem de um jogador com uma formula completa no lugar da formula da mesa
+     * (ex.: {@code /rpg initiative roll 2d6+3}). A formula digitada substitui a
+     * padrao <b>so naquela rolagem</b>, e o bonus da ficha nao entra nela.
+     */
+    static Roll playerFormulaRoll(ServerPlayer player, String formula) throws DiceFormula.SyntaxException {
+        SheetData sheet = SessionManager.getSheet(player.getUUID());
+        SheetModel model = SheetModelHolder.current();
+        String name = player.getName().getString();
+        return formulaRoll(name, resolve(compact(formula), sheet, model));
+    }
+
+    /**
+     * Rolagem de um mob: com a caixa marcada, a formula padrao da mesa mais a
+     * formula de iniciativa da ficha de ameaca; desmarcada, a pericia marcada na
+     * ficha dele.
      */
     static Roll mobRoll(Mob mob) throws DiceFormula.SyntaxException {
         SheetModel model = SheetModelHolder.current();
         String name = mob.getName().getString();
         ThreatSheet ficha = ThreatSheetStore.findAnyById(ThreatSheetBinding.sheetOf(mob));
         if (model.initiativeUseDefault()) {
-            String own = ficha == null ? "" : ficha.initiativeFormula();
-            return formulaRoll(name, resolveMob(compact(formulaOrDefault(own)), ficha, model));
+            String own = ficha == null ? "" : sheetTerm(ficha.initiativeFormula());
+            return formulaRoll(name, resolveMob(compact(model.initiativeFormula() + own), ficha, model));
         }
         String periciaId = model.initiativePericiaId();
         if (periciaId.isEmpty() || ficha == null) {
@@ -91,10 +106,37 @@ public final class InitiativeRoller {
         }
     }
 
-    /** Formula como o jogador digitou; vazia vira {@code 1d20}. */
-    static String formulaOrDefault(String raw) {
-        String formula = raw == null ? "" : raw.trim();
-        return formula.isEmpty() ? "1d20" : formula;
+    /**
+     * Formula padrao da mesa (04/11/2026): so dados e numeros, sem nome de
+     * atributo ou pericia. Vazia e valida (o modelo a troca por 1d20).
+     */
+    public static boolean isValidPlainFormula(String raw) {
+        String formula = compact(raw);
+        if (formula.isEmpty()) {
+            return true;
+        }
+        try {
+            DiceFormula.parse(formula);
+            return true;
+        } catch (DiceFormula.SyntaxException e) {
+            return false;
+        }
+    }
+
+    /**
+     * Formula da ficha como termo da soma da mesa (04/11/2026): "2d6" vira
+     * "+2d6", "-2" fica "-2", "+3" fica "+3" (a dica do campo sugere o sinal, e
+     * "++3" nao passaria no parser) e vazio nao acrescenta nada. Assim a formula
+     * da mesa continua valendo e a da ficha entra como parcela, em vez de
+     * substituir.
+     */
+    private static String sheetTerm(String formula) {
+        String clean = compact(formula);
+        if (clean.isEmpty()) {
+            return "";
+        }
+        char first = clean.charAt(0);
+        return first == '-' || first == '+' ? clean : "+" + clean;
     }
 
     /** Tira espacos, igual ao {@code /rpg roll}, para o parser ver so dados e sinais. */
