@@ -4,6 +4,7 @@
 build/
 out/
 classes/
+.claude/
 
 # eclipse
 
@@ -41,3 +42,11 @@ replay_*.log
 
 # Log do runClient (validacao manual de boot)
 runClient.log
+
+# Build logs and outputs
+*.log
+build_*.log
+build.log.txt
+build_output.txt
+output.txt
+logs/
