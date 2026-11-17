@@ -97,6 +97,8 @@ public final class InitiativeCommands {
                         .then(Commands.argument("arg", StringArgumentType.greedyString())
                                 .suggests(InitiativeCommands::suggestRollableMobs)
                                 .executes(InitiativeCommands::rollWithArg)))
+                .then(Commands.literal("rollall")
+                        .executes(InitiativeCommands::rollAllMobs))
                 .then(Commands.literal("add")
                         .then(Commands.argument("nickname", StringArgumentType.greedyString())
                                 .suggests(InitiativeCommands::suggestAddable)
@@ -285,6 +287,28 @@ public final class InitiativeCommands {
         TRACKER.add(name, true, (int) roll.total());
         announceEntry(ctx, roll, name);
         return 1;
+    }
+
+    /**
+     * {@code /rpg initiative rollall}: rola todos os mobs com camera e ficha
+     * vinculada de uma vez, com o mesmo teto do lote da tela.
+     */
+    private static int rollAllMobs(CommandContext<CommandSourceStack> ctx) {
+        if (!checkModeAndCollecting(ctx) || !checkMaster(ctx)) return 0;
+        MinecraftServer server = ctx.getSource().getServer();
+        List<String> names = new ArrayList<>();
+        for (Mob mob : eligibleMobs(server)) {
+            if (names.size() >= MAX_BULK_ROLL) {
+                break;
+            }
+            names.add(mob.getName().getString());
+        }
+        int rolled = rollMobBulk(server, names);
+        if (rolled == 0) {
+            ctx.getSource().sendFailure(Component.translatable("message.tabletoprpg.initiative.bulk_none"));
+            return 0;
+        }
+        return rolled;
     }
 
     /**
@@ -686,8 +710,10 @@ public final class InitiativeCommands {
         for (InitiativeTracker.Entry entry : TRACKER.entries()) {
             entries.add(new InitiativeSync.Entry(entry.name(), entry.mob(), entry.value()));
         }
+        int activeIndex = TurnManager.currentPosition();
         if (!withCandidates) {
-            return new InitiativeSync.Payload(TRACKER.isCollecting(), TRACKER.round(), entries, List.of());
+            return new InitiativeSync.Payload(TRACKER.isCollecting(), TRACKER.round(), entries, List.of(),
+                    activeIndex);
         }
         Set<InitiativeSync.Candidate> candidates = new LinkedHashSet<>();
         for (ServerPlayer player : server.getPlayerList().getPlayers()) {
@@ -697,7 +723,7 @@ public final class InitiativeCommands {
             candidates.add(new InitiativeSync.Candidate(mob.getName().getString(), true));
         }
         return new InitiativeSync.Payload(TRACKER.isCollecting(), TRACKER.round(), entries,
-                List.copyOf(candidates));
+                List.copyOf(candidates), activeIndex);
     }
 
     // ------------------------------------------------------------------

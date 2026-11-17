@@ -38,6 +38,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Random;
 import java.util.Set;
+import java.util.TreeSet;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 
@@ -141,6 +142,8 @@ public class MasterCommands {
                 // /rpg insert enemy <type> <cam_perm true|false>
                 // /rpg insert camera -> arma o pedido; o proximo clique numa
                 //   criatura a poe (ou tira) do carrossel de cameras.
+                // /rpg insert camera <nome> -> poe camera em todos os mobs com
+                //   aquele nome exato, sem depender do clique.
                 .then(Commands.literal("insert")
                     .then(Commands.literal("enemy")
                         .then(Commands.argument("type", StringArgumentType.string())
@@ -148,7 +151,10 @@ public class MasterCommands {
                             .then(Commands.argument("cam_perm", BoolArgumentType.bool())
                                 .executes(MasterCommands::insertEnemy))))
                     .then(Commands.literal("camera")
-                        .executes(MasterCommands::insertCamera)))
+                        .executes(MasterCommands::insertCamera)
+                        .then(Commands.argument("name", StringArgumentType.greedyString())
+                            .suggests(MasterCommands::suggestCameraInsertNames)
+                            .executes(MasterCommands::insertCameraByName))))
 
                 // /rpg mob view <nome>  (so o mestre) -> ABRE A FICHA com aquele NOME DE FICHA.
                 // O nome da ficha e unico no store; o nome de exibicao (do mob amarrado)
@@ -185,11 +191,17 @@ public class MasterCommands {
                 // (clique direito nele primeiro). 1 mob por execução.
                 // /rpg remove enemy @e[name="Nome Exato"] -> remove TODOS os
                 // mobs do RPG com aquele nome exato (22/10/2026).
+                // /rpg remove camera <nome> (só o mestre) -> tira a camera de um
+                // mob pelo nome, sem depender do clique que alterna camera.
                 .then(Commands.literal("remove")
                     .then(Commands.literal("enemy")
                         .executes(MasterCommands::removeEnemy)
                         .then(Commands.argument("selector", StringArgumentType.greedyString())
-                            .executes(MasterCommands::removeEnemyBySelector))))
+                            .executes(MasterCommands::removeEnemyBySelector)))
+                    .then(Commands.literal("camera")
+                        .then(Commands.argument("name", StringArgumentType.greedyString())
+                            .suggests(MasterCommands::suggestCameraRemoveNames)
+                            .executes(MasterCommands::removeCameraByName))))
 
                 // /rpg block_lock          -> arma o pedido de TRAVAR; o próximo
                 //   clique do mestre num bloco tranca aquele bloco.
@@ -303,7 +315,8 @@ public class MasterCommands {
                 // O reset limpou os mobs com cǽmera: atualiza o carrossel.
                 RpgNetworking.sendSpectatorTargetsToAll(ctx.getSource().getServer());
                 BlockLockManager.sendSnapshotTo(player);
-                refreshChatMenu(ctx);
+                // O cargo mudou: todos precisam ver o botao [Claim Master] de novo.
+                sendMenuToAll(ctx.getSource().getServer());
                 return 1;
             } else {
                 ctx.getSource().sendFailure(Component.translatable("message.tabletoprpg.master_not_current"));
@@ -511,6 +524,46 @@ public class MasterCommands {
         return builder.buildFuture();
     }
 
+    private static CompletableFuture<Suggestions> suggestCameraInsertNames(CommandContext<CommandSourceStack> ctx,
+                                                                           SuggestionsBuilder builder) {
+        String remaining = builder.getRemainingLowerCase();
+        Set<String> names = new TreeSet<>();
+        MinecraftServer server = ctx.getSource().getServer();
+        for (ServerLevel level : server.getAllLevels()) {
+            for (Entity entity : level.getAllEntities()) {
+                if (entity instanceof Mob mob) {
+                    names.add(mob.getName().getString());
+                }
+            }
+        }
+        for (String name : names) {
+            if (name.toLowerCase(Locale.ROOT).startsWith(remaining)) {
+                builder.suggest(name);
+            }
+        }
+        return builder.buildFuture();
+    }
+
+    private static CompletableFuture<Suggestions> suggestCameraRemoveNames(CommandContext<CommandSourceStack> ctx,
+                                                                           SuggestionsBuilder builder) {
+        String remaining = builder.getRemainingLowerCase();
+        Set<String> names = new TreeSet<>();
+        MinecraftServer server = ctx.getSource().getServer();
+        for (ServerLevel level : server.getAllLevels()) {
+            for (Entity entity : level.getAllEntities()) {
+                if (entity instanceof Mob mob && mob.getTags().contains(CameraToolManager.CAMERA_TAG)) {
+                    names.add(mob.getName().getString());
+                }
+            }
+        }
+        for (String name : names) {
+            if (name.toLowerCase(Locale.ROOT).startsWith(remaining)) {
+                builder.suggest(name);
+            }
+        }
+        return builder.buildFuture();
+    }
+
     private static int insertEnemy(CommandContext<CommandSourceStack> ctx) {
         if (!verifyMasterPermission(ctx)) return 0;
 
@@ -613,6 +666,45 @@ public class MasterCommands {
             ctx.getSource().sendFailure(Component.translatable("message.tabletoprpg.camera_arm_failed"));
             return 0;
         }
+    }
+
+    /**
+     * /rpg insert camera &lt;nome&gt;: poe camera em todos os mobs com aquele nome
+     * exato, sem depender do clique que alterna (decisao do usuario em 17/11/2026).
+     */
+    private static int insertCameraByName(CommandContext<CommandSourceStack> ctx) {
+        if (!verifyMasterPermission(ctx)) return 0;
+
+        ServerPlayer master = (ServerPlayer) ctx.getSource().getEntity();
+        MinecraftServer server = ctx.getSource().getServer();
+        String name = StringArgumentType.getString(ctx, "name");
+
+        List<Mob> targets = new ArrayList<>();
+        for (ServerLevel level : server.getAllLevels()) {
+            for (Entity entity : level.getAllEntities()) {
+                if (!(entity instanceof Mob mob)) {
+                    continue;
+                }
+                if (!name.equals(mob.getName().getString())) {
+                    continue;
+                }
+                targets.add(mob);
+            }
+        }
+
+        if (targets.isEmpty()) {
+            ctx.getSource().sendFailure(Component.translatable(
+                    "message.tabletop-rpg.camera_add_not_found", name));
+            return 0;
+        }
+
+        for (Mob mob : targets) {
+            CameraToolManager.addCamera(mob);
+        }
+        master.displayClientMessage(Component.translatable(
+                "message.tabletop-rpg.camera_add_success", name), false);
+        RpgNetworking.sendSpectatorTargetsToAll(server);
+        return 1;
     }
 
     /**
@@ -823,6 +915,52 @@ public class MasterCommands {
             ctx.getSource().sendFailure(Component.translatable("message.tabletoprpg.enemy_remove_failed"));
             return 0;
         }
+    }
+
+    /**
+     * /rpg remove camera <nome>: tira a camera de um mob pelo nome, sem depender
+     * do clique que alterna camera. So atinge mobs com a tag da Camera Tool.
+     */
+    private static int removeCameraByName(CommandContext<CommandSourceStack> ctx) {
+        if (!verifyMasterPermission(ctx)) return 0;
+
+        ServerPlayer master = (ServerPlayer) ctx.getSource().getEntity();
+        MinecraftServer server = ctx.getSource().getServer();
+        String name = StringArgumentType.getString(ctx, "name");
+
+        List<Mob> targets = new ArrayList<>();
+        for (ServerLevel level : server.getAllLevels()) {
+            for (Entity entity : level.getAllEntities()) {
+                if (!(entity instanceof Mob mob)) {
+                    continue;
+                }
+                if (!name.equals(mob.getName().getString())) {
+                    continue;
+                }
+                if (!mob.getTags().contains(CameraToolManager.CAMERA_TAG)) {
+                    continue;
+                }
+                targets.add(mob);
+            }
+        }
+
+        if (targets.isEmpty()) {
+            ctx.getSource().sendFailure(Component.translatable(
+                    "message.tabletop-rpg.camera_remove_not_found", name));
+            return 0;
+        }
+
+        for (Mob mob : targets) {
+            mob.removeTag(CameraToolManager.CAMERA_TAG);
+            CombatController.removeCameraMob(mob.getUUID());
+            if (!CombatController.isFrozenByTable(mob.getUUID())) {
+                mob.setNoAi(false);
+            }
+        }
+        master.displayClientMessage(Component.translatable(
+                "message.tabletop-rpg.camera_remove_success", name), false);
+        RpgNetworking.sendSpectatorTargetsToAll(server);
+        return 1;
     }
 
     /**
@@ -2057,6 +2195,13 @@ public class MasterCommands {
     /** Reenvia o menu ASCII para um jogador (usado tambem quando ele ganha a vez). */
     static void sendMenu(ServerPlayer player) {
         player.sendSystemMessage(buildAsciiMenu(player, SessionManager.isMaster(player)));
+    }
+
+    /** Reenvia o menu ASCII para todos os jogadores online (cargo de mestre mudou). */
+    static void sendMenuToAll(MinecraftServer server) {
+        for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+            sendMenu(player);
+        }
     }
 
     /**

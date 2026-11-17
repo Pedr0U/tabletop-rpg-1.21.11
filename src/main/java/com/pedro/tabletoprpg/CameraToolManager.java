@@ -242,11 +242,7 @@ public final class CameraToolManager {
             TabletopRpg.LOGGER.info("[TabletopRPG] Camera removida de {} por {}",
                     name, master.getName().getString());
         } else {
-            CombatController.addCameraMob(mob.getUUID());
-            mob.addTag(CAMERA_TAG);
-            mob.setPersistenceRequired();
-            // Congela a criatura (PARTE 3): a camera segura o monstro parado.
-            mob.setNoAi(true);
+            addCamera(mob);
             master.displayClientMessage(
                     Component.translatable("message.tabletop-rpg.camera_added", name), false);
             TabletopRpg.LOGGER.info("[TabletopRPG] Camera em {} por {}",
@@ -256,5 +252,14 @@ public final class CameraToolManager {
         // O carrossel e um retrato enviado a todos: sem isto os jogadores travados so
         // veriam a mudanca no proximo evento que reenvia a lista.
         RpgNetworking.sendSpectatorTargetsToAll(level.getServer());
+    }
+
+    /** Adiciona camera a um mob: registro, tag NBT, persistencia e congelamento. */
+    public static void addCamera(Mob mob) {
+        CombatController.addCameraMob(mob.getUUID());
+        mob.addTag(CAMERA_TAG);
+        mob.setPersistenceRequired();
+        // Congela a criatura (PARTE 3): a camera segura o monstro parado.
+        mob.setNoAi(true);
     }
 }

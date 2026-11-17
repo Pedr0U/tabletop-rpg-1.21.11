@@ -42,7 +42,7 @@ public class InitiativePickerScreen extends Screen {
     private static final int TOP = 48;
     private static final int ROW_H = 18;
     private static final int SIDE = 10;
-    private static final int BOTTOM_RESERVED = 36;
+    private static final int BOTTOM_RESERVED = 70;
     private static final int CHECK = 9;
     /** Mesmo teto de {@code InitiativeCommands.MAX_BULK_ROLL}, que e package-private. */
     private static final int MAX_BULK = 64;
@@ -120,27 +120,32 @@ public class InitiativePickerScreen extends Screen {
     @Override
     protected void init() {
         if (action == Action.ROLL_MOB) {
-            // Tres botoes na mesma linha dentro dos 300 px uteis (06/11/2026):
+            // Tres botoes na linha de baixo dentro dos 300 px uteis (06/11/2026):
             // 96 + 6 + 122 + 6 + 60 = 290, sem sobreposicao.
             int left = width / 2 - PANEL_W / 2 + SIDE;
             selectAllButton = Button.builder(selectAllLabel(), b -> toggleAll())
-                    .bounds(left, height - 28, 96, 20)
+                    .bounds(left, height - 38, 96, 20)
                     .build();
             addRenderableWidget(selectAllButton);
             rollButton = Button.builder(Component.translatable(
                             "screen.tabletoprpg.initiative.picker_roll_selected"),
                             b -> sendSelected())
-                    .bounds(left + 102, height - 28, 122, 20)
+                    .bounds(left + 102, height - 38, 122, 20)
                     .build();
             addRenderableWidget(rollButton);
+            addRenderableWidget(Button.builder(Component.translatable(
+                            "screen.tabletoprpg.initiative.roll_all"),
+                            b -> { sendCommand("rpg initiative rollall"); close(); })
+                    .bounds(left, height - 64, 224, 20)
+                    .build());
             addRenderableWidget(Button.builder(Component.translatable("screen.tabletoprpg.initiative.back"),
                             b -> close())
-                    .bounds(left + 230, height - 28, 60, 20)
+                    .bounds(left + 230, height - 38, 60, 20)
                     .build());
         } else {
             addRenderableWidget(Button.builder(Component.translatable("screen.tabletoprpg.initiative.back"),
                             b -> close())
-                    .bounds(width / 2 - 100, height - 28, 200, 20)
+                    .bounds(width / 2 - 100, height - 38, 200, 20)
                     .build());
         }
         updateButtons();
@@ -321,6 +326,12 @@ public class InitiativePickerScreen extends Screen {
         }
         int index = scroll + row;
         return index < items.size() ? index : -1;
+    }
+
+    private void sendCommand(String command) {
+        if (this.minecraft != null && this.minecraft.player != null) {
+            this.minecraft.player.connection.sendCommand(command);
+        }
     }
 
     private void close() {

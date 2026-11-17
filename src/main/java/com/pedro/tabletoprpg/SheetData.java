@@ -414,7 +414,9 @@ public record SheetData(
      * e o construtor compacto do {@link Spell} corta o que passou do teto depois.
      * O {@code circle} e {@code optionalFieldOf} com padrao {@code 1} porque e a
      * chave de ordenacao da lista (ver {@link Spellbook#sorted()}): uma magia
-     * gravada sem ele tem de cair no 1o circulo, nao ser descartada.
+     * gravada sem ele tem de cair no 1o circulo, nao ser descartada. O mesmo vale
+     * para {@code description}, que nao existia nas fichas antigas e por isso
+     * entra por ultimo com padrao vazio.
      */
     private static final Codec<Spell> SPELL_CODEC = RecordCodecBuilder.create(i -> i.group(
             Codec.STRING.optionalFieldOf("name", "").forGetter(Spell::name),
@@ -423,7 +425,8 @@ public record SheetData(
             Codec.STRING.optionalFieldOf("range", "").forGetter(Spell::range),
             Codec.STRING.optionalFieldOf("target", "").forGetter(Spell::target),
             Codec.STRING.optionalFieldOf("duration", "").forGetter(Spell::duration),
-            Codec.STRING.optionalFieldOf("cost", "").forGetter(Spell::cost)
+            Codec.STRING.optionalFieldOf("cost", "").forGetter(Spell::cost),
+            Codec.STRING.optionalFieldOf("description", "").forGetter(Spell::description)
     ).apply(i, Spell::new));
 
     /**
@@ -1449,12 +1452,11 @@ public record SheetData(
     /**
      * Uma magia da ficha (01/10/2026, pagina 3).
      *
-     * <p>Campos por decisao do usuario: nome, circulo (1 a 5) e os cinco campos
-     * do formulario de Tormenta 20 - execucao, alcance, alvo, duracao e custo.
-     * Os cinco sao <b>texto livre</b>, e nao lista fechada: o pedido foi "campo",
-     * e e o mesmo tratamento que o inventario da aba Info/Inventory ja usa.
+     * <p>Campos por decisao do usuario: nome, circulo (1 a 5), execucao (lista
+     * fixa no formulario), alcance, alvo, duracao, custo (somente digitos) e a
+     * descricao da magia, que entra por ultimo para nao quebrar as fichas antigas.
      *
-     * <p><b>Por que o {@link #STREAM_CODEC} e manual:</b> sao 7 campos e o
+     * <p><b>Por que o {@link #STREAM_CODEC} e manual:</b> sao 8 campos e o
      * {@link StreamCodec#composite} para em 6. Nao da para criar um sub-record
      * so para caber no limite sem mudar o formulario, entao o par
      * {@link StreamCodec#of} e o mesmo caminho que o topo da ficha ja usa (ver
@@ -1465,7 +1467,7 @@ public record SheetData(
      * tempo de compilacao.
      */
     public record Spell(String name, int circle, String execution, String range,
-                        String target, String duration, String cost) {
+                        String target, String duration, String cost, String description) {
 
         /** Menor circulo de Tormenta 20 que o mod aceita. */
         public static final int CIRCLE_MIN = 1;
@@ -1477,23 +1479,29 @@ public record SheetData(
         /** Teto de caracteres do nome de uma magia: o mesmo do {@link #MAX_NAME}. */
         public static final int SPELL_NAME_MAX = 48;
         /**
-         * Teto de caracteres de cada um dos cinco campos de texto curto.
+         * Teto de caracteres de cada um dos campos de texto curto (alcance, alvo
+         * e duracao).
          *
-         * <p>Menor que o {@link #MAX_TEXT} (2.000) porque "Acao", "1 por turno" e
-         * "Ate 1 hora" sao curtos: o que o jogador rola nesses cinco campos e o
-         * valor da tabela dele, e 200 casas deixariam a caixa abrindo tres
-         * linhas de nada.
+         * <p>Menor que o {@link #MAX_TEXT} (2.000) porque "1 por turno" e
+         * "Ate 1 hora" sao curtos: o que o jogador rola nesses campos e o valor
+         * da tabela dele, e 200 casas deixariam a caixa abrindo tres linhas de
+         * nada.
          */
         public static final int SPELL_FIELD_MAX = 64;
-        /** Teto de caracteres do custo, que pode trazer calculo ("3 PM + 2 accoes"). */
+        /**
+         * Teto da descricao da magia (17/11/2026): texto mais longo, editado numa
+         * caixa de tres linhas no formulario.
+         */
+        public static final int SPELL_DESC_MAX = 2_000;
+        /** Maior custo numerico aceito; texto antigo com letras e limpo ao salvar. */
         public static final int SPELL_COST_MAX = 120;
 
         /** Magia vazia: e o que um item de lista sem nome decodifica. */
-        public static final Spell EMPTY = new Spell("", 1, "", "", "", "", "");
+        public static final Spell EMPTY = new Spell("", 1, "", "", "", "", "", "");
 
         /**
          * Encodificador manual, no mesmo par do {@link SheetData#ENCODER}.
-         * Ordem: nome, circulo, execucao, alcance, alvo, duracao, custo.
+         * Ordem: nome, circulo, execucao, alcance, alvo, duracao, custo, descricao.
          */
         private static final StreamEncoder<FriendlyByteBuf, Spell> ENCODER = (buf, spell) -> {
             ByteBufCodecs.stringUtf8(SPELL_NAME_MAX).encode(buf, spell.name());
@@ -1503,6 +1511,7 @@ public record SheetData(
             ByteBufCodecs.stringUtf8(SPELL_FIELD_MAX).encode(buf, spell.target());
             ByteBufCodecs.stringUtf8(SPELL_FIELD_MAX).encode(buf, spell.duration());
             ByteBufCodecs.stringUtf8(SPELL_COST_MAX).encode(buf, spell.cost());
+            ByteBufCodecs.stringUtf8(SPELL_DESC_MAX).encode(buf, spell.description());
         };
 
         private static final StreamDecoder<FriendlyByteBuf, Spell> DECODER = buf -> new Spell(
@@ -1512,7 +1521,8 @@ public record SheetData(
                 ByteBufCodecs.stringUtf8(SPELL_FIELD_MAX).decode(buf),
                 ByteBufCodecs.stringUtf8(SPELL_FIELD_MAX).decode(buf),
                 ByteBufCodecs.stringUtf8(SPELL_FIELD_MAX).decode(buf),
-                ByteBufCodecs.stringUtf8(SPELL_COST_MAX).decode(buf)
+                ByteBufCodecs.stringUtf8(SPELL_COST_MAX).decode(buf),
+                ByteBufCodecs.stringUtf8(SPELL_DESC_MAX).decode(buf)
         );
 
         public static final StreamCodec<FriendlyByteBuf, Spell> STREAM_CODEC =
@@ -1526,6 +1536,7 @@ public record SheetData(
             target = cleanSpellField(target);
             duration = cleanSpellField(duration);
             cost = cleanSpellCost(cost);
+            description = cleanSpellDescription(description);
         }
 
         /**
@@ -2697,7 +2708,7 @@ public record SheetData(
                 ? trimmed.substring(0, Spell.SPELL_NAME_MAX) : trimmed;
     }
 
-    /** Um dos cinco campos curtos de uma magia: teto {@link Spell#SPELL_FIELD_MAX}. */
+    /** Um dos campos curtos de uma magia: teto {@link Spell#SPELL_FIELD_MAX}. */
     private static String cleanSpellField(String text) {
         if (text == null) {
             return "";
@@ -2707,14 +2718,33 @@ public record SheetData(
                 ? trimmed.substring(0, Spell.SPELL_FIELD_MAX) : trimmed;
     }
 
-    /** Custo de uma magia: o mesmo trim, com o teto maior dele. */
-    private static String cleanSpellCost(String text) {
+    /** Descricao de uma magia: trim e teto {@link Spell#SPELL_DESC_MAX}. */
+    private static String cleanSpellDescription(String text) {
         if (text == null) {
             return "";
         }
         String trimmed = text.trim();
-        return trimmed.length() > Spell.SPELL_COST_MAX
-                ? trimmed.substring(0, Spell.SPELL_COST_MAX) : trimmed;
+        return trimmed.length() > Spell.SPELL_DESC_MAX
+                ? trimmed.substring(0, Spell.SPELL_DESC_MAX) : trimmed;
+    }
+
+    /**
+     * Custo de uma magia: somente digitos e teto {@link Spell#SPELL_COST_MAX}.
+     *
+     * <p>Texto antigo como "3 PM" perde as letras e vira "3" ao carregar ou
+     * salvar. {@link #parseInt} devolve o teto quando a sequencia de digitos
+     * estoura {@code int}, entao uma colagem longa nao derruba o servidor.
+     */
+    private static String cleanSpellCost(String text) {
+        if (text == null) {
+            return "";
+        }
+        String digits = text.replaceAll("\\D", "");
+        if (digits.isEmpty()) {
+            return "";
+        }
+        int value = parseInt(digits, Spell.SPELL_COST_MAX);
+        return Integer.toString(Math.min(value, Spell.SPELL_COST_MAX));
     }
 
     /**
@@ -2739,7 +2769,8 @@ public record SheetData(
                 continue;
             }
             Spell clean = new Spell(spell.name(), spell.circle(), spell.execution(),
-                    spell.range(), spell.target(), spell.duration(), spell.cost());
+                    spell.range(), spell.target(), spell.duration(), spell.cost(),
+                    spell.description());
             if (clean.name().isEmpty()) {
                 continue;
             }

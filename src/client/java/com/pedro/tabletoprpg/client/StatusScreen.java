@@ -1568,6 +1568,30 @@ public class StatusScreen extends CharacterSheetScreen {
     }
 
     /**
+     * Rotulo traduzido do ID de execucao gravado na magia (17/11/2026).
+     *
+     * <p>O {@link SpellFormScreen} grava IDs estaveis ({@code free}, {@code move},
+     * ...). Aqui eles viram texto do idioma atual; um valor desconhecido
+     * (inclusive um rotulo antigo) volta como esta, para nao apagar informacao.
+     */
+    private static String spellExecutionLabel(String id) {
+        String[] ids = {"free", "move", "standard", "full", "bonus", "reaction"};
+        String[] keys = {
+                "screen.tabletoprpg.spell_form.execution.free",
+                "screen.tabletoprpg.spell_form.execution.move",
+                "screen.tabletoprpg.spell_form.execution.standard",
+                "screen.tabletoprpg.spell_form.execution.full",
+                "screen.tabletoprpg.spell_form.execution.bonus",
+                "screen.tabletoprpg.spell_form.execution.reaction"};
+        for (int i = 0; i < ids.length; i++) {
+            if (ids[i].equals(id)) {
+                return Component.translatable(keys[i]).getString();
+            }
+        }
+        return id;
+    }
+
+    /**
      * Uma magia na lista, na disposicao de 01/10/2026:
      *
      * <pre>
@@ -1630,24 +1654,30 @@ public class StatusScreen extends CharacterSheetScreen {
         int delY = y;
         y += LIST_LINE1_ADV;
 
-        // Linha 3: a execucao.
+        // Linha 3: a execucao. O campo guarda um ID estavel; o rotulo e traduzido
+        // aqui, na exibicao, para nao congelar o idioma do cliente na ficha.
         if (!spell.execution().isEmpty()) {
             if (spellColumn.lineFits(y, LIST_LINE2_ADV)) {
                 textLines.add(new TextLine(
-                        truncateWithEllipsis(spell.execution(), tw), tx, y + 2, COL_MUTED));
+                        truncateWithEllipsis(spellExecutionLabel(spell.execution()), tw), tx, y + 2, COL_MUTED));
             }
             delY = y;
             y += LIST_LINE2_ADV;
         }
 
         // Linha 4: o custo a esquerda, com o Del a direita fechando a caixa.
+        // 17/11/2026: o valor vem antes do rotulo de mana do modelo, que so
+        // aparece quando o campo Mana/Equivalente esta ativo na ficha.
         if (!spell.cost().isEmpty()) {
+            SheetModel model = model();
+            String costText = model.isEnabled("mana")
+                    ? spell.cost() + " " + model.manaLabel() : spell.cost();
             // A largura do texto perde a faixa do Del: sem isso o custo e o
             // botao escreveriam um sobre o outro.
             int costW = Math.max(12, tw - LIST_DEL_BTN_W - PER_GAP);
             if (spellColumn.lineFits(y, LIST_LINE3_ADV)) {
                 textLines.add(new TextLine(
-                        truncateWithEllipsis(spell.cost(), costW), tx, y + 2, COL_MUTED));
+                        truncateWithEllipsis(costText, costW), tx, y + 2, COL_MUTED));
             }
             delY = y;
             y += LIST_LINE3_ADV;

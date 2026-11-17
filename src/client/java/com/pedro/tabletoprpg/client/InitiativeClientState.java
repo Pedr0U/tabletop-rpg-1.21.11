@@ -20,7 +20,10 @@ public final class InitiativeClientState {
     private static int round = 1;
     private static List<InitiativeSync.Entry> entries = List.of();
     private static List<InitiativeSync.Candidate> candidates = List.of();
+    /** Posicao da entrada com a vez; -1 quando ninguem esta com a vez. */
+    private static int activeIndex = -1;
     private static boolean showPanel = false;
+    private static boolean panelSuppressedByMode = false;
 
     private InitiativeClientState() {
     }
@@ -36,6 +39,7 @@ public final class InitiativeClientState {
         round = payload.round();
         entries = List.copyOf(payload.entries());
         candidates = List.copyOf(payload.candidates());
+        activeIndex = payload.activeIndex();
     }
 
     private static void reset() {
@@ -43,7 +47,9 @@ public final class InitiativeClientState {
         round = 1;
         entries = List.of();
         candidates = List.of();
+        activeIndex = -1;
         showPanel = false;
+        panelSuppressedByMode = false;
     }
 
     public static boolean isCollecting() {
@@ -63,8 +69,13 @@ public final class InitiativeClientState {
         return candidates;
     }
 
+    /** Indice da linha destacada como turno atual, ou -1. */
+    public static int activeIndex() {
+        return activeIndex;
+    }
+
     public static boolean isShowPanel() {
-        return showPanel;
+        return showPanel && !panelSuppressedByMode;
     }
 
     public static void toggleShowPanel() {
@@ -74,5 +85,9 @@ public final class InitiativeClientState {
     /** Ligado/desligado direto: o X da janela de HUD usa o mesmo interruptor da tela. */
     public static void setShowPanel(boolean visible) {
         showPanel = visible;
+    }
+
+    public static void setModeActive(boolean active) {
+        panelSuppressedByMode = !active;
     }
 }

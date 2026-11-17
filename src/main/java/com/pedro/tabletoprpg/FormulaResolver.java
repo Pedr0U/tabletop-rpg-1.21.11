@@ -41,9 +41,12 @@ import java.util.function.Function;
  * comparacao tira acento, ignora maiuscula e junta espacos, pelo mesmo motivo do
  * {@link RollPreset#key()}.
  *
- * <p><b>Sem ficha, sem resolucao.</b> Com {@code sheet == null} todo nome e recusado,
- * em vez de virar zero silencioso. Um preset que rola 6 quando a jogadora tem Forca 14
- * e pior do que um preset que avisa que precisa de ficha.
+ * <p><b>Sem ficha, nomes sem valor.</b> Com {@code sheet == null} a resolucao usa uma
+ * busca que nao encontra valor nenhum: formulas so com dados, como {@code d100},
+ * passam intactas. Nome de atributo conhecido recebe o erro de valor ausente, e nome
+ * desconhecido recebe o erro de nome, em vez de virar zero silencioso. Um preset que
+ * rola 6 quando a jogadora tem Forca 14 e pior do que um preset que avisa que precisa
+ * de ficha.
  */
 public final class FormulaResolver {
 
@@ -92,10 +95,13 @@ public final class FormulaResolver {
 
     /**
      * Troca os nomes pelos numeros da ficha e devolve uma formula so com numeros e
-     * dados, pronta para o {@link DiceFormula}.
+     * dados, pronta para o {@link DiceFormula}. Sem ficha ({@code sheet == null}),
+     * delega para a busca por id com valor {@code null}: dados passam intactos, e
+     * nomes de atributo recebem erro de valor ausente (ou de nome desconhecido).
      *
-     * @throws ResolveException se algum nome nao existe no modelo ou se a ficha nao
-     *                          tem o valor desse atributo
+     * @throws ResolveException se algum nome nao existe no modelo, se a ficha nao tem
+     *                          o valor desse atributo ou se a formula usa nome de
+     *                          atributo sem ficha
      */
     public static String resolve(String formula, SheetData sheet, SheetModel model)
             throws ResolveException {
@@ -103,12 +109,10 @@ public final class FormulaResolver {
             return "";
         }
         if (sheet == null) {
-            // Sem ficha nao ha valor nenhum para trocar. Recusar aqui e melhor do que
-            // devolver 0 em cada token: a jogadora veria o resultado errado em vez do
-            // aviso.
-            throw new ResolveException("cannot use an attribute name in a formula"
-                    + " without a character sheet",
-                    "message.tabletoprpg.formula.resolve.no_sheet");
+            // Sem ficha nao ha valor nenhum para trocar. A busca por id devolve
+            // null para todo atributo: assim `d100` passa intacto, mas um preset
+            // que usa Forca recebe o aviso de valor ausente em vez de rolar 0.
+            return resolve(formula, id -> null, model);
         }
         return resolve(formula, id -> attributeValue(sheet, id), model);
     }

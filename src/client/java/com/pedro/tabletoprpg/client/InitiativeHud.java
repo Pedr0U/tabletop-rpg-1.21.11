@@ -36,6 +36,8 @@ public final class InitiativeHud {
     private static final int MARGIN = 8;
     private static final int PAD = 4;
     private static final int ICON = 10;
+    /** Fundo dourado semitransparente da linha com a vez. */
+    static final int ACTIVE_ROW = 0x60FFD700;
 
     private static int x = -1;
     private static int y = -1;
@@ -136,7 +138,10 @@ public final class InitiativeHud {
     /** Desenho da HUD: so quando o interruptor esta ligado. */
     public static void render(GuiGraphics graphics) {
         Minecraft minecraft = Minecraft.getInstance();
-        if (!InitiativeClientState.isShowPanel() || minecraft.player == null) {
+        // A HUD desenha antes do Screen (1.21.11): sem esta guarda o painel seria
+        // composto duas vezes com a tela de edicao, anulando a transparencia.
+        if (!InitiativeClientState.isShowPanel() || minecraft.player == null
+                || minecraft.screen instanceof InitiativeHudScreen) {
             return;
         }
         clampToScreen(minecraft);
@@ -152,7 +157,7 @@ public final class InitiativeHud {
         Font font = minecraft.font;
 
         graphics.fill(x - 1, y - 1, x + width + 1, y + height + 1, 0xFF4A4A4A);
-        graphics.fill(x, y, x + width, y + height, 0xD0101010);
+        graphics.fill(x, y, x + width, y + height, 0x70101010);
         graphics.fill(x, y, x + width, y + TITLE_H, 0xF0202020);
         graphics.fill(x, y + TITLE_H, x + width, y + TITLE_H + 1, 0xFFB8912E);
 
@@ -200,8 +205,19 @@ public final class InitiativeHud {
         for (int i = scroll; i < Math.min(entries.size(), scroll + rows); i++) {
             InitiativeSync.Entry entry = entries.get(i);
             int rowY = top + (i - scroll) * ROW_H;
+            boolean active = i == InitiativeClientState.activeIndex();
+            if (active) {
+                graphics.fill(x + 2, rowY - 1, x + width - 2, rowY + ROW_H - 2, ACTIVE_ROW);
+            }
             drawIcon(graphics, minecraft, entry, x + PAD, rowY);
-            graphics.drawString(font, fit(font, entry.name(), nameWidth), nameLeft, rowY + 1,
+            int textLeft = nameLeft;
+            int textWidth = nameWidth;
+            if (active) {
+                graphics.drawString(font, "►", textLeft, rowY + 1, 0xFFFFD700, false);
+                textLeft += font.width("►");
+                textWidth -= font.width("►");
+            }
+            graphics.drawString(font, fit(font, entry.name(), textWidth), textLeft, rowY + 1,
                     entry.mob() ? 0xFFFFD0A0 : 0xFFFFFFFF, false);
             String value = String.valueOf(entry.value());
             graphics.drawString(font, value, x + width - PAD - font.width(value), rowY + 1,

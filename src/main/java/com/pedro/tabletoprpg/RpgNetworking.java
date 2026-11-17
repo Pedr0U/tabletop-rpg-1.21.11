@@ -1996,6 +1996,9 @@ public final class RpgNetworking {
                 // O cargo de mestre mudou (quem saiu deixou de ver os
                 // candidatos; os que ficaram recebem a lista de novo).
                 InitiativeSync.sendAll(server);
+                // Menu novo para todos: o antigo ainda mostra o Mestre na mesa
+                // e nao tem o botao [Claim Master] para quem ficou.
+                MasterCommands.sendMenuToAll(server);
             }
             // A lista de alvos do carrossel mudou (um jogador saiu): atualiza
             // todos os clientes conectados.
@@ -3996,6 +3999,15 @@ public final class RpgNetworking {
                     break;
                 }
             }
+        }
+        // Com a iniciativa aberta so entra no carrossel quem esta na lista (o
+        // nome exato de cada entrada). Sem lista, vale o modo FREE antigo.
+        List<String> initiativeNames = new ArrayList<>();
+        for (InitiativeTracker.Entry entry : InitiativeCommands.entries()) {
+            initiativeNames.add(entry.name());
+        }
+        if (!initiativeNames.isEmpty()) {
+            list.removeIf(target -> !initiativeNames.contains(target.name()));
         }
         return list;
     }

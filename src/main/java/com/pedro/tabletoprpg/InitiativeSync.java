@@ -46,8 +46,8 @@ public final class InitiativeSync {
         );
     }
 
-    public record Payload(boolean collecting, int round, List<Entry> entries, List<Candidate> candidates)
-            implements CustomPacketPayload {
+    public record Payload(boolean collecting, int round, List<Entry> entries, List<Candidate> candidates,
+                          int activeIndex) implements CustomPacketPayload {
         public static final Type<Payload> TYPE = new Type<>(TabletopRpg.id("initiative_sync"));
         public static final StreamCodec<FriendlyByteBuf, Payload> STREAM_CODEC = StreamCodec.composite(
                 ByteBufCodecs.BOOL, Payload::collecting,
@@ -55,6 +55,7 @@ public final class InitiativeSync {
                 ByteBufCodecs.VAR_INT, Payload::round,
                 Entry.STREAM_CODEC.apply(ByteBufCodecs.list()), Payload::entries,
                 Candidate.STREAM_CODEC.apply(ByteBufCodecs.list()), Payload::candidates,
+                ByteBufCodecs.VAR_INT, Payload::activeIndex,
                 Payload::new
         );
 
@@ -124,6 +125,9 @@ public final class InitiativeSync {
         for (ServerPlayer player : server.getPlayerList().getPlayers()) {
             ServerPlayNetworking.send(player, SessionManager.isMaster(player) ? master : viewer);
         }
+        // A lista de alvos do carrossel acompanha a iniciativa: getSpectatorTargets
+        // nao chama sendAll, entao nao ha recursao aqui.
+        RpgNetworking.sendSpectatorTargetsToAll(server);
     }
 
     public static void sendTo(ServerPlayer player) {

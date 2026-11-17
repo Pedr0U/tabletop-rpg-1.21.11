@@ -6,6 +6,7 @@ import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.EditBox;
+import net.minecraft.client.gui.components.MultiLineEditBox;
 import net.minecraft.client.gui.components.Tooltip;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
@@ -17,15 +18,17 @@ import net.minecraft.network.chat.Component;
  * "+ Magic" (nova) ou por "Edit" na lista, e o {@code Cancel} volta para a
  * ficha sem passar pelo menu.
  *
- * <p><b>Os cinco campos de Tormenta 20 sao texto livre:</b> execucao, alcance,
- * alvo, duracao e custo. O pedido foi "campo", e e o mesmo tratamento que o
- * inventario ja usa; travar em lista fechada impediria o jogador de escrever
- * "Acao + bonus" no custo, que e uso normal da tabela.
+ * <p><b>Campos de texto livre:</b> alcance, alvo e duracao. A descricao e uma
+ * caixa de tres linhas, com teto proprio ({@code SPELL_DESC_MAX}).
+ *
+ * <p><b>Custo so numeros:</b> a caixa aceita digitos e o servidor limpa o texto
+ * antigo ("3 PM" vira "3") ao salvar ou carregar.
  *
  * <p><b>Por que o circulo e um botao e nao uma caixa:</b> e uma escolha entre
  * cinco valores, entao digitar eGUARDAR o numero seria trabalho sem ganho. O
  * botao cicla 1 -&gt; 2 -&gt; 3 -&gt; 4 -&gt; 5 e o rotulo mostra em extenso, que
- * e o que o jogador procura na tabela impressa.
+ * e o que o jogador procura na tabela impressa. A execucao segue o mesmo padrao:
+ * seis valores fixos, com "Acao Padrao" como ponto de partida de uma magia nova.
  *
  * <p><b>Por que o indice e a magia viajam no construtor:</b> o mesmo motivo do
  * item: o {@code UPDATE} sai pelo indice da <b>lista guardada</b>, e um
@@ -43,13 +46,49 @@ public class SpellFormScreen extends Screen {
     /** Espaco reservado ao rotulo a esquerda da caixa. */
     private static final int LABEL_W = 66;
 
-    /** Chaves de traducao dos cinco campos de texto, na ordem em que saem no formulario. */
+    /** Chaves de traducao das linhas do formulario, na ordem em que aparecem. */
     private static final String[] FIELD_LABEL_KEYS = {
             "screen.tabletoprpg.spell_form.execution",
             "screen.tabletoprpg.spell_form.range",
             "screen.tabletoprpg.spell_form.target",
             "screen.tabletoprpg.spell_form.duration",
-            "screen.tabletoprpg.spell_form.cost"};
+            "screen.tabletoprpg.spell_form.cost",
+            "screen.tabletoprpg.spell_form.description"};
+
+    /** Chaves de traducao do rotulo de cada execucao, na ordem do ciclo. */
+    private static final String[] EXECUTION_KEYS = {
+            "screen.tabletoprpg.spell_form.execution.free",
+            "screen.tabletoprpg.spell_form.execution.move",
+            "screen.tabletoprpg.spell_form.execution.standard",
+            "screen.tabletoprpg.spell_form.execution.full",
+            "screen.tabletoprpg.spell_form.execution.bonus",
+            "screen.tabletoprpg.spell_form.execution.reaction"};
+
+    /**
+     * IDs estaveis gravados na ficha, na MESMA ordem de {@link #EXECUTION_KEYS}.
+     *
+     * <p><b>Por que ID e nao o texto traduzido (17/11/2026):</b> gravar
+     * {@code Component.translatable(...).getString()} congelava o idioma do
+     * cliente no momento da edicao. Com o ID, o rotulo e traduzido so na exibicao
+     * e a magia nao muda de significado se o idioma mudar.
+     */
+    private static final String[] EXECUTION_IDS = {
+            "free", "move", "standard", "full", "bonus", "reaction"};
+
+    /** Execucao de uma magia nova: "Acao Padrao" (indice 2 da lista). */
+    private static final int EXECUTION_DEFAULT_INDEX = 2;
+
+    /** Indice da linha de execucao, que tem botao em vez de caixa de texto. */
+    private static final int EXECUTION_ROW = 0;
+
+    /** Indice da linha de custo, a unica que aceita somente digitos. */
+    private static final int COST_ROW = 4;
+
+    /** Indice da linha da descricao, que usa caixa de varias linhas. */
+    private static final int DESCRIPTION_ROW = 5;
+
+    /** Altura alvo da caixa da descricao: cerca de tres linhas. */
+    private static final int DESC_H = 36;
 
     private final Screen parent;
     private final String targetName;
@@ -77,7 +116,20 @@ public class SpellFormScreen extends Screen {
             saveButton.active = !nameBox.getValue().isBlank();
         }
     }
-    private EditBox[] fieldBoxes = new EditBox[FIELD_LABEL_KEYS.length];
+    /**
+     * Caixas de texto de uma linha: execucao e descricao nao entram (botao e
+     * caixa multilinha), entao sobra uma por alcance, alvo, duracao e custo.
+     */
+    private EditBox[] fieldBoxes = new EditBox[FIELD_LABEL_KEYS.length - 2];
+
+    /** O botao de execucao, na linha do primeiro rotulo. */
+    private Button executionButton;
+
+    /** A caixa multilinha da descricao, na ultima linha do formulario. */
+    private MultiLineEditBox descriptionBox;
+
+    /** Valor da execucao, preservado como texto ate o botao ser clicado. */
+    private String execution;
 
     /** O circulo escolhido no formulario, de 1 a 5. */
     private int circle;
@@ -102,6 +154,7 @@ public class SpellFormScreen extends Screen {
     protected void init() {
         SheetData.Spell current = currentSpell();
         circle = current.circle();
+        execution = original == null ? executionValue(EXECUTION_DEFAULT_INDEX) : normalizeExecution(current.execution());
 
         int panelW = Math.max(220, Math.min(this.width - 20, 300));
         int panelX = (this.width - panelW) / 2;
@@ -125,12 +178,12 @@ public class SpellFormScreen extends Screen {
         // inteiro como uma escolha, e nao como um botao espremido no canto.
         circleY = y;
         addRenderableWidget(Button.builder(
-                        Component.literal(new SheetData.Spell("", circle, "", "", "", "", "").circleLabel()),
+                        Component.literal(new SheetData.Spell("", circle, "", "", "", "", "", "").circleLabel()),
                         b -> {
                             circle = circle >= SheetData.Spell.CIRCLE_MAX
                                     ? SheetData.Spell.CIRCLE_MIN : circle + 1;
                             b.setMessage(Component.literal(
-                                    new SheetData.Spell("", circle, "", "", "", "", "").circleLabel()));
+                                    new SheetData.Spell("", circle, "", "", "", "", "", "").circleLabel()));
                         })
                 .bounds(boxX, y, boxW, ROW_H - 2)
                 .tooltip(Tooltip.create(Component.translatable("screen.tabletoprpg.spell_form.circle_tooltip")))
@@ -141,9 +194,43 @@ public class SpellFormScreen extends Screen {
         y += ROW_H;
 
         for (int i = 0; i < FIELD_LABEL_KEYS.length; i++) {
-            int maxLen = i == FIELD_LABEL_KEYS.length - 1
+            if (i == EXECUTION_ROW) {
+                executionButton = addRenderableWidget(Button.builder(Component.literal(executionLabel(execution)),
+                                b -> cycleExecution(b))
+                        .bounds(boxX, y, boxW, 18)
+                        .build());
+                y += ROW_H;
+                continue;
+            }
+            if (i == DESCRIPTION_ROW) {
+                // A descricao e a ultima linha: cresce ate DESC_H, mas para acima
+                // do rodape para nao cobrir o Save/Cancel em janela baixa.
+                int descTop = y;
+                int descBottom = Math.max(descTop + 20,
+                        Math.min(descTop + DESC_H, this.height - FOOTER_H - 6));
+                descriptionBox = MultiLineEditBox.builder()
+                        .setX(boxX)
+                        .setY(descTop)
+                        .setTextColor(CharacterSheetScreen.COL_BOX_TEXT)
+                        .setTextShadow(false)
+                        .setCursorColor(CharacterSheetScreen.COL_BOX_TEXT)
+                        .setShowBackground(true)
+                        .setShowDecorations(true)
+                        .build(this.font, boxW, descBottom - descTop,
+                                Component.translatable(FIELD_LABEL_KEYS[i]));
+                descriptionBox.setCharacterLimit(SheetData.Spell.SPELL_DESC_MAX);
+                descriptionBox.setValue(fieldValue(current, i));
+                addRenderableWidget(descriptionBox);
+                y = descBottom;
+                continue;
+            }
+            int maxLen = i == COST_ROW
                     ? SheetData.Spell.SPELL_COST_MAX : SheetData.Spell.SPELL_FIELD_MAX;
-            fieldBoxes[i] = field(Component.translatable(FIELD_LABEL_KEYS[i]).getString(), boxX, y, boxW, fieldValue(current, i), maxLen);
+            fieldBoxes[i - 1] = field(Component.translatable(FIELD_LABEL_KEYS[i]).getString(),
+                    boxX, y, boxW, fieldValue(current, i), maxLen);
+            if (i == COST_ROW) {
+                fieldBoxes[i - 1].setFilter(text -> text.matches("\\d{0,3}"));
+            }
             y += ROW_H;
         }
 
@@ -166,16 +253,66 @@ public class SpellFormScreen extends Screen {
         setInitialFocus(nameBox);
     }
 
-    /** O valor do campo de indice dado, na ordem de {@link #FIELD_LABELS}. */
+    /** O valor da caixa da linha dada, na ordem de {@link #FIELD_LABEL_KEYS}. */
     private static String fieldValue(SheetData.Spell spell, int i) {
         return switch (i) {
-            case 0 -> spell.execution();
             case 1 -> spell.range();
             case 2 -> spell.target();
             case 3 -> spell.duration();
             case 4 -> spell.cost();
+            case 5 -> spell.description();
             default -> "";
         };
+    }
+
+    /** ID estavel de um dos valores fixos de execucao. */
+    private static String executionValue(int index) {
+        return EXECUTION_IDS[index];
+    }
+
+    /** Rotulo traduzido de um ID de execucao, com o proprio ID como fallback. */
+    private static String executionLabel(String id) {
+        for (int i = 0; i < EXECUTION_IDS.length; i++) {
+            if (EXECUTION_IDS[i].equals(id)) {
+                return Component.translatable(EXECUTION_KEYS[i]).getString();
+            }
+        }
+        return id;
+    }
+
+    /**
+     * Converte um valor gravado para um ID estavel.
+     *
+     * <p>Aceita tanto um ID quanto o rotulo traduzido de uma versao anterior que
+     * gravou o texto; valores desconhecidos (inclusive vazio) passam direto, para
+     * nao apagar informacao que este formulario nao entende.
+     */
+    private static String normalizeExecution(String stored) {
+        for (int i = 0; i < EXECUTION_IDS.length; i++) {
+            if (EXECUTION_IDS[i].equals(stored)
+                    || Component.translatable(EXECUTION_KEYS[i]).getString().equals(stored)) {
+                return EXECUTION_IDS[i];
+            }
+        }
+        return stored;
+    }
+
+    /**
+     * Avanca para o proximo valor de execucao.
+     *
+     * <p>Um texto vindo de uma versao anterior que nao esteja na lista e
+     * preservado ate este clique; ai o botao comeca pelo primeiro valor.
+     */
+    private void cycleExecution(Button button) {
+        int index = -1;
+        for (int i = 0; i < EXECUTION_IDS.length; i++) {
+            if (EXECUTION_IDS[i].equals(execution)) {
+                index = i;
+                break;
+            }
+        }
+        execution = executionValue(index < 0 ? 0 : (index + 1) % EXECUTION_IDS.length);
+        button.setMessage(Component.literal(executionLabel(execution)));
     }
 
     /** Cria uma caixa de uma linha, com o rotulo desenhado a esquerda. */
@@ -197,7 +334,10 @@ public class SpellFormScreen extends Screen {
         CharacterSheetScreen.drawLabel(graphics, this.font, nameBox.getX(), Component.translatable("screen.tabletoprpg.spell_form.circle").getString(), circleY);
         CharacterSheetScreen.drawLabel(graphics, this.font, nameBox.getX(), Component.translatable("screen.tabletoprpg.sheet_editor.name").getString(), nameBox.getY());
         for (int i = 0; i < FIELD_LABEL_KEYS.length; i++) {
-            CharacterSheetScreen.drawLabel(graphics, this.font, nameBox.getX(), Component.translatable(FIELD_LABEL_KEYS[i]).getString(), fieldBoxes[i].getY());
+            int rowY = i == EXECUTION_ROW ? executionButton.getY()
+                    : i == DESCRIPTION_ROW ? descriptionBox.getY()
+                    : fieldBoxes[i - 1].getY();
+            CharacterSheetScreen.drawLabel(graphics, this.font, nameBox.getX(), Component.translatable(FIELD_LABEL_KEYS[i]).getString(), rowY);
         }
     }
 
@@ -244,10 +384,10 @@ public class SpellFormScreen extends Screen {
             return;
         }
         SheetData.Spell spell = new SheetData.Spell(
-                nameBox.getValue(), circle,
+                nameBox.getValue(), circle, execution,
                 fieldBoxes[0].getValue(), fieldBoxes[1].getValue(),
                 fieldBoxes[2].getValue(), fieldBoxes[3].getValue(),
-                fieldBoxes[4].getValue());
+                descriptionBox.getValue());
         ClientPlayNetworking.send(index < 0 || original == null
                 ? RpgNetworking.SheetSpellPayload.add(targetName, spell)
                 : RpgNetworking.SheetSpellPayload.update(targetName, index, spell));

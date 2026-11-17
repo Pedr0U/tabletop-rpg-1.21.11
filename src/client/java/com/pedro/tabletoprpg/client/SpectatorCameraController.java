@@ -174,6 +174,9 @@ public final class SpectatorCameraController {
     /** Posição da câmera livre (modo Livre). */
     private static Vec3 freeCamPos = Vec3.ZERO;
 
+    /** Origem da câmera livre: limite de voo de 100 blocos a partir daqui. */
+    private static Vec3 freeCamOrigin = Vec3.ZERO;
+
     /** Se a posição da câmera livre já foi inicializada (nos olhos do jogador). */
     private static boolean freeCamInitialized = false;
 
@@ -194,6 +197,9 @@ public final class SpectatorCameraController {
 
     /** Velocidade da câmera livre (blocos por tick). */
     private static final double FREE_SPEED = 0.6;
+
+    /** Distância máxima da câmera livre até sua origem (blocos). */
+    private static final double FREE_MAX_DISTANCE = 100.0;
 
     /** Alvos do carrossel vindos do servidor (sem incluir a si mesmo). */
     private static List<RpgNetworking.SpectatorTargetsPayload.TargetData> targets = List.of();
@@ -285,6 +291,7 @@ public final class SpectatorCameraController {
         freeCamInitialized = false;
         thirdPersonLookInitialized = false;
         freeCamPos = null;
+        freeCamOrigin = null;
         // A câmera de espectador do Mestre é estado da sessão: ela não
         // sobrevive a uma saída do mundo.
         masterSpectator = false;
@@ -325,6 +332,7 @@ public final class SpectatorCameraController {
         targets = List.of();
         targetIndex = 0;
         freeCamPos = null;
+        freeCamOrigin = null;
         freeCamInitialized = false;
         thirdPersonLookInitialized = false;
         wasLocked = false;
@@ -784,6 +792,7 @@ public final class SpectatorCameraController {
                 client.setCameraEntity(client.player);
                 if (!freeCamInitialized) {
                     freeCamPos = client.player.getEyePosition();
+                    freeCamOrigin = freeCamPos;
                     freeCamYaw = client.player.getYRot();
                     freeCamPitch = client.player.getXRot();
                     freeCamInitialized = true;
@@ -874,6 +883,15 @@ public final class SpectatorCameraController {
             // (feedback do usuário). Raycast da posição atual até a nova;
             // se houver bloco no caminho, para logo antes dele.
             freeCamPos = collideFreeCamera(freeCamPos, newPos);
+            // Teto de voo: projetar de volta para a esfera de 100 blocos em
+            // torno da origem, preservando a direção do deslocamento.
+            if (freeCamOrigin != null) {
+                Vec3 offset = freeCamPos.subtract(freeCamOrigin);
+                double distance = offset.length();
+                if (distance > FREE_MAX_DISTANCE) {
+                    freeCamPos = freeCamOrigin.add(offset.scale(FREE_MAX_DISTANCE / distance));
+                }
+            }
         }
         // ensureRigActive (não update direto): o rig pode estar inativo ao
         // entrar no modo Livre (ex.: vindo da 1ª pessoa do próprio jogador,

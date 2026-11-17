@@ -45,6 +45,11 @@ public final class TurnManager {
     private TurnManager() {
     }
 
+    /** Posicao da entrada com a vez, ou -1 quando nao ha turno valido. */
+    public static int currentPosition() {
+        return position;
+    }
+
     /** Marca o inicio de um turno dado manualmente pelo mestre. */
     public static void onTurnGiven(ServerPlayer player) {
         clearPending();
@@ -269,6 +274,7 @@ public final class TurnManager {
     private static void syncTurn(MinecraftServer server) {
         RpgNetworking.sendToAll(server);
         RpgNetworking.sendAuraStateToAll(server);
+        InitiativeSync.sendAll(server);
     }
 
     private static ServerPlayer findOnline(MinecraftServer server, String name) {

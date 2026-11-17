@@ -17,7 +17,6 @@ import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
 import net.minecraft.resources.Identifier;
 import net.minecraft.world.entity.LivingEntity;
-import net.minecraft.world.entity.Mob;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.entity.projectile.ProjectileUtil;
 import net.minecraft.world.level.ClipContext;
@@ -716,7 +715,15 @@ public class TabletopRpgClient implements ClientModInitializer {
                 // Indice invalido cai em Livre: e' o unico modo em que nada
                 // fica travado, entao e' o fallback que menos prende o jogador.
                 int ordinal = payload.modeOrdinal();
+                int previousModeOrdinal = gameModeOrdinal;
                 gameModeOrdinal = (ordinal >= 0 && ordinal <= 2) ? ordinal : 0;
+                InitiativeClientState.setModeActive(gameModeOrdinal > 0);
+                if (previousModeOrdinal >= 0 && previousModeOrdinal != gameModeOrdinal) {
+                    Screen screen = Minecraft.getInstance().screen;
+                    if (screen instanceof InitiativeScreen || screen instanceof InitiativeHudScreen) {
+                        Minecraft.getInstance().setScreen(null);
+                    }
+                }
                 // Log diagnostico (08/10/2026): o repro do carrossel precisa mostrar
                 // em que estado (travado/modo) o cliente ficou ao voltar ao servidor.
                 LOGGER.info("[TabletopRPG-Client] Lock recebido: locked={} modo={}.", locked, gameModeOrdinal);
@@ -973,9 +980,9 @@ public class TabletopRpgClient implements ClientModInitializer {
         // funcionaria, pois a caixa ficava ancorada no jogador congelado.
         AABB box = new AABB(start, end).inflate(1.0);
         EntityHitResult hit = ProjectileUtil.getEntityHitResult(client.player, start, end, box,
-                e -> e instanceof Mob, maxDist * maxDist);
+                e -> e instanceof LivingEntity && e != client.player, maxDist * maxDist);
 
-        // Linha de visão: o mob só é destacado se NENHUM bloco estiver entre a
+        // Linha de visão: a entidade só é destacada se NENHUM bloco estiver entre a
         // câmera e ele (nada de highlight através de paredes). O raycast de
         // blocos vai até o ponto atingido na entidade; se um bloco estiver no
         // caminho, a entidade está atrás de uma parede e não é destacada.

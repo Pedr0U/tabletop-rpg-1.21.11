@@ -340,9 +340,17 @@ public class InitiativeScreen extends Screen {
                 break;
             }
             InitiativeSync.Entry entry = entries.get(i);
+            boolean active = i == InitiativeClientState.activeIndex();
+            if (active) {
+                graphics.fill(x - 3, lineY - 2, x + NUMBER_W + textWidth + 3,
+                        lineY + font.lineHeight + 2, InitiativeHud.ACTIVE_ROW);
+            }
             graphics.drawString(font, (i + 1) + ".", x, lineY, 0xFFFFD700, false);
             String line = Component.translatable("message.tabletoprpg.initiative.list_line",
                     entry.name(), entry.value()).getString();
+            if (active) {
+                line = "►" + line;
+            }
             graphics.drawString(font, font.plainSubstrByWidth(line, textWidth - NUMBER_W),
                     x + NUMBER_W, lineY, 0xFFFFFFFF, false);
             lineY += font.lineHeight + 4;

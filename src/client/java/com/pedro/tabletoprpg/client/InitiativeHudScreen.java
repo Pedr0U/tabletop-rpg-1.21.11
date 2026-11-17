@@ -48,7 +48,7 @@ public class InitiativeHudScreen extends Screen {
 
     @Override
     public void renderBackground(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
-        graphics.fill(0, 0, width, height, 0x66000000);
+        graphics.fill(0, 0, width, height, 0x33000000);
     }
 
     @Override
