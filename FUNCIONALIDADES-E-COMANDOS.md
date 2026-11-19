@@ -89,11 +89,10 @@ Raiz única `/rpg`, **sem aliases**. Todos registrados em
 | `/rpg turn confirm` | só o Mestre | Aceita o próximo turno sugerido na pergunta `[Sim]`; sem pergunta pendente responde `§cNão há confirmação de turno pendente.` O `[Não]` não é um caminho separado: ele roda `/rpg turn pick` e abre o **menu de dar turno** (`InitiativeTurnPickerScreen`) | `MasterCommands.java: onRegister` (`MasterCommands.java: confirmTurn`; `TurnManager.java: confirm`) |
 | `/rpg turn pick` | só o Mestre | Abre no cliente do Mestre o **menu de dar turno** com a lista de iniciativa na ordem dela; um clique manda `turn_give_entry` ao servidor, que confere a posição na lista e dá a vez (entrada de mob vira vez do Mestre). Entrada que saiu da lista responde `§cEssa entrada não está mais na iniciativa.` Antes de abrir o servidor reenvia a lista, e a mesma tela é aberta pelo botão **Dar turno** da `InitiativeScreen` | `MasterCommands.java: onRegister` (`MasterCommands.java: pickTurn`); `TurnManager.java: grantByName`; `RpgNetworking.java: TurnGivePayload` |
 | `/rpg roll` | qualquer jogador | **Lista as perícias da ficha** com valor + atributo de cada uma (não rola nada). São as do modelo em uso: 18 no padrão, quantas o Mestre deixar | `MasterCommands.java: onRegister` (handler `listSkills: listSkills`) |
-| `/rpg roll <perícia>` | qualquer jogador | Rola `1d20 + valor_da_perícia + atributo`, mostrando a conta (`d20 (12) + 2 + 3 = 17`) | `MasterCommands.java: onRegister` (handlers `rollOrSkill: rollOrSkill`, `rollSkill: rollSkill`) |
+| `/rpg roll <perícia>` | qualquer jogador | Rola `1d20 + valor_da_perícia + atributo + bônus_de_proficiência` (bônus conforme PROF./MAES. da ficha, se ligado no modelo), mostrando a conta (`d20 (12) + 2 + 3 + PROF. +5 = 25`). A conta passou a mostrar `PROF.`/`MAES.` e o bônus aplicado (18/11/2026); com o toggle desativado aparece `+0 (desativado)` | `MasterCommands.java: onRegister` (handlers `rollOrSkill: rollOrSkill`, `rollSkill: rollSkill`; cálculo em `MasterCommands.java: periciaTotal`, conta em `MasterCommands.java: periciaResult`) |
 | `/rpg roll <fórmula>` | qualquer jogador | Rola uma fórmula de dados com o motor completo: `d20`, `2d6+3`, `2d6+d4+3`, keep/drop (`4d20kh2`, `4d6dl1`), explosiva (`d6!`, `d6!5`), incremento por dado (`4d6++2`), repetição da fórmula inteira (`4#(2d6+1d8+5)`, `2#d20+5`) e contagem (`10d6>>3`). **Perícia com cauda** (`/rpg roll Pericia 0-2`) também vale, e o sufixo se aplica só à cauda. O descartado aparece riscado. Ver [o parser de dados](#comandos-de-dados-e-ficha) | `MasterCommands.java: onRegister` (handler `rollFormula: rollFormula`); parser e aritmética em `DiceFormula.java`, formatação em `MasterCommands.java: joinParts`, `: appendTermBody`, `: repeatBody`, `: facesBody` |
 | `/rpg openroll [fórmula]` | só o Mestre | Rolagem **pública** (todos veem). Sem argumento, rola `d20` | `MasterCommands.java: onRegister` (handler `openRoll: openRoll`) |
 | `/rpg time <0-24000>` | só o Mestre | Define o horário do mundo em ticks (0 = amanhecer, 6000 = meio-dia, 18000 = meia-noite) | `MasterCommands.java: onRegister` (handler `setWorldTime: setWorldTime`) |
-| `/rpg hoverdistance <1-256>` | só o Mestre | Define, **em blocos**, a distância máxima do destaque de mob para os jogadores | `MasterCommands.java: onRegister` (handler `setHoverDistance: setWorldTime`) |
 | `/rpg session set <nome>` | só o Mestre | Define o nome da sessão; nomes vazios são recusados e o texto é cortado em 64 caracteres | `MasterCommands.java: onRegister` (handler `setSessionName: setSessionName`) |
 | `/rpg insert enemy <tipo> <cam_perm>` | só o Mestre | Invoca um mob 2 blocos à frente do Mestre, na direção do olhar dele. `tipo` aceita `zombie` ou `minecraft:zombie`; a sugestão só oferece criaturas da categoria `MONSTER` (vanilla e de outros mods). `cam_perm` é `true`/`false` | `MasterCommands.java: onRegister` (sugestões `suggestEntityTypes: suggestEntityTypes`, handler `insertEnemy: insertEnemy`) |
 | `/rpg insert camera [nome]` | só o Mestre | **Sem nome**, não define câmera sozinho: arma o pedido e responde `Click a creature to add or remove its camera.` O **próximo clique do Mestre numa criatura** põe (ou tira) aquela criatura do carrossel. **Com nome** (17/11/2026, aceita espaços), dá câmera direto a **todos os mobs com aquele nome exato** que existem no mundo, sem clique — espelha o `/rpg remove camera <nome>`. Se nenhum casar, o chat avisa `Nenhum mob chamado <nome>.` Desde 17/11/2026 o nome é **sugerido no chat** (lista de todos os mobs do mundo, deduplicada), como no `/tp`. Existe para criaturas que **já estão no mundo** — spawnadas normalmente, por `/summon` ou de outros mods —, onde `/rpg insert enemy <tipo> true` não se aplica. O item `Camera Tool` faz o mesmo, sem comando | `MasterCommands.java: onRegister` (handlers `insertCamera`, `insertCameraByName`; `: suggestCameraInsertNames`; `CameraToolManager.java: addCamera`) |
@@ -122,7 +121,11 @@ Raiz única `/rpg`, **sem aliases**. Todos registrados em
   pulada) e, depois da última, volta ao topo e **começa a próxima rodada**. Se a lista mudou durante
   o turno (entrada adicionada, removida ou reordenada, inclusive pelo `delay`), o avanço para
   e o Mestre confirma (`TurnManager.java: endTurn`, `: confirm`). Sem iniciativa ativa o turno
-  continua sendo só o UUID do `SessionManager`.
+  continua sendo só o UUID do `SessionManager`. A vez do mob segue sendo **conduzida pelo Mestre**,
+  mas desde 18/11/2026 a aura não sai mais dele: a entrada guarda o UUID do mob
+  (`InitiativeTracker.java: Entry.mobUuid`), `TurnManager.java: grant` resolve a entidade e reancora
+  a aura nela (`CombatController.java: setActiveMobAnchor`), e `TurnManager.java: reset` limpa ao
+  trocar ou encerrar o turno.
 - **Rodadas (04/11/2026).** A iniciativa começa na **Rodada 1** (`/rpg initiative start`) e o número
   sobe **1** quando o último da lista encerra a vez, voltando o cursor ao primeiro. O número aparece
   no chat (`/rpg initiative list` no cabeçalho e a mensagem "Nova rodada! Rodada N."), no canto direito
@@ -399,18 +402,43 @@ por dado, `DISPLAY_ROUNDS=20` repetições. O RNG é sorteado **depois** de vali
   **Renomear, hoje, não perde nada:** o alinhamento casa por id (`SheetModel.java: align`), então
   trocar o nome de uma perícia preserva o valor e o atributo dela em todas as fichas — apelido não é
   mais necessário.
-- **A fórmula de perícia é `1d20 + valor_da_perícia + atributo`**, em aritmética `long` para não
-  estourar com atributos grandes (`MasterCommands.java: rollSkill`).
+- **A fórmula de perícia é `1d20 + valor_da_perícia + atributo + bônus_de_proficiência`**, em
+  aritmética `long` para não estourar com atributos grandes (`MasterCommands.java: periciaTotal`).
+  O bônus é `Bônus de Proficiência da ficha × multiplicador`: **PROF. = 1×, MAES. = 2×** (MAES
+  substitui PROF., não acumula), ou 0 se a perícia não tiver nenhum dos dois. O toggle **desativar
+  bônus de proficiência** no Sheet Editor (`SheetModel.java: proficiencyEnabled`, padrão ativo)
+  zera o bônus para todas as fichas. A invariante (18/11/2026): **marcar MAES. marca PROF.;
+  desmarcar MAES. mantém PROF.; marcar PROF. mantém MAES.; desmarcar PROF. limpa MAES.**
+  (`SheetData.java: withPericiaMaes`, `: withPericiaProficiencia`, com o mesmo otimista no cliente
+  em `StatusScreen.java: togglePericiaFlag`). A rolagem de iniciativa por perícia herda o bônus
+  (`InitiativeRoller.java: playerRoll` → `MasterCommands.java: periciaResult`). **O breakdown do
+  chat mostra `PROF.`/`MAES.` e o bônus**; desativado, mostra `+0 (desativado)`. A lista `/rpg roll`
+  continua mostrando só valor + atributo.
+
+- **Deslocamento e conversão para blocos (18/11/2026).** Cada ficha tem um campo **Deslocamento**
+  em metros (`SheetData.java: deslocamento`, exibido como `Deslocamento <valor> m` na
+  `StatusScreen`); o valor padrão é 0. O **Sheet Editor** do Mestre tem o campo numérico **blocos
+  por metro** (`SheetModel.java: blocksPerMeter`, padrão `1.0`, ex.: `1.5` = 1 m vira 1,5 blocos).
+  A proporção serve para o alcance do destaque no combate (ver "Destaque (highlight)"); não há
+  limite de deslocamento em **Investigação** (decisão de 18/11/2026). A **ficha de ameaça** usa o
+  mesmo campo numérico em metros (`ThreatSheet.java: Identity.speed`, limite `-999..999`; NBT
+  antigo com texto vira 0). No turno de uma **entrada de mob da iniciativa**, a aura é reancorada
+  na posição do mob só no início da vez e seu raio vem de `Deslocamento da ameaça × blocos por
+  metro` (arredondado, clamp `0..256`); nesse turno aparece só a aura do mob
+  (`TurnManager.java: setupMobTurnAura`, `CombatController.java: getAuraData`).
 - **A iniciativa tem uma fórmula padrão da mesa (04/11/2026).** A tela `Configurar iniciativa` grava a fórmula no modelo do mundo (`SheetModel.java: initiativeFormula`, padrão `1d20`) e ela vale para **jogadores e mobs**. A rolagem é **fórmula padrão + fórmula de iniciativa da ficha** (`InitiativeRoller.java: playerRoll`, `: mobRoll`); o campo Iniciativa da ficha do jogador e da ficha de ameaça guarda essa **fórmula própria** (`SheetData.java: MAX_INITIATIVE_FORMULA`, `ThreatSheet.java: MAX_INITIATIVE_FORMULA`, até 40 caracteres de dados e números, ex.: `2d6+1`), somada à da mesa como parcela (`InitiativeRoller.java: sheetTerm`: `2d6` vira `+2d6`, `-2` e `+3` entram como estão, vazio não soma nada). A fórmula só aceita dados e números (`2d6+3`, `1d20`); nome de atributo ou perícia é recusado e volta a `1d20` (`InitiativeRoller.java: isValidPlainFormula`). Com a caixa "usar iniciativa padrão" **desmarcada** no Sheet Editor, a rolagem volta a ser a perícia marcada como iniciativa.
 - **Rolagem de mobs em lote (06/11/2026).** No menu "Rolar mob", o Mestre marca vários mobs e manda todos num único pacote C2S `initiative_roll_mobs` (`RpgNetworking.java: InitiativeRollMobsPayload`), em vez de um comando por mob. O teto é **64 nomes** por envio (`InitiativeCommands.java: MAX_BULK_ROLL`); o servidor confere Mestre, modo e coleta, ignora nome que saiu da lista ou que já está na iniciativa e faz **uma única** sincronização no fim (`InitiativeCommands.java: rollMobBulk`, `: actionBlockReason`).
 - **Uma entrada por nome na iniciativa (06/11/2026).** A lista não aceita duas entradas com o mesmo nome: jogador e mob entram uma vez só, e a entrada de mob representa o **grupo** (5 zumbis = 1 entrada, que age uma vez por rodada). `InitiativeCommands.add` e o receptor de `initiative_add` respondem `§c%s já está na iniciativa.` para duplicata, e o picker mostra esses nomes esmaecidos com `(já na iniciativa)`.
 - **Visibilidade da rolagem:** o Mestre vê o resultado **só para si** (rolagem secreta); o jogador
   comum envia para o chat público (`MasterCommands.java: rollSkill`). O `/rpg openroll` é
   sempre público.
-- **`/rpg hoverdistance` vale para todo mundo, inclusive para o Mestre.** O servidor envia o mesmo
-  valor para cada jogador conectado, sem tratamento especial para o Mestre
-  (`RpgNetworking.java: sendAuraState`); o padrão é **32 blocos** (`SessionManager.java: hoverDistance`) e o valor é
-  limitado a 1..256 (`: setHoverDistance`).
+- **O alcance do destaque vem da própria ficha (18/11/2026).** O antigo comando de distância
+  de destaque foi **removido**; não há mais config global de distância. O servidor calcula o alcance de cada jogador
+  como `Deslocamento da própria ficha × blocos por metro do modelo` (`RpgNetworking.java:
+  sendHoverReach`), arredonda para blocos inteiros e limita a 0..256. **O Mestre e quem não tem
+  ficha recebem 0**, que desativa o hover (`TabletopRpgClient.java: tickHover`); o destaque é só
+  para jogadores. O valor é reenviado no JOIN e a cada mudança da ficha ou do modelo. A origem do
+  raycast continua sendo a **posição atual da câmera**, não uma âncora.
 
 ### O que o `/rpg` mostra no chat
 
@@ -633,9 +661,9 @@ não "voltar" sozinho durante a transição (`SessionManager.java: playersCanPla
   destacado (`TabletopRpgClient.java: tickHover`).
 - Desde 17/11/2026 vale para **qualquer criatura viva** (`LivingEntity`) exceto o próprio
   jogador local — ou seja, **jogadores também ganham contorno no combate**, não só mobs
-  (`TabletopRpgClient.java: tickHover`). Continua dentro da distância definida por
-  `/rpg hoverdistance` (a remoção desse comando e o uso do deslocamento/alcance ficam para a
-  Fase 2) e é **desligado enquanto a câmera de espectador está ativa** (`: tickHover`).
+  (`TabletopRpgClient.java: tickHover`). Continua dentro do **alcance calculado pela própria
+  ficha** (`Deslocamento × blocos por metro`, ver `RpgNetworking.java: sendHoverReach`) e é
+  **desligado enquanto a câmera de espectador está ativa** (`: tickHover`).
 - **O destaque de mira só existe no modo `COMBATE`** (PARTE 3): nos modos `FREE` e `INVESTIGATION`
   não há contorno de entidade. O cliente não só para de enviar o hover fora do combate — ele
   **zera o id** que o `EntityRendererMixin` lê, para o contorno sumir no mesmo tick da troca de modo
@@ -1009,7 +1037,7 @@ reiniciar**, o seguinte é perdido e precisa ser refeito:
 | Quem é o Mestre | `/rpg master claim` |
 | Modo de jogo | `/rpg mode <modo>` |
 | Turno ativo | `/rpg turn give <nome>` (jogador online ou entrada de mob da iniciativa) |
-| Distância do destaque | `/rpg hoverdistance <n>` (padrão: 32) |
+| Alcance do destaque | vem da ficha: `Deslocamento × blocos por metro`; se o modelo/ficha voltar ao padrão, o alcance volta com ele |
 | Permissão de quebra de blocos | botão `Players break blocks` em `Settings` (padrão: desligado) |
 | Permissão de colocação de blocos | botão `Players place blocks` em `Settings` (padrão: desligado) |
 | Clima alvo | botão `Weather` em `Settings` (padrão: sol) |

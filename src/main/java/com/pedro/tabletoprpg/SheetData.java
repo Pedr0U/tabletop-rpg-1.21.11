@@ -83,7 +83,9 @@ public record SheetData(
         int attributeValueMax,
         int periciaValueMax,
         Inventory inventory,
-        Spellbook spellbook
+        Spellbook spellbook,
+        int deslocamento,
+        int proficienciaBonus
     ) {
 
     /** Teto de caracteres dos textos livres (nome, raça, classe). */
@@ -175,7 +177,8 @@ public record SheetData(
      */
     public static final List<String> LABELLED_FIELDS = List.of(
             "playerName", "characterName", "race", "characterClass", "background",
-            "hp", "mana", "level", "xp", "xptext", "ca", "initiative"
+            "hp", "mana", "level", "xp", "xptext", "ca", "initiative",
+            "deslocamento", "proficienciaBonus"
     );
     /**
      * Campos numericos que NAO sao atributos: vida, mana e progressao.
@@ -188,7 +191,7 @@ public record SheetData(
      */
     public static final List<String> NUMERIC_FIELDS = List.of(
             "hp", "hpMax", "mana", "manaMax",
-            "level", "xp"
+            "level", "xp", "deslocamento", "proficienciaBonus"
     );
 
     private static final StreamCodec<FriendlyByteBuf, List<Skill>> SKILLS_STREAM_CODEC =
@@ -243,6 +246,8 @@ public record SheetData(
         // inventario: ler e escrever em ordem diferente continua compilando e
         // quebra so em runtime, e o round-trip do SheetModelCodecTest e o que pega.
         Spellbook.STREAM_CODEC.encode(buf, sheet.spellbook());
+        ByteBufCodecs.VAR_INT.encode(buf, sheet.deslocamento());
+        ByteBufCodecs.VAR_INT.encode(buf, sheet.proficienciaBonus());
     };
 
     private static final StreamDecoder<FriendlyByteBuf, SheetData> DECODER = buf -> new SheetData(
@@ -256,7 +261,9 @@ public record SheetData(
             ByteBufCodecs.VAR_INT.decode(buf),
             ByteBufCodecs.VAR_INT.decode(buf),
             Inventory.STREAM_CODEC.decode(buf),
-            Spellbook.STREAM_CODEC.decode(buf)
+            Spellbook.STREAM_CODEC.decode(buf),
+            ByteBufCodecs.VAR_INT.decode(buf),
+            ByteBufCodecs.VAR_INT.decode(buf)
     );
 
     public static final StreamCodec<FriendlyByteBuf, SheetData> STREAM_CODEC =
@@ -376,7 +383,9 @@ public record SheetData(
             Codec.STRING.optionalFieldOf("id", "").forGetter(Pericia::id),
             Codec.STRING.optionalFieldOf("name", "").forGetter(Pericia::name),
             Codec.INT.optionalFieldOf("value", 0).forGetter(Pericia::value),
-            Codec.STRING.optionalFieldOf("attribute", "").forGetter(Pericia::attributeId)
+            Codec.STRING.optionalFieldOf("attribute", "").forGetter(Pericia::attributeId),
+            Codec.BOOL.optionalFieldOf("proficiente", false).forGetter(Pericia::proficiente),
+            Codec.BOOL.optionalFieldOf("maes", false).forGetter(Pericia::maes)
     ).apply(i, Pericia::new));
 
     /**
@@ -493,7 +502,9 @@ public record SheetData(
             // codec, pela mesma raza do inventario. Um save anterior a pagina 3
             // abre com Spellbook vazio, nunca quebrado.
             SPELLBOOK_CODEC.optionalFieldOf("spellbook", new Spellbook(List.of(), "", 0))
-                    .forGetter(SheetData::spellbook)
+                    .forGetter(SheetData::spellbook),
+            Codec.INT.optionalFieldOf("deslocamento", 0).forGetter(SheetData::deslocamento),
+            Codec.INT.optionalFieldOf("proficienciaBonus", 0).forGetter(SheetData::proficienciaBonus)
     ).apply(i, SheetData::new));
 
     /**
@@ -539,6 +550,16 @@ public record SheetData(
         // [Spellbook.CD_MIN, Spellbook.CD_MAX]; a lista e normalizada pelo
         // construtor de Spellbook.
         spellbook = spellbook == null ? new Spellbook(List.of(), "", 0) : spellbook;
+        deslocamento = clamp(deslocamento, SheetModel.VALUE_LIMIT_MIN, SheetModel.VALUE_LIMIT_MAX);
+        proficienciaBonus = clamp(proficienciaBonus, SheetModel.VALUE_LIMIT_MIN, SheetModel.VALUE_LIMIT_MAX);
+    }
+
+    /** Copia com os campos novos no padrao, para os call sites anteriores a Fase 2. */
+    public SheetData(Identity identity, Vitals vitals, Progress progress, Attributes attributes,
+                     List<Skill> skills, List<Pericia> pericias, int attributeValueMin,
+                     int attributeValueMax, int periciaValueMax, Inventory inventory, Spellbook spellbook) {
+        this(identity, vitals, progress, attributes, skills, pericias, attributeValueMin,
+                attributeValueMax, periciaValueMax, inventory, spellbook, 0, 0);
     }
 
     // ------------------------------------------------------------------
@@ -1061,17 +1082,21 @@ public record SheetData(
     /**
      * O que um {@code SheetPericiaPayload} quer fazer com a perícia.
      *
-     * <p>Só duas operações, porque a lista de perícias é <b>fixa</b>: não há
-     * como criar nem remover (decisão do usuário em 25/09/2026 - "perícias são
-     * fixas que serão personalizados para cada sistema"). O que muda é o valor
-     * (limitado pelo Mestre, ver {@link Pericia#VALUE_MAX}) e o atributo que ela
-     * soma.
+     * <p>A lista de perícias é <b>fixa</b>: não há como criar nem remover
+     * (decisão do usuário em 25/09/2026 - "perícias são fixas que serão
+     * personalizados para cada sistema"). O que muda é o valor (limitado pelo
+     * Mestre, ver {@link Pericia#VALUE_MAX}), o atributo que ela soma e as marcas
+     * de proficiência e maestria.
      */
     public enum PericiaOp {
         /** Muda só o valor da perícia. */
         SET_VALUE,
         /** Muda só o atributo que a perícia soma. */
         SET_ATTRIBUTE,
+        /** Muda a proficiência da perícia. */
+        SET_PROFICIENTE,
+        /** Muda a maestria da perícia. */
+        SET_MAES,
         /**
          * Valor invalido vindo da rede. <b>Nao fazer nada com ele.</b>
          *
@@ -1119,12 +1144,15 @@ public record SheetData(
      * e o nome já identifica a perícia na tela. Se um dia quiser, é um campo a
      * mais aqui e no codec.
      */
-    public record Pericia(String id, String name, int value, String attributeId) {
+    public record Pericia(String id, String name, int value, String attributeId,
+                          boolean proficiente, boolean maes) {
         public static final StreamCodec<FriendlyByteBuf, Pericia> STREAM_CODEC = StreamCodec.composite(
                 ByteBufCodecs.stringUtf8(32), Pericia::id,
                 ByteBufCodecs.stringUtf8(SKILL_MAX), Pericia::name,
                 ByteBufCodecs.VAR_INT, Pericia::value,
                 ByteBufCodecs.stringUtf8(32), Pericia::attributeId,
+                ByteBufCodecs.BOOL, Pericia::proficiente,
+                ByteBufCodecs.BOOL, Pericia::maes,
                 Pericia::new
         );
 
@@ -1164,6 +1192,11 @@ public record SheetData(
             // a ficha inteira. String vazia significa "ainda nao sabe com qual
             // atributo soma" e e resolvido por SheetModel.align.
             attributeId = cleanId(attributeId);
+        }
+
+        /** Copia com proficiencia e maestria desligadas, para os call sites anteriores a Fase 2. */
+        public Pericia(String id, String name, int value, String attributeId) {
+            this(id, name, value, attributeId, false, false);
         }
 
         /** Total que esta pericia soma na rolagem: valor + atributo. */
@@ -1797,7 +1830,7 @@ public record SheetData(
         SheetModel model = SheetModelHolder.current();
         List<Pericia> out = new ArrayList<>(model.periciaCount());
         for (SheetModel.PericiaDef def : model.pericias()) {
-            out.add(new Pericia(def.id(), def.name(), 0, def.attributeId()));
+            out.add(new Pericia(def.id(), def.name(), 0, def.attributeId(), false, false));
         }
         return List.copyOf(out);
     }
@@ -1964,7 +1997,9 @@ public record SheetData(
                 Inventory.EMPTY,
                 // 01/10/2026: a ficha nova nasce sem magias, sem atributo
                 // de conjuracao e com CD 0.
-                new Spellbook(List.of(), "", 0)
+                new Spellbook(List.of(), "", 0),
+                0,
+                0
         );
     }
 
@@ -2004,20 +2039,20 @@ public record SheetData(
 
         return switch (key) {
             case "charactername" -> new SheetData(identity.withCharacterName(value), vitals, progress,
-                    attributes, skills, pericias, attributeValueMin, attributeValueMax, periciaValueMax, inventory, spellbook);
+                    attributes, skills, pericias, attributeValueMin, attributeValueMax, periciaValueMax, inventory, spellbook, deslocamento, proficienciaBonus);
             case "race" -> new SheetData(identity.withRace(value), vitals, progress,
-                    attributes, skills, pericias, attributeValueMin, attributeValueMax, periciaValueMax, inventory, spellbook);
+                    attributes, skills, pericias, attributeValueMin, attributeValueMax, periciaValueMax, inventory, spellbook, deslocamento, proficienciaBonus);
             case "characterclass" -> new SheetData(identity.withCharacterClass(value), vitals, progress,
-                    attributes, skills, pericias, attributeValueMin, attributeValueMax, periciaValueMax, inventory, spellbook);
+                    attributes, skills, pericias, attributeValueMin, attributeValueMax, periciaValueMax, inventory, spellbook, deslocamento, proficienciaBonus);
             case "background" -> new SheetData(identity.withBackground(value), vitals, progress,
-                    attributes, skills, pericias, attributeValueMin, attributeValueMax, periciaValueMax, inventory, spellbook);
+                    attributes, skills, pericias, attributeValueMin, attributeValueMax, periciaValueMax, inventory, spellbook, deslocamento, proficienciaBonus);
             // 29/09/2026: nome do jogador dono da ficha. A chave chega como
             // "playerName" e o switch compara em minuscula (key), igual aos
             // casos acima. A permissao e a mesma de todos os outros campos de
             // texto: quem aplica este metodo ja passou por canEditSheet no
             // servidor, que libera o dono da ficha e o Mestre.
             case "playername" -> new SheetData(identity.withPlayerName(value), vitals, progress,
-                    attributes, skills, pericias, attributeValueMin, attributeValueMax, periciaValueMax, inventory, spellbook);
+                    attributes, skills, pericias, attributeValueMin, attributeValueMax, periciaValueMax, inventory, spellbook, deslocamento, proficienciaBonus);
             // 30/09/2026: os dois textos longos da aba Info/Inventory. Mesmo
             // caminho dos casos acima (chave em minuscula no `key`, permissao ja
             // liberada por canEditSheet no servidor, teto por cleanText no
@@ -2025,9 +2060,9 @@ public record SheetData(
             // atributo: sem estes casos o Appearance cairia la e viraria um
             // atributo inexistente.
             case "appearance" -> new SheetData(identity.withAppearance(value), vitals, progress,
-                    attributes, skills, pericias, attributeValueMin, attributeValueMax, periciaValueMax, inventory, spellbook);
+                    attributes, skills, pericias, attributeValueMin, attributeValueMax, periciaValueMax, inventory, spellbook, deslocamento, proficienciaBonus);
             case "backstory" -> new SheetData(identity.withBackstory(value), vitals, progress,
-                    attributes, skills, pericias, attributeValueMin, attributeValueMax, periciaValueMax, inventory, spellbook);
+                    attributes, skills, pericias, attributeValueMin, attributeValueMax, periciaValueMax, inventory, spellbook, deslocamento, proficienciaBonus);
 
             // 30/09/2026 (FASE 2B): o limite de peso do inventario e um texto
             // que o jogador digita, entao vem pelo mesmo caminho dos outros
@@ -2076,7 +2111,7 @@ public record SheetData(
             case "level" -> new SheetData(identity, vitals,
                     new Progress(parseInt(value, progress.level()), progress.xp(), progress.xpText(),
                             progress.ca(), progress.initiativeFormula(), progress.useDefaultInitiative()),
-                    attributes, skills, pericias, attributeValueMin, attributeValueMax, periciaValueMax, inventory, spellbook);
+                    attributes, skills, pericias, attributeValueMin, attributeValueMax, periciaValueMax, inventory, spellbook, deslocamento, proficienciaBonus);
             // 01/10/2026: o CA (Classe de Armadura), na mesma linha do Level na
             // ficha. Fica ANTES do `default` pelo mesmo motivo do "level": sem
             // esta linha "ca" cairia em attributes.withValue, que devolveria a
@@ -2086,7 +2121,13 @@ public record SheetData(
                     new Progress(progress.level(), progress.xp(), progress.xpText(),
                             parseInt(value, progress.ca()), progress.initiativeFormula(),
                             progress.useDefaultInitiative()),
-                    attributes, skills, pericias, attributeValueMin, attributeValueMax, periciaValueMax, inventory, spellbook);
+                    attributes, skills, pericias, attributeValueMin, attributeValueMax, periciaValueMax, inventory, spellbook, deslocamento, proficienciaBonus);
+            case "deslocamento" -> new SheetData(identity, vitals, progress, attributes, skills, pericias,
+                    attributeValueMin, attributeValueMax, periciaValueMax, inventory, spellbook,
+                    parseInt(value, deslocamento), proficienciaBonus);
+            case "proficienciabonus" -> new SheetData(identity, vitals, progress, attributes, skills, pericias,
+                    attributeValueMin, attributeValueMax, periciaValueMax, inventory, spellbook,
+                    deslocamento, parseInt(value, proficienciaBonus));
             // Iniciativa do personagem: formula propria (dados e numeros, ex.:
             // "2d6+1") somada a formula padrao da mesa (04/11/2026). Formula nao
             // reconhecida nao e gravada (devolve a propria ficha, e o servidor nao
@@ -2096,13 +2137,13 @@ public record SheetData(
                     ? new SheetData(identity, vitals,
                             new Progress(progress.level(), progress.xp(), progress.xpText(), progress.ca(),
                                     InitiativeRoller.compact(value), progress.useDefaultInitiative()),
-                            attributes, skills, pericias, attributeValueMin, attributeValueMax, periciaValueMax, inventory, spellbook)
+                            attributes, skills, pericias, attributeValueMin, attributeValueMax, periciaValueMax, inventory, spellbook, deslocamento, proficienciaBonus)
                     : this;
             case "usedefaultinitiative" -> new SheetData(identity, vitals,
                     new Progress(progress.level(), progress.xp(), progress.xpText(), progress.ca(),
                             progress.initiativeFormula(),
                             parseBoolean(value, progress.useDefaultInitiative())),
-                    attributes, skills, pericias, attributeValueMin, attributeValueMax, periciaValueMax, inventory, spellbook);
+                    attributes, skills, pericias, attributeValueMin, attributeValueMax, periciaValueMax, inventory, spellbook, deslocamento, proficienciaBonus);
             // Com o modelo em modo TEXT, o campo da barra mostra o texto que o
             // Mestre digitou (ex.: "Fiel aogrupo"). O numero continua guardado
             // para quando o modelo voltar para NUMBER.
@@ -2110,12 +2151,12 @@ public record SheetData(
                 ? new SheetData(identity, vitals, new Progress(progress.level(), progress.xp(), value,
                         progress.ca(), progress.initiativeFormula(), progress.useDefaultInitiative()),
                         attributes, skills, pericias,
-                            attributeValueMin, attributeValueMax, periciaValueMax, inventory, spellbook)
+                            attributeValueMin, attributeValueMax, periciaValueMax, inventory, spellbook, deslocamento, proficienciaBonus)
                     : new SheetData(identity, vitals,
                 new Progress(progress.level(), parseInt(value, progress.xp()), progress.xpText(),
                         progress.ca(), progress.initiativeFormula(), progress.useDefaultInitiative()),
                             attributes, skills, pericias,
-                            attributeValueMin, attributeValueMax, periciaValueMax, inventory, spellbook);
+                            attributeValueMin, attributeValueMax, periciaValueMax, inventory, spellbook, deslocamento, proficienciaBonus);
 
             // O texto do XP vem num campo SEPARADO do numero, e nao no mesmo
             // "xp": e o que a tela de Status abre em modo TEXT. Sem este caso o
@@ -2131,7 +2172,7 @@ public record SheetData(
                 ? new SheetData(identity, vitals, new Progress(progress.level(), progress.xp(), value,
                         progress.ca(), progress.initiativeFormula(), progress.useDefaultInitiative()),
                         attributes, skills, pericias,
-                            attributeValueMin, attributeValueMax, periciaValueMax, inventory, spellbook)
+                            attributeValueMin, attributeValueMax, periciaValueMax, inventory, spellbook, deslocamento, proficienciaBonus)
                     : this;
 
             // Qualquer outra chave e um id de atributo. O que decide se ela
@@ -2146,12 +2187,12 @@ public record SheetData(
 
     private SheetData replaceVitals(Vitals newVitals) {
         return new SheetData(identity, newVitals, progress, attributes, skills, pericias,
-                attributeValueMin, attributeValueMax, periciaValueMax, inventory, spellbook);
+                attributeValueMin, attributeValueMax, periciaValueMax, inventory, spellbook, deslocamento, proficienciaBonus);
     }
 
     private SheetData replaceAttributes(Attributes newAttributes) {
         return new SheetData(identity, vitals, progress, newAttributes, skills, pericias,
-                attributeValueMin, attributeValueMax, periciaValueMax, inventory, spellbook);
+                attributeValueMin, attributeValueMax, periciaValueMax, inventory, spellbook, deslocamento, proficienciaBonus);
     }
 
     /**
@@ -2180,14 +2221,14 @@ public record SheetData(
         }
         if (updated) {
             return new SheetData(identity, vitals, progress, attributes, next, pericias,
-                    attributeValueMin, attributeValueMax, periciaValueMax, inventory, spellbook);
+                    attributeValueMin, attributeValueMax, periciaValueMax, inventory, spellbook, deslocamento, proficienciaBonus);
         }
         if (skills.size() >= MAX_SKILLS) {
             return this; // lista cheia
         }
         next.add(new Skill(cleanName, cleanDesc));
         return new SheetData(identity, vitals, progress, attributes, next, pericias,
-                attributeValueMin, attributeValueMax, periciaValueMax, inventory, spellbook);
+                attributeValueMin, attributeValueMax, periciaValueMax, inventory, spellbook, deslocamento, proficienciaBonus);
     }
 
     /**
@@ -2231,7 +2272,7 @@ public record SheetData(
             }
         }
         return new SheetData(identity, vitals, progress, attributes, next, pericias,
-                attributeValueMin, attributeValueMax, periciaValueMax, inventory, spellbook);
+                attributeValueMin, attributeValueMax, periciaValueMax, inventory, spellbook, deslocamento, proficienciaBonus);
     }
 
     /**
@@ -2248,7 +2289,8 @@ public record SheetData(
      */
     public SheetData withPericiaValue(String periciaId, int value) {
         return mutatePericia(periciaId, existing ->
-                new Pericia(existing.id(), existing.name(), value, existing.attributeId()));
+                new Pericia(existing.id(), existing.name(), value, existing.attributeId(),
+                    existing.proficiente(), existing.maes()));
     }
 
     /**
@@ -2265,7 +2307,26 @@ public record SheetData(
             return this;
         }
         return mutatePericia(periciaId, existing ->
-                new Pericia(existing.id(), existing.name(), existing.value(), attributeId));
+                new Pericia(existing.id(), existing.name(), existing.value(), attributeId,
+                    existing.proficiente(), existing.maes()));
+    }
+
+    /**
+     * Muda a proficiência de uma perícia. Desmarcar PROF. também desmarca MAES.
+     */
+    public SheetData withPericiaProficiencia(String periciaId, boolean proficiente) {
+        return mutatePericia(periciaId, existing ->
+                new Pericia(existing.id(), existing.name(), existing.value(), existing.attributeId(),
+                    proficiente, proficiente && existing.maes()));
+    }
+
+    /**
+     * Muda a maestria de uma perícia. Marcar MAES. também marca PROF.
+     */
+    public SheetData withPericiaMaes(String periciaId, boolean maes) {
+        return mutatePericia(periciaId, existing ->
+                new Pericia(existing.id(), existing.name(), existing.value(), existing.attributeId(),
+                    maes || existing.proficiente(), maes));
     }
 
     /** Altera UM campo de uma perícia existente; nunca cria nem remove. */
@@ -2286,7 +2347,7 @@ public record SheetData(
             }
         }
         return changed ? new SheetData(identity, vitals, progress, attributes, skills, next,
-                attributeValueMin, attributeValueMax, periciaValueMax, inventory, spellbook) : this;
+                attributeValueMin, attributeValueMax, periciaValueMax, inventory, spellbook, deslocamento, proficienciaBonus) : this;
     }
 
     /** Remove uma skill pelo nome (comparação sem diferenciar maiusculas). */
@@ -2305,7 +2366,7 @@ public record SheetData(
             next.add(existing);
         }
         return removed ? new SheetData(identity, vitals, progress, attributes, next, pericias,
-                attributeValueMin, attributeValueMax, periciaValueMax, inventory, spellbook) : this;
+                attributeValueMin, attributeValueMax, periciaValueMax, inventory, spellbook, deslocamento, proficienciaBonus) : this;
     }
 
     /**
@@ -2339,7 +2400,7 @@ public record SheetData(
         List<Skill> next = new ArrayList<>(skills);
         next.add(to, next.remove(from));
         return new SheetData(identity, vitals, progress, attributes, next, pericias,
-                attributeValueMin, attributeValueMax, periciaValueMax, inventory, spellbook);
+                attributeValueMin, attributeValueMax, periciaValueMax, inventory, spellbook, deslocamento, proficienciaBonus);
     }
 
     /**
@@ -2357,7 +2418,8 @@ public record SheetData(
             return this;
         }
         return new SheetData(identity, vitals, progress, attributes, skills, pericias,
-                attributeValueMin, attributeValueMax, periciaValueMax, next, spellbook);
+                attributeValueMin, attributeValueMax, periciaValueMax, next, spellbook,
+                deslocamento, proficienciaBonus);
     }
 
     /**
@@ -2373,7 +2435,8 @@ public record SheetData(
             return this;
         }
         return new SheetData(identity, vitals, progress, attributes, skills, pericias,
-                attributeValueMin, attributeValueMax, periciaValueMax, inventory, next);
+                attributeValueMin, attributeValueMax, periciaValueMax, inventory, next,
+                deslocamento, proficienciaBonus);
     }
 
     /** Acrescenta uma magia no fim. Com a lista cheia devolve a propria ficha. */
@@ -2476,6 +2539,8 @@ public record SheetData(
             // pelo mesmo motivo de level/xp: sem ele, "ca" seria lido como id de
             // atributo e devolveria 0 sempre.
             case "ca" -> progress.ca();
+            case "deslocamento" -> deslocamento;
+            case "proficienciabonus" -> proficienciaBonus;
             // 01/10/2026 (pagina 3): a CD das magias. Entra no switch antes do
             // `default` pelo mesmo motivo de hp/level: sem esta linha, "cd" cairia
             // em `attributes.valueOf("cd")` e a caixa mostraria 0 sempre.
@@ -2899,7 +2964,8 @@ public record SheetData(
             // antiga (18 pericias, todas sem id) colapsa para uma.
             String id = pericia.id().isEmpty() ? freshPericiaId(out) : pericia.id();
             if (seen.add(id.toLowerCase(Locale.ROOT))) {
-                out.add(new Pericia(id, pericia.name(), pericia.value(), pericia.attributeId()));
+                out.add(new Pericia(id, pericia.name(), pericia.value(), pericia.attributeId(),
+                        pericia.proficiente(), pericia.maes()));
             }
         }
         return List.copyOf(out);
@@ -2965,7 +3031,8 @@ public record SheetData(
             int limited = clamp(pericia.value(), 0, max);
             changed = changed || limited != pericia.value();
             out.add(limited == pericia.value() ? pericia
-                    : new Pericia(pericia.id(), pericia.name(), limited, pericia.attributeId()));
+                    : new Pericia(pericia.id(), pericia.name(), limited, pericia.attributeId(),
+                            pericia.proficiente(), pericia.maes()));
         }
         return changed ? List.copyOf(out) : source;
     }

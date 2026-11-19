@@ -11,6 +11,7 @@ import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
 
 import java.util.List;
+import java.util.UUID;
 
 /**
  * Estado da iniciativa enviado do servidor para todos os clientes (Fase 3).
@@ -28,12 +29,13 @@ public final class InitiativeSync {
     }
 
     /** Um participante, ja na ordem de exibicao (maior valor primeiro). */
-    public record Entry(String name, boolean mob, int value) {
+    public record Entry(String name, boolean mob, int value, UUID mobUuid) {
         public static final StreamCodec<FriendlyByteBuf, Entry> STREAM_CODEC = StreamCodec.composite(
                 ByteBufCodecs.stringUtf8(MAX_NAME), Entry::name,
                 ByteBufCodecs.BOOL, Entry::mob,
                 ByteBufCodecs.VAR_INT, Entry::value,
-                Entry::new
+                ByteBufCodecs.stringUtf8(36), entry -> entry.mobUuid() == null ? "" : entry.mobUuid().toString(),
+                (name, mob, value, uuid) -> new Entry(name, mob, value, uuid.isEmpty() ? null : UUID.fromString(uuid))
         );
     }
 

@@ -44,7 +44,7 @@ import java.util.UUID;
  *   <li>{@link DayNightCycleStatePayload} (S2C): servidor responde com o estado atual do ciclo.</li>
  *   <li>{@link AuraStatePayload} (S2C): posições das auras de limite de movimentação (círculos azuis).</li>
  *   <li>{@link HoverPayload} (C2S): entidade sob o crosshair do jogador (highlight Glowing).</li>
- *   <li>{@link HoverConfigPayload} (S2C): distância máxima do highlight para o jogador (mestre: ilimitado).</li>
+ *   <li>{@link HoverConfigPayload} (S2C): alcance do highlight, calculado pela própria ficha do jogador.</li>
  *   <li>{@link BlockBreakSettingPayload} (C2S): mestre libera/bloqueia a quebra de blocos pelos players.</li>
  *   <li>{@link BlockBreakSettingQueryPayload} (C2S): cliente pede o estado da permissão de quebra (ao abrir as Settings).</li>
  *   <li>{@link BlockBreakSettingStatePayload} (S2C): estado atual da permissão de quebra (resposta/broadcast).</li>
@@ -514,14 +514,8 @@ public final class RpgNetworking {
     }
 
     /**
-     * Servidor -> Cliente: distância máxima (em blocos) do highlight para este
-     * jogador. <b>Todos recebem o mesmo valor</b>, inclusive o mestre: o que vale e
-     * {@link SessionManager#getHoverDistance()}, ajustado por /rpg hoverdistance
-     * (padrao 32). Antes este texto afirmava que o mestre recebia "um valor alto
-     * (ilimitado na pratica)" e a memoria do projeto falava em 1024 blocos — nao
-     * existe 1024 em lugar nenhum do codigo. Decisao do usuario em 27/09/2026: o
-     * comportamento atual (mesmo valor para todos) foi mantido e so o texto foi
-     * corrigido.
+     * Servidor -> Cliente: alcance (em blocos) do highlight da propria ficha do
+     * jogador. Mestre e jogador sem ficha recebem zero, que desativa o hover.
      */
     public record HoverConfigPayload(int maxDistance) implements CustomPacketPayload {
         public static final Type<HoverConfigPayload> TYPE = new Type<>(TabletopRpg.id("hover_config"));
@@ -1228,6 +1222,18 @@ public final class RpgNetworking {
             return new SheetPericiaPayload(targetName, periciaId, SheetData.PericiaOp.SET_ATTRIBUTE, 0, attributeId);
         }
 
+        /** Atalho: marcar ou desmarcar a proficiência da perícia. */
+        public static SheetPericiaPayload setProficiencia(String targetName, String periciaId, boolean proficiente) {
+            return new SheetPericiaPayload(targetName, periciaId, SheetData.PericiaOp.SET_PROFICIENTE,
+                    proficiente ? 1 : 0, "");
+        }
+
+        /** Atalho: marcar ou desmarcar a maestria da perícia. */
+        public static SheetPericiaPayload setMaes(String targetName, String periciaId, boolean maes) {
+            return new SheetPericiaPayload(targetName, periciaId, SheetData.PericiaOp.SET_MAES,
+                    maes ? 1 : 0, "");
+        }
+
         @Override
         public Type<? extends CustomPacketPayload> type() {
             return TYPE;
@@ -1931,7 +1937,7 @@ public final class RpgNetworking {
             // levantaria o caido na frente dele. Manda o retrato atual de todos
             // os jogadores conectados para quem acabou de entrar.
             sendDownedSnapshotTo(handler.getPlayer());
-            sendHoverConfigToPlayer(handler.getPlayer());
+            sendHoverReach(handler.getPlayer());
             sendSpectatorTargetsToPlayer(handler.getPlayer());
             sendActivePlayerToPlayer(handler.getPlayer());
             // A aura (barreira azul) NAO era reenviada no JOIN: quem reconectava
@@ -2309,6 +2315,8 @@ public final class RpgNetworking {
             SheetData updated = switch (payload.op() == null ? SheetData.PericiaOp.INVALID : payload.op()) {
                 case SET_VALUE -> current.withPericiaValue(payload.periciaId(), payload.value());
                 case SET_ATTRIBUTE -> current.withPericiaAttribute(payload.periciaId(), payload.attributeId());
+                case SET_PROFICIENTE -> current.withPericiaProficiencia(payload.periciaId(), payload.value() != 0);
+                case SET_MAES -> current.withPericiaMaes(payload.periciaId(), payload.value() != 0);
                 case INVALID -> current;
             };
             if (updated == current) {
@@ -2700,6 +2708,7 @@ public final class RpgNetworking {
                 sendSheetTo(player, target);
             }
         }
+        sendHoverReach(target);
     }
 
     // ------------------------------------------------------------------
@@ -3775,6 +3784,7 @@ public final class RpgNetworking {
         for (ServerPlayer player : server.getPlayerList().getPlayers()) {
             if (player.connection != null) {
                 ServerPlayNetworking.send(player, payload);
+                sendHoverReach(player);
             }
         }
     }
@@ -3855,23 +3865,26 @@ public final class RpgNetworking {
         ServerPlayNetworking.send(player, payload);
     }
 
-    /** Envia a distância do highlight para um jogador (vale para todos, inclusive o mestre). */
-    public static void sendHoverConfigToPlayer(ServerPlayer player) {
+    /**
+     * Calcula e envia o alcance do highlight para um jogador.
+     *
+     * <p>O valor vem de {@code deslocamento * blocksPerMeter} da propria ficha,
+     * arredondado para blocos inteiros e limitado a 0..256. Zero tambem e o
+     * valor de mestre e jogador sem ficha, o que desativa o hover no cliente.
+     */
+    private static void sendHoverReach(ServerPlayer player) {
         if (player == null || player.connection == null) {
             return;
         }
-        int maxDistance = SessionManager.getHoverDistance();
+        int maxDistance = 0;
+        if (!SessionManager.isMaster(player)) {
+            SheetData sheet = SessionManager.getSheet(player.getUUID());
+            if (sheet != null) {
+                float raw = sheet.deslocamento() * SheetModelHolder.current().blocksPerMeter();
+                maxDistance = Math.max(0, Math.min(256, Math.round(raw)));
+            }
+        }
         ServerPlayNetworking.send(player, new HoverConfigPayload(maxDistance));
-    }
-
-    /** Envia a distância do highlight para todos os jogadores. */
-    public static void sendHoverConfigToAll(MinecraftServer server) {
-        if (server == null) {
-            return;
-        }
-        for (ServerPlayer player : server.getPlayerList().getPlayers()) {
-            sendHoverConfigToPlayer(player);
-        }
     }
 
     /** Envia o estado atual da permissão de quebra de blocos para todos os jogadores. */

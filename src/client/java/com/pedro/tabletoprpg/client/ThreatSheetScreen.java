@@ -397,7 +397,7 @@ public class ThreatSheetScreen extends Screen {
             values.put("displayName", sheet.identity().displayName());
             values.put("type", sheet.identity().type());
             values.put("size", sheet.identity().size());
-            values.put("speed", sheet.identity().speed());
+            values.put("speed", Integer.toString(sheet.identity().speed()));
             values.put("hpMax", Integer.toString(sheet.vitals().hpMax()));
             values.put("ca", Integer.toString(sheet.vitals().ca()));
             values.put("description", sheet.description());
@@ -814,8 +814,8 @@ public class ThreatSheetScreen extends Screen {
                     ThreatSheet.MAX_TYPE));
             addColWidget(textField("size", "Tamanho", sizeX, y + LABEL_H, thirdW,
                     ThreatSheet.MAX_SIZE));
-            addColWidget(textField("speed", "Deslocamento", speedX, y + LABEL_H, thirdW,
-                    ThreatSheet.MAX_SPEED));
+            addColWidget(numericField("speed", "Deslocamento", speedX, y + LABEL_H, thirdW,
+                    digitsOf(SheetModel.VALUE_LIMIT_MAX)));
         }
         y += LABEL_H + FIELD_H + GAP;
 
@@ -1618,7 +1618,7 @@ String name = values.getOrDefault("name", "");
                         showDisplayName,
                         values.getOrDefault("type", ""),
                         values.getOrDefault("size", ""),
-                        values.getOrDefault("speed", "")),
+                        parseInt(values.get("speed"), 0)),
                 new ThreatSheet.Vitals(
                         hp,
                         parseInt(values.get("hpMax"), 0),

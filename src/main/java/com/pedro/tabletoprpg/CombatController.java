@@ -73,6 +73,17 @@ public final class CombatController {
     /** Âncoras dos jogadores: UUID do jogador -> posição onde começou. */
     private static final Map<UUID, BlockPos> playerAnchors = new HashMap<>();
 
+    /** Mob com turno ativo na iniciativa: aura exclusiva durante esse turno. */
+    private static UUID activeMobUuid = null;
+
+    /** Onde a aura do mob ativo foi reancorada no início do turno. */
+    private static BlockPos activeMobAnchor = null;
+
+    /** Raio da aura do mob ativo, em blocos. */
+    private static int activeMobRadius = 0;
+
+    private static boolean mobTurnActive = false;
+
     /** Monstros controlados (selecionados/movidos) que olham para o jogador mais próximo. */
     private static final Set<UUID> controlledMonsters = new HashSet<>();
 
@@ -734,6 +745,32 @@ public final class CombatController {
     /** Posiçóes das auras ativas (monstro selecionado + jogador ativo) para o payload. */
     public static List<RpgNetworking.AuraStatePayload.AuraData> getAuraData(MinecraftServer server) {
         List<RpgNetworking.AuraStatePayload.AuraData> list = new ArrayList<>();
+        if (mobTurnActive) {
+            if (activeMobUuid == null || activeMobAnchor == null || server == null) {
+                return list;
+            }
+            boolean mobAlive = false;
+            for (ServerLevel level : server.getAllLevels()) {
+                Entity entity = level.getEntity(activeMobUuid);
+                if (entity instanceof Mob && entity.isAlive()) {
+                    mobAlive = true;
+                    break;
+                }
+            }
+            if (!mobAlive) {
+                return list;
+            }
+            list.add(new RpgNetworking.AuraStatePayload.AuraData(
+                    activeMobAnchor.getX() + 0.5, activeMobAnchor.getY() + 0.05,
+                    activeMobAnchor.getZ() + 0.5, activeMobRadius));
+            return list;
+        }
+        if (activeMobUuid != null && activeMobAnchor != null) {
+            list.add(new RpgNetworking.AuraStatePayload.AuraData(
+                    activeMobAnchor.getX() + 0.5, activeMobAnchor.getY() + 0.05,
+                    activeMobAnchor.getZ() + 0.5, activeMobRadius));
+            return list;
+        }
         if (selectedMonsterUuid != null) {
             BlockPos anchor = monsterAnchors.get(selectedMonsterUuid);
             if (anchor != null) {
@@ -1053,6 +1090,28 @@ public final class CombatController {
         playerAnchors.remove(playerUuid);
     }
 
+    /** Define a aura exclusiva do turno do mob, reancorada só no início da vez. */
+    public static void setActiveMobAnchor(UUID mobUuid, BlockPos anchor, int radius) {
+        activeMobUuid = mobUuid;
+        activeMobAnchor = anchor;
+        activeMobRadius = radius;
+    }
+
+    public static void beginMobTurn() {
+        mobTurnActive = true;
+        activeMobUuid = null;
+        activeMobAnchor = null;
+        activeMobRadius = 0;
+    }
+
+    /** Remove a aura do turno do mob (troca/encerramento de turno). */
+    public static void clearActiveMobAnchor() {
+        mobTurnActive = false;
+        activeMobUuid = null;
+        activeMobAnchor = null;
+        activeMobRadius = 0;
+    }
+
     /** Limpa seleção, âncoras e monstros controlados (fim do encontro). */
     public static void reset(MinecraftServer server) {
         // Os monstros controlados já estão congelados (noAi=true) ÔÇö nada a
@@ -1060,6 +1119,7 @@ public final class CombatController {
         selectedMonsterUuid = null;
         monsterAnchors.clear();
         playerAnchors.clear();
+        clearActiveMobAnchor();
         controlledMonsters.clear();
         monsterDestinations.clear();
         hoveredEntities.clear();

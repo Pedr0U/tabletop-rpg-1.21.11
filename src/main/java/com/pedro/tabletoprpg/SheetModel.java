@@ -98,7 +98,9 @@ public record SheetModel(
          * interruptor desligado, e o Mestre nunca e afetado (04/11/2026).
          * Padrao {@code false}: o Mestre liga quando quiser.
          */
-        boolean initiativePlayerFormulaRoll
+        boolean initiativePlayerFormulaRoll,
+        float blocksPerMeter,
+        boolean proficiencyEnabled
     ) {
 
     /** Teto da formula padrao, o mesmo do campo por personagem. */
@@ -321,7 +323,9 @@ public record SheetModel(
                 true,
                 "",
                 DEFAULT_INITIATIVE_FORMULA,
-                false
+                false,
+                1.0f,
+                true
         );
     }
 
@@ -387,6 +391,9 @@ public record SheetModel(
         // 04/11/2026: formula padrao da mesa. Vazia ou nao reconhecida cai em
         // 1d20, para o servidor nunca rolar uma formula que o parser nao entende.
         initiativeFormula = sanitizeInitiativeFormula(initiativeFormula);
+        if (!Float.isFinite(blocksPerMeter) || blocksPerMeter <= 0f) {
+            blocksPerMeter = 1.0f;
+        }
     }
 
     /** Formula da mesa normalizada: sem espacos, no teto e nunca vazia/invalida. */
@@ -437,7 +444,8 @@ public record SheetModel(
     ) {
         this(nameLabel, raceLabel, raceEnabled, classLabel, backgroundLabel, hpLabel, manaLabel,
                 manaEnabled, levelLabel, xpLabel, "CA", xp, attributes, pericias, attributeValueMin,
-                attributeValueMax, periciaValueMax, true, "", DEFAULT_INITIATIVE_FORMULA, false);
+                attributeValueMax, periciaValueMax, true, "", DEFAULT_INITIATIVE_FORMULA, false,
+                1.0f, true);
     }
 
     /**
@@ -474,7 +482,7 @@ public record SheetModel(
                 manaLabel, manaEnabled, levelLabel, xpLabel, caLabel, xp, attributes, pericias,
                 attributeValueMin, attributeValueMax, periciaValueMax,
                 initiativeUseDefault, initiativePericiaId, initiativeFormula,
-                initiativePlayerFormulaRoll);
+                initiativePlayerFormulaRoll, blocksPerMeter, proficiencyEnabled);
     }
 
     private static List<AttributeDef> sanitizeAttributes(List<AttributeDef> raw) {
@@ -714,7 +722,7 @@ public record SheetModel(
                     value.isEmpty() ? caLabel : value, xp, attributes, pericias,
                     attributeValueMin, attributeValueMax, periciaValueMax,
                     initiativeUseDefault, initiativePericiaId, initiativeFormula,
-                    initiativePlayerFormulaRoll);
+                    initiativePlayerFormulaRoll, blocksPerMeter, proficiencyEnabled);
             default -> this;
         };
     }
@@ -773,7 +781,7 @@ public record SheetModel(
         return new SheetModel(nameLabel, raceLabel, raceEnabled, classLabel, backgroundLabel, hpLabel,
                 manaLabel, manaEnabled, levelLabel, xpLabel, caLabel, xp, attributes, pericias,
                 attributeValueMin, attributeValueMax, periciaValueMax,
-                useDefault, initiativePericiaId, initiativeFormula, initiativePlayerFormulaRoll);
+                useDefault, initiativePericiaId, initiativeFormula, initiativePlayerFormulaRoll, blocksPerMeter, proficiencyEnabled);
     }
 
     /**
@@ -787,7 +795,7 @@ public record SheetModel(
                 manaLabel, manaEnabled, levelLabel, xpLabel, caLabel, xp, attributes, pericias,
                 attributeValueMin, attributeValueMax, periciaValueMax,
                 initiativeUseDefault, id == null ? "" : id, initiativeFormula,
-                initiativePlayerFormulaRoll);
+                initiativePlayerFormulaRoll, blocksPerMeter, proficiencyEnabled);
     }
 
     /**
@@ -802,7 +810,7 @@ public record SheetModel(
         return new SheetModel(nameLabel, raceLabel, raceEnabled, classLabel, backgroundLabel, hpLabel,
                 manaLabel, manaEnabled, levelLabel, xpLabel, caLabel, xp, attributes, pericias,
                 attributeValueMin, attributeValueMax, periciaValueMax,
-                initiativeUseDefault, initiativePericiaId, formula, initiativePlayerFormulaRoll);
+                initiativeUseDefault, initiativePericiaId, formula, initiativePlayerFormulaRoll, blocksPerMeter, proficiencyEnabled);
     }
 
     /**
@@ -814,7 +822,26 @@ public record SheetModel(
         return new SheetModel(nameLabel, raceLabel, raceEnabled, classLabel, backgroundLabel, hpLabel,
                 manaLabel, manaEnabled, levelLabel, xpLabel, caLabel, xp, attributes, pericias,
                 attributeValueMin, attributeValueMax, periciaValueMax,
-                initiativeUseDefault, initiativePericiaId, initiativeFormula, allowed);
+                initiativeUseDefault, initiativePericiaId, initiativeFormula, allowed,
+                blocksPerMeter, proficiencyEnabled);
+    }
+
+    /** Copia com a proporcao de blocos por metro trocada. */
+    public SheetModel withBlocksPerMeter(float value) {
+        return new SheetModel(nameLabel, raceLabel, raceEnabled, classLabel, backgroundLabel, hpLabel,
+                manaLabel, manaEnabled, levelLabel, xpLabel, caLabel, xp, attributes, pericias,
+                attributeValueMin, attributeValueMax, periciaValueMax,
+                initiativeUseDefault, initiativePericiaId, initiativeFormula,
+                initiativePlayerFormulaRoll, value, proficiencyEnabled);
+    }
+
+    /** Copia com o bonus de proficiencia ligado ou desligado. */
+    public SheetModel withProficiencyEnabled(boolean enabled) {
+        return new SheetModel(nameLabel, raceLabel, raceEnabled, classLabel, backgroundLabel, hpLabel,
+                manaLabel, manaEnabled, levelLabel, xpLabel, caLabel, xp, attributes, pericias,
+                attributeValueMin, attributeValueMax, periciaValueMax,
+                initiativeUseDefault, initiativePericiaId, initiativeFormula,
+                initiativePlayerFormulaRoll, blocksPerMeter, enabled);
     }
 
     /** Copia com outro rotulo/nome para um atributo. */
@@ -1167,7 +1194,8 @@ public record SheetModel(
                 attrId = firstAttributeId();
             }
             newPericias.add(new SheetData.Pericia(def.id(), def.name(),
-                    found == null ? 0 : found.value(), attrId));
+                    found == null ? 0 : found.value(), attrId,
+                    found != null && found.proficiente(), found != null && found.maes()));
         }
         // Os tres limites vao junto, e nao sao copiados da ficha: o align e o
         // caminho que propaga a mudanca de limite do Mestre para as fichas de todo
@@ -1187,7 +1215,7 @@ public record SheetModel(
         return new SheetData(sheet.identity(), sheet.vitals(), sheet.progress(),
                 new SheetData.Attributes(values), sheet.skills(), newPericias,
                 attributeValueMin, attributeValueMax, periciaValueMax, sheet.inventory(),
-                sheet.spellbook());
+                sheet.spellbook(), sheet.deslocamento(), sheet.proficienciaBonus());
     }
 
     // ------------------------------------------------------------------
@@ -1288,6 +1316,8 @@ public record SheetModel(
                             // Padrao false (so o Mestre troca); adicoes com sinal
                             // continuam liberadas sempre.
                             .add("initiativePlayerFormulaRoll", model.initiativePlayerFormulaRoll(), Codec.BOOL)
+                            .add("blocksPerMeter", model.blocksPerMeter(), Codec.FLOAT)
+                            .add("proficiencyEnabled", model.proficiencyEnabled(), Codec.BOOL)
                             .build(prefix);
                 }
             },
@@ -1315,7 +1345,9 @@ public record SheetModel(
                             read(ops, map, "initiativeUseDefault", Codec.BOOL, true),
                             read(ops, map, "initiativePericiaId", Codec.STRING, ""),
                             read(ops, map, "initiativeFormula", Codec.STRING, DEFAULT_INITIATIVE_FORMULA),
-                            read(ops, map, "initiativePlayerFormulaRoll", Codec.BOOL, false)
+                            read(ops, map, "initiativePlayerFormulaRoll", Codec.BOOL, false),
+                            read(ops, map, "blocksPerMeter", Codec.FLOAT, 1.0f),
+                            read(ops, map, "proficiencyEnabled", Codec.BOOL, true)
                     )).map(decoded -> Pair.of(decoded, input));
                 }
             }
@@ -1417,6 +1449,8 @@ public record SheetModel(
         // jogadores, por ultimo (mesma ordem do DECODER).
         ByteBufCodecs.stringUtf8(MAX_INITIATIVE_FORMULA).encode(buf, model.initiativeFormula());
         ByteBufCodecs.BOOL.encode(buf, model.initiativePlayerFormulaRoll());
+        ByteBufCodecs.FLOAT.encode(buf, model.blocksPerMeter());
+        ByteBufCodecs.BOOL.encode(buf, model.proficiencyEnabled());
     };
 
     private static final StreamDecoder<FriendlyByteBuf, SheetModel> DECODER = buf -> new SheetModel(
@@ -1442,6 +1476,8 @@ public record SheetModel(
             ByteBufCodecs.BOOL.decode(buf),
             ByteBufCodecs.stringUtf8(32).decode(buf),
             ByteBufCodecs.stringUtf8(MAX_INITIATIVE_FORMULA).decode(buf),
+            ByteBufCodecs.BOOL.decode(buf),
+            ByteBufCodecs.FLOAT.decode(buf),
             ByteBufCodecs.BOOL.decode(buf)
     );
 

@@ -7,6 +7,7 @@ import com.pedro.tabletoprpg.SheetModelHolder;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
+import net.minecraft.client.gui.components.Checkbox;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.components.MultiLineEditBox;
 import net.minecraft.client.gui.components.Tooltip;
@@ -117,6 +118,9 @@ public class StatusScreen extends CharacterSheetScreen {
     private static final int PER_W_MAX = 200;
     /** Separacao entre a ficha (esquerda) e as pericias (direita). */
     private static final int PER_GAP = 10;
+    private static final int PER_BODY_TOP_OFFSET = 12;
+    /** Folga entre os rotulos PROF./MAES./Bonus e a primeira linha de checkboxes. */
+    private static final int PER_ROWS_TOP_GAP = 4;
     /** Altura minima de uma linha de pericia: abaixo disso o botao nao e' clicavel. */
     private static final int MIN_PER_ROW_H = 9;
 
@@ -131,6 +135,8 @@ public class StatusScreen extends CharacterSheetScreen {
     private static final int[] RESOURCE_STEPS = {-10, -5, -1, 1, 5, 10};
     /** Folga entre os 6 botoes de vida/mana. */
     private static final int RESOURCE_STEP_GAP = 4;
+    private static final float RESOURCE_COLUMN_RATIO = 0.82f;
+    private static final int RESOURCE_ROW_V_MARGIN = 3;
     /**
      * Altura da barra do recurso, em pixels, abaixo da linha.
      *
@@ -180,6 +186,12 @@ public class StatusScreen extends CharacterSheetScreen {
     private final Map<String, Integer> pendingPericiaValue = new HashMap<>();
     /** Atributo otimista por <b>id</b> de pericia, mesmo proposito de {@link #pendingPericiaValue}. */
     private final Map<String, String> pendingPericiaAttribute = new HashMap<>();
+    /** Marcas PROF./MAES. otimistas por <b>id</b> de pericia. */
+    private final Map<String, PericiaFlags> pendingPericiaFlags = new HashMap<>();
+
+    /** Estado exibido das duas marcas de uma pericia. */
+    private record PericiaFlags(boolean proficiente, boolean maes) {
+    }
 
     /**
      * Primeira pericia visivel na coluna (scroll da coluna de pericias).
@@ -205,7 +217,9 @@ public class StatusScreen extends CharacterSheetScreen {
      * feedback de "voce ja chegou no maximo" pedido pelo usuario.
      */
     private record PericiaRow(int nameX, int y, int nameW, int valueX, int valueW, int h,
-                             Button attrButton, Button minusButton, Button plusButton) {
+                             Button attrButton, Button minusButton, Button plusButton,
+                             int profX, int maesX, int flagW,
+                             Checkbox profCheckbox, Checkbox maesCheckbox) {
     }
 
     /** Geometria das barras, calculada em buildPanel(). */
@@ -2634,7 +2648,7 @@ public class StatusScreen extends CharacterSheetScreen {
         // rolagem da coluna esquerda ({@link #leftScroll}), e nao por mais uma
         // folga na conta.
         // 22/10/2026: a iniciativa e uma linha so (derivada, sem checkbox).
-        int neededRows = 3 + 5 + 3 + 3 + 2 + 2 + attrRowCount;
+        int neededRows = 3 + 5 + 3 + 3 + 2 + 4 + attrRowCount;
         // 27/09/2026 (Sheet Editor): o Mestre pode desligar a raca, a mana e o
         // XP, e ai as linhas abaixo somem. Sem descontar, a altura de linha
         // seria calculada para linhas que nao existem e sobraria espaco vazio
@@ -2670,10 +2684,10 @@ public class StatusScreen extends CharacterSheetScreen {
 
         // Geometria da coluna de pericias, agora com o `rowH` ja resolvido: o
         // cabecalho (`perTitleH`) tem a MESMA altura de linha da primeira linha
-        // da esquerda, para as duas colunas comecarem no mesmo Y.
+        // da esquerda; so o corpo (cabecalhos e linhas) e deslocado.
         int perCount = periciaCount();
         int perTitleH = rowH;
-        int perAvail = Math.max(MIN_PER_ROW_H, bottomY - topY - perTitleH);
+        int perAvail = Math.max(MIN_PER_ROW_H, bottomY - topY - perTitleH - PER_BODY_TOP_OFFSET - PER_ROWS_TOP_GAP);
         perRowH = Math.max(MIN_PER_ROW_H,
                 Math.min(perRowHCap(topY, bottomY), perAvail / Math.max(1, perCount)));
 
@@ -2780,6 +2794,13 @@ public class StatusScreen extends CharacterSheetScreen {
         }
         y += rowH;
 
+        // Deslocamento e Bonus de Proficiencia: campos numericos da propria
+        // ficha, com os rotulos resolvidos aqui porque o modelo nao os renomeia.
+        y = namedNumericField("deslocamento", "screen.tabletoprpg.label.deslocamento",
+                x0, drawY(y), boxX, boxW, labelW, "m");
+        y = namedNumericField("proficienciaBonus", "screen.tabletoprpg.label.proficienciaBonus",
+                x0, drawY(y), boxX, boxW, labelW, "");
+
         // ---------------- Attributes ----------------
         // Decisao do usuario: atributos sao botoes -/+ (passo 1), sem caixa de
         // texto e sem barra, começando em 0, com teto 30 e PISO -30 (podem ser
@@ -2812,9 +2833,9 @@ public class StatusScreen extends CharacterSheetScreen {
         perScroll = clampPerScroll(perScroll);
         int visible = perVisibleCount();
         for (int i = 0; i < visible; i++) {
-            addPericiaRow(perX, topY + perTitleH + i * perRowH, perW, perScroll + i);
+            addPericiaRow(perX, topY + PER_BODY_TOP_OFFSET + PER_ROWS_TOP_GAP + perTitleH + i * perRowH, perW, perScroll + i);
         }
-        addBonusHeader(topY, perTitleH);
+        addBonusHeader(topY + PER_BODY_TOP_OFFSET, perTitleH);
     }
 
     /**
@@ -3536,6 +3557,28 @@ public class StatusScreen extends CharacterSheetScreen {
     }
 
     /**
+     * Campo numerico com rotulo propio, para os campos que o modelo nao renomeia.
+     *
+     * <p>Usa o mesmo {@link #createFieldBox} dos outros numericos da ficha, entao
+     * o preenchimento pelo servidor ({@code getNumeric}) e o envio por
+     * {@code SheetFieldPayload} sao exatamente os mesmos.
+     */
+    private int namedNumericField(String field, String labelKey, int x0, int y,
+                                  int boxX, int boxW, int labelW, String suffix) {
+        String label = Component.translatable(labelKey).getString();
+        addWrappedLabel(label, x0, y,
+                Math.min(labelW, Math.max(12, boxX - x0 - 4)), COL_LABEL);
+        int totalW = Math.max(40, Math.min(boxW, 60));
+        int suffixW = suffix.isEmpty() ? 0 : this.font.width(suffix) + 3;
+        int fieldW = Math.max(24, totalW - suffixW);
+        fieldBoxes.put(field, createFieldBox(field, boxX, y, fieldW, true, NO_CEILING));
+        if (!suffix.isEmpty()) {
+            textLines.add(new TextLine(suffix, boxX + fieldW + 2, y + labelOffset(), COL_MUTED));
+        }
+        return y + rowH;
+    }
+
+    /**
      * Cabecalho "Bonus" em cima da coluna de valores das pericias.
      *
      * <p>27/09/2026, pedido do usuario: o numero ao lado do nome da pericia
@@ -3560,6 +3603,14 @@ public class StatusScreen extends CharacterSheetScreen {
         int x = first.valueX() + (first.valueW() - w) / 2;
         int y = topY + perTitleH - 9;
         textLines.add(new TextLine(label, x, y, COL_MUTED));
+
+        int flagY = y + 2;
+        String prof = Component.translatable("screen.tabletoprpg.status.section.prof").getString();
+        textLines.add(new TextLine(prof,
+                first.profX() - 2 + (first.flagW() - this.font.width(prof)) / 2, flagY, COL_MUTED));
+        String maes = Component.translatable("screen.tabletoprpg.status.section.maes").getString();
+        textLines.add(new TextLine(maes,
+                first.maesX() + 2 + (first.flagW() - this.font.width(maes)) / 2, flagY, COL_MUTED));
     }
 
     /**
@@ -3596,6 +3647,11 @@ public class StatusScreen extends CharacterSheetScreen {
         // "Max" e o rotulo das caixas de teto, e "HP"/"Mana" os das barras.
         for (String label : List.of("Max", "HP", "Mana")) {
             widest = Math.max(widest, this.font.width(label));
+        }
+        // Os dois campos novos tem rotulo de lang, nao do modelo.
+        for (String key : List.of("screen.tabletoprpg.label.deslocamento",
+                "screen.tabletoprpg.label.proficienciaBonus")) {
+            widest = Math.max(widest, this.font.width(Component.translatable(key).getString()));
         }
         return Math.max(52, Math.min(widest + 6, leftW / 3));
     }
@@ -3660,7 +3716,7 @@ public class StatusScreen extends CharacterSheetScreen {
         // conta e a mesma do `buildPanel`: cabecalho de altura `rowH` e o
         // `perRowH` real.
         int perTitleH = rowH;
-        int avail = Math.max(MIN_PER_ROW_H, leftBottom - leftTop - perTitleH);
+        int avail = Math.max(MIN_PER_ROW_H, leftBottom - leftTop - perTitleH - PER_BODY_TOP_OFFSET - PER_ROWS_TOP_GAP);
         return Math.max(1, Math.min(total, avail / Math.max(1, perRowH)));
     }
 
@@ -3671,7 +3727,7 @@ public class StatusScreen extends CharacterSheetScreen {
             return 1;
         }
         int perTitleH = rowH;
-        int avail = Math.max(MIN_PER_ROW_H, bottomY - topY - perTitleH);
+        int avail = Math.max(MIN_PER_ROW_H, bottomY - topY - perTitleH - PER_BODY_TOP_OFFSET - PER_ROWS_TOP_GAP);
         int rowH = Math.max(MIN_PER_ROW_H,
                 Math.min(MAX_ROW_H, (bottomY - topY) / (total + 1)));
         return Math.max(1, Math.min(total, avail / Math.max(1, rowH)));
@@ -3771,14 +3827,17 @@ public class StatusScreen extends CharacterSheetScreen {
      */
     private void addPericiaRow(int x0, int y, int rowW, int index) {
         int h = Math.max(8, perRowH - 1);
-        int attrW = Math.max(22, Math.min(32, rowW / 5));
-        int arrow = Math.max(9, Math.min(13, h - 1));
+        int attrW = Math.max(20, Math.min(28, rowW / 6));
+        int arrow = Math.max(9, Math.min(11, h - 1));
+        int flagW = Math.max(16, Math.min(24, rowW / 8));
         int valueW = valueBoxWidth();
 
         int attrX = x0 + rowW - attrW;
         int plusX = attrX - 2 - arrow;
         int valueX = plusX - 2 - valueW;
         int minusX = valueX - 2 - arrow;
+        int maesX = minusX - 2 - flagW;
+        int profX = maesX - 2 - flagW;
 
         // "-" e "+" com segurada (28/09/2026): segurar acelera. O canStep
         // responde pelo valor OTIMISTA (pendingPericiaValue) e pelo limite, e
@@ -3798,17 +3857,32 @@ public class StatusScreen extends CharacterSheetScreen {
         // acompanhar a ficha.
         Button attr = Button.builder(Component.literal(attrLabelFor(index)),
                 b -> openPericiaAttribute(index)).bounds(attrX, y, attrW, h).build();
+        PericiaFlags flags = sheet == null || index < 0 || index >= sheet.pericias().size()
+                ? new PericiaFlags(false, false)
+                : displayPericiaFlags(sheet.pericias().get(index));
+        Checkbox prof = Checkbox.builder(Component.literal(""), this.font)
+                .pos(profX, y).selected(flags.proficiente())
+                .onValueChange((cb, checked) -> togglePericiaFlag(index, false)).build();
+        prof.setSize(flagW, h);
+        prof.active = canEdit;
+        Checkbox maes = Checkbox.builder(Component.literal(""), this.font)
+                .pos(maesX, y).selected(flags.maes())
+                .onValueChange((cb, checked) -> togglePericiaFlag(index, true)).build();
+        maes.setSize(flagW, h);
+        maes.active = canEdit;
         addRenderableWidget(minus);
         addRenderableWidget(plus);
         addRenderableWidget(attr);
+        addRenderableWidget(prof);
+        addRenderableWidget(maes);
         // So o botao de atributo entra na lista: o "-" e o "+" da pericia tem
         // limite de valor e vao por applyStepButtons (ver applyExtraState).
         arrowButtons.add(attr);
 
-        // 4px de folga entre o nome e o botao esquerdo: o usuario apontou que
-        // "Constituição" encostava nela.
-        periciaRows.add(new PericiaRow(x0, y, Math.max(16, minusX - 4 - x0), valueX, valueW, h,
-                attr, minus, plus));
+        // 4px de folga entre o nome e a primeira marca: o usuario apontou que
+        // "Constituição" encostava no botao "-".
+        periciaRows.add(new PericiaRow(x0, y, Math.max(16, profX - 4 - x0), valueX, valueW, h,
+                attr, minus, plus, profX, maesX, flagW, prof, maes));
     }
 
     /**
@@ -3915,6 +3989,43 @@ public class StatusScreen extends CharacterSheetScreen {
     private String displayPericiaAttributeId(SheetData.Pericia pericia) {
         String pending = pendingPericiaAttribute.get(pericia.id());
         return pending != null ? pending : pericia.attributeId();
+    }
+
+    /** Marcas a exibir: as otimistas se houver, senao as do servidor. */
+    private PericiaFlags displayPericiaFlags(SheetData.Pericia pericia) {
+        PericiaFlags pending = pendingPericiaFlags.get(pericia.id());
+        return pending != null ? pending : new PericiaFlags(pericia.proficiente(), pericia.maes());
+    }
+
+    /**
+     * Alterna PROF. ou MAES. de uma pericia, aplicando a invariante antes de enviar.
+     *
+     * <p>Marcar MAES. marca PROF.; desmarcar PROF. desmarca MAES. O servidor
+     * aplica a mesma regra em {@code withPericiaMaes}/{@code withPericiaProficiencia}.
+     */
+    private void togglePericiaFlag(int index, boolean maes) {
+        if (!canEdit || sheet == null || index < 0 || index >= sheet.pericias().size()) {
+            return;
+        }
+        SheetData.Pericia pericia = sheet.pericias().get(index);
+        PericiaFlags current = displayPericiaFlags(pericia);
+        PericiaFlags next = maes
+                ? new PericiaFlags(!current.maes() || current.proficiente(), !current.maes())
+                : new PericiaFlags(!current.proficiente(), !current.proficiente() && current.maes());
+        if (next.equals(current)) {
+            return;
+        }
+        pendingPericiaFlags.put(pericia.id(), next);
+        if (maes) {
+            ClientPlayNetworking.send(RpgNetworking.SheetPericiaPayload.setMaes(
+                    targetName, pericia.id(), next.maes()));
+        } else {
+            ClientPlayNetworking.send(RpgNetworking.SheetPericiaPayload.setProficiencia(
+                    targetName, pericia.id(), next.proficiente()));
+        }
+        // O Checkbox so guarda o estado no construtor (1.21.11 nao tem setter),
+        // entao remontar e o que faz a marcacao aparecer na hora.
+        rebuildWidgets();
     }
 
     /**
@@ -4077,18 +4188,19 @@ public class StatusScreen extends CharacterSheetScreen {
      */
     private Bar addResourceBlock(int x0, int leftW, int y, String maxField) {
         int maxLabelW = 30;
+        int usableW = Math.max(120, (int) (leftW * RESOURCE_COLUMN_RATIO));
         // A caixa do teto e dimensionada pela COLUNA, e nao mais pelo `boxW` dos
         // campos de texto: o `boxW` nao existe mais nesta linha, e o teto do
         // recurso precisa caber "9999" com folga em qualquer largura de coluna.
-        int maxBoxW = Math.max(40, Math.min(56, leftW / 5));
+        int maxBoxW = Math.max(40, Math.min(56, usableW / 5));
         int gap = 4;
         textLines.add(new TextLine("Max", x0, y + labelOffset(), COL_MUTED));
         fieldBoxes.put(maxField, createFieldBox(maxField, x0 + maxLabelW, y, maxBoxW,
                 true, SheetData.MAX_RESOURCE));
 
         int barX = x0 + maxLabelW + maxBoxW + gap;
-        int barW = Math.max(24, leftW - maxLabelW - maxBoxW - gap);
-        return new Bar(barX, y, barW, rowH - RESOURCE_BAR_H_MARGIN);
+        int barW = Math.max(24, usableW - maxLabelW - maxBoxW - gap);
+        return new Bar(barX, y, barW, Math.max(8, rowH - RESOURCE_ROW_V_MARGIN));
     }
 
     /**
@@ -4109,10 +4221,11 @@ public class StatusScreen extends CharacterSheetScreen {
      * @param field recurso que a linha mexe ("hp"/"mana")
      */
     private void addResourceStepRow(int x0, int y, int leftW, String field) {
-        int h = rowH - 2;
+        int usableW = Math.max(120, (int) (leftW * RESOURCE_COLUMN_RATIO));
+        int h = Math.max(8, rowH - RESOURCE_ROW_V_MARGIN);
         int n = RESOURCE_STEPS.length;
-        int w = Math.max(1, (leftW - (n - 1) * RESOURCE_STEP_GAP) / n);
-        int lastW = leftW - (n - 1) * (w + RESOURCE_STEP_GAP);
+        int w = Math.max(1, (usableW - (n - 1) * RESOURCE_STEP_GAP) / n);
+        int lastW = usableW - (n - 1) * (w + RESOURCE_STEP_GAP);
         int x = x0;
         for (int i = 0; i < n; i++) {
             int delta = RESOURCE_STEPS[i];
@@ -4232,9 +4345,13 @@ public class StatusScreen extends CharacterSheetScreen {
             List<SheetData.Pericia> pericias = sheet.pericias();
             int scroll = clampPerScroll(perScroll);
             for (int i = 0; i < periciaRows.size() && scroll + i < pericias.size(); i++) {
-                applyStepButtons(periciaRows.get(i).minusButton(), periciaRows.get(i).plusButton(),
-                        displayPericiaValue(pericias.get(scroll + i)),
+                PericiaRow row = periciaRows.get(i);
+                SheetData.Pericia pericia = pericias.get(scroll + i);
+                applyStepButtons(row.minusButton(), row.plusButton(),
+                        displayPericiaValue(pericia),
                         SheetData.Pericia.VALUE_MIN, periciaValueMax());
+                row.profCheckbox().active = canEdit;
+                row.maesCheckbox().active = canEdit;
             }
         }
         // Os quadros de texto da aba 2 nao estao no `fieldBoxes` da base, entao
@@ -4263,6 +4380,14 @@ public class StatusScreen extends CharacterSheetScreen {
                 if (!shown.equals(initiativeBox.getValue())) {
                     initiativeBox.setValue(shown);
                 }
+            }
+        }
+        EditBox profBonusBox = fieldBoxes.get("proficienciaBonus");
+        if (profBonusBox != null) {
+            if (model().proficiencyEnabled()) {
+                applyEditable(profBonusBox);
+            } else {
+                profBonusBox.setEditable(false);
             }
         }
     }
@@ -4301,6 +4426,7 @@ public class StatusScreen extends CharacterSheetScreen {
     @Override
     protected void onSheetReceived() {
         reconcilePericiaValues();
+        reconcilePericiaFlags();
         pendingPericiaAttribute.clear();
         // 30/09/2026 (FASE 2B): o eco pode ter trazido uma lista de inventario
         // diferente, e so o `rebuildWidgets` consegue trocar widgets. O pedido
@@ -4352,6 +4478,19 @@ public class StatusScreen extends CharacterSheetScreen {
         });
     }
 
+    /** Mesma regra do eco aplicada as marcas PROF./MAES. */
+    private void reconcilePericiaFlags() {
+        if (sheet == null) {
+            pendingPericiaFlags.clear();
+            return;
+        }
+        pendingPericiaFlags.entrySet().removeIf(entry -> {
+            SheetData.Pericia pericia = sheet.periciaById(entry.getKey());
+            return pericia == null || (entry.getValue().proficiente() == pericia.proficiente()
+                    && entry.getValue().maes() == pericia.maes());
+        });
+    }
+
     /**
      * O Mestre trocou o modelo: o valor otimista das pericias e do dropdown e
      * do modelo ANTERIOR, entao sai inteiro (a regra do eco e para a rajada, que
@@ -4361,6 +4500,7 @@ public class StatusScreen extends CharacterSheetScreen {
     public void onModelChanged() {
         pendingPericiaValue.clear();
         pendingPericiaAttribute.clear();
+        pendingPericiaFlags.clear();
         super.onModelChanged();
     }
 
@@ -4489,6 +4629,9 @@ public class StatusScreen extends CharacterSheetScreen {
             // divergencia (ver applyStepButtons).
             applyStepButtons(row.minusButton(), row.plusButton(), value,
                     SheetData.Pericia.VALUE_MIN, periciaValueMax());
+
+            row.profCheckbox().active = canEdit;
+            row.maesCheckbox().active = canEdit;
 
             // A sigla do atributo fica no botao e vem do MODELO (27/09/2026):
             // antes era o shortName() do enum, e o Mestre nao podia renomear.

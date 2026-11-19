@@ -34,7 +34,7 @@ class ThreatSheetStoreTest {
 
     private static ThreatSheet ficha(String nome) {
         return new ThreatSheet("",
-                new ThreatSheet.Identity(nome, 5, nome, false, "", "", ""),
+                new ThreatSheet.Identity(nome, 5, nome, false, "", "", 0),
                 new ThreatSheet.Vitals(10, 20, 12),
                 "descricao",
                 List.of(new ThreatSheet.AttributeValue("forca", 5)),
@@ -264,6 +264,25 @@ class ThreatSheetStoreTest {
 
         assertEquals(comHorda, deVolta);
         assertTrue(deVolta.hordeMode());
+    }
+
+    @Test
+    @DisplayName("speed numerico faz round-trip; texto antigo vira 0 e valor fora de faixa e cortado")
+    void speedNumericoRoundTripETextoAntigoViraZero() {
+        CompoundTag nbt = gravaNbt(ficha("Ligeiro"));
+
+        nbt.getCompound("identity").orElseThrow().putInt("speed", 30);
+        assertEquals(30, ThreatSheet.CODEC.parse(NbtOps.INSTANCE, nbt).getOrThrow()
+                .identity().speed());
+
+        nbt.getCompound("identity").orElseThrow().putInt("speed", 5000);
+        assertEquals(SheetModel.VALUE_LIMIT_MAX,
+                ThreatSheet.CODEC.parse(NbtOps.INSTANCE, nbt).getOrThrow().identity().speed());
+
+        // NBT gravado antes do campo ser numero: o texto antigo nao derruba o load.
+        nbt.getCompound("identity").orElseThrow().putString("speed", "30 ft.");
+        assertEquals(0, ThreatSheet.CODEC.parse(NbtOps.INSTANCE, nbt).getOrThrow()
+                .identity().speed());
     }
 
     private static CompoundTag gravaNbt(ThreatSheet ficha) {

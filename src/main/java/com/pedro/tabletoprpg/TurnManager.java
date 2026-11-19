@@ -7,7 +7,10 @@ import net.minecraft.network.chat.HoverEvent;
 import net.minecraft.network.chat.MutableComponent;
 import net.minecraft.network.chat.Style;
 import net.minecraft.server.MinecraftServer;
+import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.Mob;
 
 import java.util.List;
 import java.util.UUID;
@@ -53,6 +56,7 @@ public final class TurnManager {
     /** Marca o inicio de um turno dado manualmente pelo mestre. */
     public static void onTurnGiven(ServerPlayer player) {
         clearPending();
+        CombatController.clearActiveMobAnchor();
         position = InitiativeCommands.indexOf(player.getName().getString(), false);
         startVersion = InitiativeCommands.version();
     }
@@ -62,6 +66,7 @@ public final class TurnManager {
         position = -1;
         startVersion = -1;
         clearPending();
+        CombatController.clearActiveMobAnchor();
     }
 
     /**
@@ -162,6 +167,7 @@ public final class TurnManager {
         // Dar a vez a mao desfaz a confirmacao pendente: ela falava de outra
         // entrada e, sem isto, o "Sim" do chat daria um segundo turno.
         clearPending();
+        CombatController.clearActiveMobAnchor();
         InitiativeTracker.Entry entry = entries.get(index);
         if (entry.mob()) {
             ServerPlayer master = firstMaster(server);
@@ -171,7 +177,8 @@ public final class TurnManager {
             position = index;
             startVersion = InitiativeCommands.version();
             SessionManager.setActivePlayer(master);
-            CombatController.setPlayerAnchor(master);
+            CombatController.beginMobTurn();
+            setupMobTurnAura(server, entry);
             server.getPlayerList().broadcastSystemMessage(Component.translatable(
                     "message.tabletoprpg.turn.mob_turn", entry.name(), master.getName().getString()), false);
             syncTurn(server);
@@ -191,6 +198,35 @@ public final class TurnManager {
         player.sendSystemMessage(Component.translatable("message.tabletoprpg.turn_your_turn"));
         syncTurn(server);
         MasterCommands.sendMenu(player);
+    }
+
+    /** Reancora a aura do turno do mob na posicao dele e no deslocamento da ficha. */
+    private static void setupMobTurnAura(MinecraftServer server, InitiativeTracker.Entry entry) {
+        UUID mobUuid = entry.mobUuid();
+        if (mobUuid == null) {
+            return;
+        }
+        Entity entity = null;
+        for (ServerLevel level : server.getAllLevels()) {
+            entity = level.getEntity(mobUuid);
+            if (entity != null) {
+                break;
+            }
+        }
+        if (!(entity instanceof Mob mob)) {
+            return;
+        }
+        String sheetId = ThreatSheetBinding.sheetOf(mob);
+        if (sheetId.isEmpty()) {
+            return;
+        }
+        ThreatSheet sheet = ThreatSheetStore.findAnyById(sheetId);
+        if (sheet == null) {
+            return;
+        }
+        float raw = sheet.identity().speed() * SheetModelHolder.current().blocksPerMeter();
+        int radius = Math.max(0, Math.min(256, Math.round(raw)));
+        CombatController.setActiveMobAnchor(mobUuid, mob.blockPosition(), radius);
     }
 
     /**

@@ -288,12 +288,11 @@ public class TabletopRpgClient implements ClientModInitializer {
     }
 
     /**
-     * Distância máxima (em blocos) do highlight para este jogador. O mestre
-     * recebe um valor alto (ilimitado na prática); os demais recebem a
-     * distância configurada pelo mestre (/rpg hoverdistance). Atualizado via
-     * {@link RpgNetworking.HoverConfigPayload}.
+     * Alcance (em blocos) do highlight para este jogador, calculado no servidor
+     * a partir da própria ficha. Zero desativa o hover (mestre e jogador sem
+     * ficha). Atualizado via {@link RpgNetworking.HoverConfigPayload}.
      */
-    public static volatile int hoverMaxDistance = 32;
+    public static volatile int hoverMaxDistance = 0;
 
     /**
      * Limpa o estado que sobrevive entre conexoes.
@@ -324,7 +323,7 @@ public class TabletopRpgClient implements ClientModInitializer {
             gameModeOrdinal = -1;
             auras = List.of();
             lastHoveredId = -1;
-            hoverMaxDistance = 32;
+            hoverMaxDistance = 0;
             // O destaque de ficha e estado do mundo que esta saindo: no mundo novo
             // os ids de entidade sao outros, e manter a lista antiga destacaria a
             // entidade errada ate o servidor mandar a nova.
@@ -931,12 +930,21 @@ public class TabletopRpgClient implements ClientModInitializer {
      * Detecta a entidade sob o crosshair (raycast a partir da câmera) e envia
      * o hover ao servidor. O envio acontece imediatamente quando a entidade
      * muda (sem delay perceptível) e a cada 20 ticks como refresh para renovar
-     * o efeito Glowing. A distância máxima é a configurada pelo servidor
-     * (mestre: ilimitado; jogador: /rpg hoverdistance).
+     * o destaque. O alcance vem da própria ficha no servidor; mestre e jogador
+     * sem ficha recebem zero e não têm destaque.
      */
     private static void tickHover(Minecraft client) {
         if (client.getConnection() == null || client.level == null || client.player == null) {
             return; // não está em um mundo (menu/loading) -> não pode enviar pacotes
+        }
+        // Mestre e jogador sem ficha recebem alcance zero: limpa qualquer
+        // destaque anterior e não entra no raycast.
+        if (isMaster || hoverMaxDistance <= 0) {
+            if (lastHoveredId != -1) {
+                lastHoveredId = -1;
+                ClientPlayNetworking.send(new RpgNetworking.HoverPayload(-1));
+            }
+            return;
         }
         // O hover (contorno de mira) so existe no modo COMBATE (PARTE 3): nos
         // modos Livre e Investigacao nao ha destaque de entidade. O envio para

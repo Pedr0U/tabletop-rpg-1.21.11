@@ -3,6 +3,7 @@ package com.pedro.tabletoprpg;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.UUID;
 
 /**
  * Lista de iniciativa em memoria: estado da coleta e participantes com valor.
@@ -26,7 +27,12 @@ public final class InitiativeTracker {
     }
 
     /** Um participante. {@code mob} diferencia jogador de grupo de mobs. */
-    public record Entry(String name, boolean mob, int value) {
+    public record Entry(String name, boolean mob, int value, UUID mobUuid) {
+        public Entry {
+            if (!mob) {
+                mobUuid = null;
+            }
+        }
     }
 
     private State state = State.IDLE;
@@ -127,11 +133,15 @@ public final class InitiativeTracker {
      * valor menor. Empate fica atras de quem chegou antes.
      */
     public void add(String name, boolean mob, int value) {
+        add(name, mob, value, null);
+    }
+
+    public void add(String name, boolean mob, int value, UUID mobUuid) {
         int index = 0;
         while (index < entries.size() && entries.get(index).value() >= value) {
             index++;
         }
-        entries.add(index, new Entry(name, mob, value));
+        entries.add(index, new Entry(name, mob, value, mobUuid));
         version++;
     }
 
@@ -165,7 +175,7 @@ public final class InitiativeTracker {
             return true;
         }
         entries.remove(index);
-        add(current.name(), current.mob(), value);
+        add(current.name(), current.mob(), value, current.mobUuid());
         return true;
     }
 

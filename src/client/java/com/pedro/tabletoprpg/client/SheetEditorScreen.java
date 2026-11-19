@@ -249,6 +249,9 @@ public class SheetEditorScreen extends Screen {
         // editar o NBT na mao.
         y = labelField(y, "field_ca", staged.caLabel(),
                 v -> staged = staged.withLabel("ca", v));
+        y = decimalField(y, "blocks_per_meter", staged.blocksPerMeter(),
+                v -> staged = staged.withBlocksPerMeter(v));
+        y = proficiencyEnabledField(y);
         y = xpModeField(y);
         y = header(y, "value_limits");
         y = limitField(y, "attribute_min", staged.attributeValueMin(), true,
@@ -342,6 +345,71 @@ public class SheetEditorScreen extends Screen {
         }).bounds(ctrlX(), y, 60, ROW_H - 4).build();
         addRenderableWidget(button);
         slots.add(new Slot(button, y));
+        return y + ROW_H;
+    }
+
+    /**
+     * Campo decimal positivo: um texto incompleto cai no padrao 1.0 no modelo,
+     * mas continua na caixa enquanto o Mestre digita.
+     */
+    private int decimalField(int y, String key, float current, Consumer<Float> apply) {
+        Component label = tr(key);
+        int extraHeight = 0;
+        if ("blocks_per_meter".equals(key)) {
+            // Rotulo longo: quebra antes do "(...)" para nao entrar na caixa.
+            String text = label.getString();
+            int cut = text.indexOf(" (");
+            if (cut > 0) {
+                captions.add(new Caption(y + 6, Component.literal(text.substring(0, cut)), COL_CAPTION));
+                captions.add(new Caption(y + 6 + this.font.lineHeight,
+                        Component.literal(text.substring(cut + 1)), COL_CAPTION));
+                extraHeight = this.font.lineHeight;
+            } else {
+                captions.add(new Caption(y + 6, label, COL_CAPTION));
+            }
+        } else {
+            captions.add(new Caption(y + 6, label, COL_CAPTION));
+        }
+        EditBox box = new EditBox(this.font, ctrlX(), y, ctrlW(), ROW_H - 4, label);
+        box.setFilter(s -> s.matches("\\d{0,6}(\\.\\d{0,2})?"));
+        box.setMaxLength(9);
+        box.setValue(Float.toString(current));
+        box.setResponder(value -> {
+            if (suppressNotify) {
+                return;
+            }
+            float parsed = 1.0f;
+            try {
+                if (!value.isEmpty() && !".".equals(value)) {
+                    parsed = Float.parseFloat(value);
+                }
+            } catch (NumberFormatException ignored) {
+                parsed = 1.0f;
+            }
+            if (!Float.isFinite(parsed) || parsed <= 0f) {
+                parsed = 1.0f;
+            }
+            apply.accept(parsed);
+        });
+        addRenderableWidget(box);
+        slots.add(new Slot(box, y));
+        return y + ROW_H + extraHeight;
+    }
+
+    /** Liga ou desliga o bonus de proficiencia no molde da ficha. */
+    private int proficiencyEnabledField(int y) {
+        Checkbox box = Checkbox.builder(tr("proficiency_enabled"), this.font)
+                .pos(colX(), y)
+                .maxWidth(colW())
+                .selected(staged.proficiencyEnabled())
+                .onValueChange((cb, checked) -> {
+                    staged = staged.withProficiencyEnabled(checked);
+                    rebuildWidgets();
+                })
+                .build();
+        box.setSize(colW(), ROW_H - 4);
+        addRenderableWidget(box);
+        slots.add(new Slot(box, y));
         return y + ROW_H;
     }
 

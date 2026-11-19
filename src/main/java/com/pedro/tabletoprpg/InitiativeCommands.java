@@ -152,7 +152,7 @@ public final class InitiativeCommands {
         if (TRACKER.contains(name)) {
             return;
         }
-        TRACKER.add(name, false, (int) total);
+        TRACKER.add(name, false, (int) total, null);
         server.getPlayerList().broadcastSystemMessage(
                 Component.translatable("message.tabletoprpg.initiative.added", name, (int) total), false);
         InitiativeSync.sendAll(server);
@@ -209,7 +209,7 @@ public final class InitiativeCommands {
             ctx.getSource().sendFailure(e.toComponent());
             return 0;
         }
-        TRACKER.add(name, false, (int) roll.total());
+        TRACKER.add(name, false, (int) roll.total(), null);
         announceEntry(ctx, roll, name);
         return 1;
     }
@@ -261,7 +261,7 @@ public final class InitiativeCommands {
             ctx.getSource().sendFailure(e.toComponent());
             return 0;
         }
-        TRACKER.add(name, false, (int) roll.total());
+        TRACKER.add(name, false, (int) roll.total(), null);
         announceEntry(ctx, roll, name);
         return 1;
     }
@@ -284,7 +284,7 @@ public final class InitiativeCommands {
             ctx.getSource().sendFailure(e.toComponent());
             return 0;
         }
-        TRACKER.add(name, true, (int) roll.total());
+        TRACKER.add(name, true, (int) roll.total(), mob.getUUID());
         announceEntry(ctx, roll, name);
         return 1;
     }
@@ -335,7 +335,7 @@ public final class InitiativeCommands {
             } catch (DiceFormula.SyntaxException e) {
                 continue;
             }
-            TRACKER.add(name, true, (int) roll.total());
+            TRACKER.add(name, true, (int) roll.total(), mob.getUUID());
             messages.add(roll.message());
             messages.add(Component.translatable("message.tabletoprpg.initiative.added", name,
                     (int) roll.total()));
@@ -409,7 +409,7 @@ public final class InitiativeCommands {
         int total;
         if (value != null) {
             total = value;
-            TRACKER.add(target, isMob, total);
+            TRACKER.add(target, isMob, total, isMob ? mob.getUUID() : null);
         } else {
             InitiativeRoller.Roll roll;
             try {
@@ -418,7 +418,7 @@ public final class InitiativeCommands {
                 return e.toComponent();
             }
             total = (int) roll.total();
-            TRACKER.add(target, isMob, total);
+            TRACKER.add(target, isMob, total, isMob ? mob.getUUID() : null);
             server.getPlayerList().broadcastSystemMessage(roll.message(), false);
         }
         server.getPlayerList().broadcastSystemMessage(
@@ -708,7 +708,7 @@ public final class InitiativeCommands {
     public static InitiativeSync.Payload snapshot(MinecraftServer server, boolean withCandidates) {
         List<InitiativeSync.Entry> entries = new ArrayList<>();
         for (InitiativeTracker.Entry entry : TRACKER.entries()) {
-            entries.add(new InitiativeSync.Entry(entry.name(), entry.mob(), entry.value()));
+            entries.add(new InitiativeSync.Entry(entry.name(), entry.mob(), entry.value(), entry.mobUuid()));
         }
         int activeIndex = TurnManager.currentPosition();
         if (!withCandidates) {

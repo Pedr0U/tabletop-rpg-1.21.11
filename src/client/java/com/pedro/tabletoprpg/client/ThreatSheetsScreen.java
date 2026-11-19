@@ -312,7 +312,7 @@ public class ThreatSheetsScreen extends Screen {
                 Component.translatable("screen.tabletoprpg.threat_sheets.tooltip_identity",
                         sheet.identity().type(), sheet.identity().size()),
                 Component.translatable("screen.tabletoprpg.threat_sheets.tooltip_vitals",
-                        sheet.identity().speed(), sheet.vitals().hp(), sheet.vitals().hpMax(),
+                        sheet.identity().speed() + " m", sheet.vitals().hp(), sheet.vitals().hpMax(),
                         sheet.vitals().ca()));
     }
 

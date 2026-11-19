@@ -128,11 +128,6 @@ public class MasterCommands {
                     .then(Commands.argument("value", IntegerArgumentType.integer(0, 24000))
                         .executes(MasterCommands::setWorldTime)))
 
-                // /rpg hoverdistance <1-256>  (só o mestre) -> distância do highlight dos jogadores
-                .then(Commands.literal("hoverdistance")
-                    .then(Commands.argument("value", IntegerArgumentType.integer(1, 256))
-                        .executes(MasterCommands::setHoverDistance)))
-
                 // /rpg session set <nome>  (só o mestre) -> define o nome da sessão
                 .then(Commands.literal("session")
                     .then(Commands.literal("set")
@@ -1275,6 +1270,19 @@ public class MasterCommands {
         String breakdown = "§7d20 §f(§e" + die + "§f) + §7" + pericia.value()
                 + " + §7" + attrLabel + " " + attrValue;
 
+        int multiplier = pericia.maes() ? 2 : (pericia.proficiente() ? 1 : 0);
+        if (multiplier > 0) {
+            String proficiencyLabel = Component.translatable(pericia.maes()
+                    ? "message.tabletoprpg.roll.mastery" : "message.tabletoprpg.roll.proficiency")
+                    .getString();
+            long proficiencyBonus = (long) multiplier * sheet.proficienciaBonus();
+            if (SheetModelHolder.current().proficiencyEnabled()) {
+                breakdown += " + §7" + proficiencyLabel + " §f+§e" + proficiencyBonus;
+            } else {
+                breakdown += " + §8" + proficiencyLabel + " §f+§e0 §8(desativado)";
+            }
+        }
+
         if (outcome != null) {
             breakdown += tailText(outcome);
             total += outcome.total();
@@ -1351,7 +1359,10 @@ public class MasterCommands {
         // dois metodos do enum SheetData.Attribute, que nao existe mais.
         int die = 1 + player.getRandom().nextInt(20);
         int attrValue = sheet.attributeValue(pericia.attributeId());
-        return new PericiaRoll(die, (long) die + pericia.value() + attrValue);
+        int multiplier = pericia.maes() ? 2 : (pericia.proficiente() ? 1 : 0);
+        long bonus = SheetModelHolder.current().proficiencyEnabled()
+                ? (long) multiplier * sheet.proficienciaBonus() : 0;
+        return new PericiaRoll(die, (long) die + pericia.value() + attrValue + bonus);
     }
 
     /** Perícia pura, sem fórmula depois: o caminho que existia antes. */
@@ -1860,24 +1871,6 @@ public class MasterCommands {
             ctx.getSource().sendFailure(Component.translatable("message.tabletoprpg.world_time_failed"));
             return 0;
         }
-    }
-
-    /**
-     * Define a distância máxima do highlight (Glowing) para <b>todos</b> os
-     * jogadores, inclusive o mestre — o valor vai por
-     * {@link RpgNetworking#sendHoverConfigToPlayer} sem tratamento especial para o
-     * mestre. Antes este texto afirmava que o mestre via de qualquer distância; não
-     * existe 1024 em nenhum lugar do código. Decisão do usuário em 27/09/2026: o
-     * comportamento foi mantido e só o texto corrigido. Só o mestre usa o comando.
-     */
-    private static int setHoverDistance(CommandContext<CommandSourceStack> ctx) {
-        if (!verifyMasterPermission(ctx)) return 0;
-
-        int distance = IntegerArgumentType.getInteger(ctx, "value");
-        SessionManager.setHoverDistance(distance);
-        broadcast(ctx, Component.translatable("message.tabletoprpg.hover_distance_set", SessionManager.getHoverDistance()));
-        RpgNetworking.sendHoverConfigToAll(ctx.getSource().getServer());
-        return 1;
     }
 
     /**

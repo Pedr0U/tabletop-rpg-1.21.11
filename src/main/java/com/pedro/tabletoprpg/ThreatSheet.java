@@ -1,5 +1,6 @@
 package com.pedro.tabletoprpg;
 
+import com.mojang.datafixers.util.Either;
 import com.mojang.serialization.Codec;
 import com.mojang.serialization.codecs.RecordCodecBuilder;
 import net.minecraft.network.FriendlyByteBuf;
@@ -67,7 +68,6 @@ public record ThreatSheet(
     public static final int MAX_DISPLAY_NAME = 30;
     public static final int MAX_TYPE = 32;
     public static final int MAX_SIZE = 24;
-    public static final int MAX_SPEED = 32;
     public static final int MAX_DESCRIPTION = 256;
     public static final int MAX_FEATURE = 96;
     public static final int MAX_ABILITY_NAME = 48;
@@ -150,7 +150,7 @@ public record ThreatSheet(
      * @param showDisplayName  marcar "Exibir nome em cima da ameaca?"
      * @param type             tipo (ex.: "Humanoide")
      * @param size             tamanho (texto livre: "Pequeno", "1,80 m")
-     * @param speed            deslocamento (texto livre: "30 ft.")
+     * @param speed            deslocamento em metros, com o mesmo limite do jogador
      */
     public record Identity(
             String name,
@@ -159,7 +159,7 @@ public record ThreatSheet(
             boolean showDisplayName,
             String type,
             String size,
-            String speed) {
+            int speed) {
 
         /**
          * Escrito a mao porque sao 7 campos e o {@link StreamCodec#composite} deste DFU
@@ -177,7 +177,7 @@ public record ThreatSheet(
                         boolean show = ByteBufCodecs.BOOL.decode(buf);
                         String type = ByteBufCodecs.stringUtf8(MAX_TYPE).decode(buf);
                         String size = ByteBufCodecs.stringUtf8(MAX_SIZE).decode(buf);
-                        String speed = ByteBufCodecs.stringUtf8(MAX_SPEED).decode(buf);
+                        int speed = ByteBufCodecs.VAR_INT.decode(buf);
                         return new Identity(name, level, displayName, show, type, size, speed);
                     }
 
@@ -189,9 +189,13 @@ public record ThreatSheet(
                         ByteBufCodecs.BOOL.encode(buf, value.showDisplayName());
                         ByteBufCodecs.stringUtf8(MAX_TYPE).encode(buf, value.type());
                         ByteBufCodecs.stringUtf8(MAX_SIZE).encode(buf, value.size());
-                        ByteBufCodecs.stringUtf8(MAX_SPEED).encode(buf, value.speed());
+                        ByteBufCodecs.VAR_INT.encode(buf, value.speed());
                     }
                 };
+
+        /** Inteiro novo; o texto do NBT antigo e lido como 0. */
+        private static final Codec<Integer> SPEED_CODEC = Codec.either(Codec.INT, Codec.STRING)
+                .xmap(either -> either.map(value -> value, old -> 0), Either::left);
 
         public static final Codec<Identity> CODEC = RecordCodecBuilder.create(i -> i.group(
                 Codec.STRING.fieldOf("name").forGetter(Identity::name),
@@ -200,7 +204,7 @@ public record ThreatSheet(
                 Codec.BOOL.fieldOf("show_display_name").forGetter(Identity::showDisplayName),
                 Codec.STRING.fieldOf("type").forGetter(Identity::type),
                 Codec.STRING.fieldOf("size").forGetter(Identity::size),
-                Codec.STRING.fieldOf("speed").forGetter(Identity::speed)
+                SPEED_CODEC.optionalFieldOf("speed", 0).forGetter(Identity::speed)
         ).apply(i, Identity::new));
 
         /** Nunca lanca: e o caminho do codec, sobre NBT antigo ou editado a mao. */
@@ -210,7 +214,7 @@ public record ThreatSheet(
             displayName = text(displayName, MAX_DISPLAY_NAME);
             type = text(type, MAX_TYPE);
             size = text(size, MAX_SIZE);
-            speed = text(speed, MAX_SPEED);
+            speed = clamp(speed, SheetModel.VALUE_LIMIT_MIN, SheetModel.VALUE_LIMIT_MAX);
         }
     }
 
@@ -457,7 +461,7 @@ public record ThreatSheet(
         // cliente, que nao sorteia nada.
         id = id == null ? "" : id.trim();
         identity = identity == null
-                ? new Identity("", 0, "", false, "", "", "")
+                ? new Identity("", 0, "", false, "", "", 0)
                 : identity;
         vitals = vitals == null ? new Vitals(0, 0, 0) : vitals;
         description = text(description, MAX_DESCRIPTION);
@@ -490,7 +494,7 @@ public record ThreatSheet(
         }
         return new ThreatSheet(
                 "",
-                new Identity("", 0, "", false, "", "", ""),
+                new Identity("", 0, "", false, "", "", 0),
                 new Vitals(0, 1, 10),
                 "",
                 attrs,
