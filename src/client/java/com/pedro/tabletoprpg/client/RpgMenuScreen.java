@@ -1,6 +1,7 @@
 package com.pedro.tabletoprpg.client;
 
 import net.minecraft.client.gui.GuiGraphics;
+import com.pedro.tabletoprpg.RpgNetworking.SessionSummary;
 import com.pedro.tabletoprpg.SessionManager;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.screens.Screen;
@@ -43,6 +44,11 @@ public class RpgMenuScreen extends Screen {
     private final String modeName;
     private final String activePlayerName;
     private final List<String> playerNames;
+    private final boolean hasActiveSession;
+    private final boolean memberOfActive;
+    private final List<SessionSummary> sessions;
+    private final int maxMasters;
+    private final int masterCount;
 
     // Dimensões calculadas em init().
     private int panelX;
@@ -56,7 +62,9 @@ public class RpgMenuScreen extends Screen {
     private static final int MIN_BUTTON_WIDTH = 100;
 
     public RpgMenuScreen(boolean isMaster, boolean isMyTurn, String sessionName,
-                         String modeName, String activePlayerName, List<String> playerNames) {
+                         String modeName, String activePlayerName, List<String> playerNames,
+                         boolean hasActiveSession, boolean memberOfActive, List<SessionSummary> sessions,
+                          int maxMasters, int masterCount) {
         super(Component.translatable("screen.tabletoprpg.menu.title"));
         this.isMaster = isMaster;
         this.isMyTurn = isMyTurn;
@@ -64,6 +72,11 @@ public class RpgMenuScreen extends Screen {
         this.modeName = modeName;
         this.activePlayerName = activePlayerName;
         this.playerNames = playerNames;
+        this.hasActiveSession = hasActiveSession;
+        this.memberOfActive = memberOfActive;
+        this.sessions = sessions == null ? List.of() : sessions;
+        this.maxMasters = maxMasters;
+        this.masterCount = masterCount;
     }
 
     @Override
@@ -102,6 +115,16 @@ public class RpgMenuScreen extends Screen {
         int startY = panelY + (int)(220 * this.scale);
 
         int y = startY + 60;
+
+        if (!isMaster && maxMasters > 1 && masterCount < maxMasters) {
+            boolean alreadyInActive = hasActiveSession && memberOfActive;
+            y = addButton(Component.translatable("screen.tabletoprpg.rpg_menu.claim_master"), x, y, () -> {
+                if (!alreadyInActive) {
+                    TabletopRpgClient.pendingMasterSessionList = true;
+                }
+                sendCommand("rpg master claim");
+            });
+        }
 
         // Botoes por papel (feedback do usuario):
         //  - Jogador: Player Sheet, Skills, Rolls, Settings (+ End Turn no turno
@@ -164,6 +187,25 @@ public class RpgMenuScreen extends Screen {
             }
         });
 
+        if (isMaster && !hasActiveSession) {
+            y = addButton(Component.translatable("screen.tabletoprpg.rpg_menu.start_session"), x, y,
+                    () -> openSessionList(true));
+        }
+
+        if (isMaster && hasActiveSession) {
+            y = addButton(Component.translatable("screen.tabletoprpg.rpg_menu.end_session"), x, y, () -> {
+                sendCommand("rpg session stop");
+                this.onClose();
+            });
+        }
+
+        if (!isMaster && hasActiveSession && memberOfActive) {
+            y = addButton(Component.translatable("screen.tabletoprpg.rpg_menu.leave_session"), x, y, () -> {
+                sendCommand("rpg session leave");
+                this.onClose();
+            });
+        }
+
         if (!isMaster && isMyTurn) {
             y += BUTTON_GAP;
             addButton(Component.translatable("screen.tabletoprpg.rpg_menu.end_turn"), x, y, () -> {
@@ -194,6 +236,13 @@ public class RpgMenuScreen extends Screen {
     private void openPlayers() {
         if (this.minecraft != null) {
             this.minecraft.setScreen(new PlayerListScreen(playerNames, activePlayerName, sessionName, isMaster, this));
+        }
+    }
+
+    /** Abre a lista de sessoes para iniciar (Mestre) ou entrar (jogador). */
+    private void openSessionList(boolean masterMode) {
+        if (this.minecraft != null) {
+            this.minecraft.setScreen(new SessionListScreen(this, sessions, masterMode));
         }
     }
 

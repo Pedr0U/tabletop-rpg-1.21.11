@@ -8,27 +8,25 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Fichas de Ameaca do Mestre, por UUID, em memoria.
+ * Fichas de Ameaca compartilhadas, por sessionId, em memoria.
  *
- * <p><b>02/10/2026.</b> Copia exata do padrao do {@link RollPresetStore}, e pelo mesmo
- * motivo: a ficha pertence ao Mestre e o vanilla ja garante que o NBT dele e escrito no
- * logout/save. A gravacao e a leitura ficam no
- * {@link com.pedro.tabletoprpg.mixin.PlayerThreatSheetPersistenceMixin}.
+ * <p><b>Fonte da verdade:</b> o {@link SessionStore} da sessao ativa grava as listas no
+ * SavedData da sessao. O cache aqui e populado no load do servidor e atualizado a cada
+ * mutacao; o NBT antigo do jogador nao e lido nem migrado.
  *
- * <p><b>Quem tem acesso:</b> so o Mestre. A tela esconde o botao e o
+ * <p><b>Quem tem acesso:</b> so os Mestres da sessao ativa. A tela esconde o botao e o
  * {@link com.pedro.tabletoprpg.RpgNetworking} recusa o payload de quem nao e, porque
  * esconder botao no cliente nao e permissao.
  */
 public final class ThreatSheetStore {
 
-    /** Chave no NBT do jogador. */
+    /** Chave antiga no NBT do jogador, mantida apenas por referencia. */
     public static final String NBT_KEY = "tabletop_rpg_threat_sheets";
 
-    /** NBT: lista de fichas. O codec ja corta o que passou do limite. */
+    /** Lista de fichas no SavedData da sessao. */
     public static final com.mojang.serialization.Codec<List<ThreatSheet>> CODEC =
             ThreatSheet.CODEC.listOf();
 
@@ -40,13 +38,13 @@ public final class ThreatSheetStore {
      */
     public static final int MAX_SHEETS = 200;
 
-    private static final Map<UUID, List<ThreatSheet>> BY_PLAYER = new ConcurrentHashMap<>();
+    private static final Map<String, List<ThreatSheet>> BY_SESSION = new ConcurrentHashMap<>();
 
     /**
      * Indice global id -&gt; ficha.
      *
      * <p><b>E cache, como os mapas do {@link ThreatSheetBinding}:</b> a fonte da
-     * verdade sao as listas do {@link #BY_PLAYER}. Ele existe porque o monstro
+     * verdade sao as listas do {@link #BY_SESSION}. Ele existe porque o monstro
      * deitado (HP da ficha &lt;= 0) e procurado pelo ID da ficha, e o ID nao diz de
      * QUEM e a ficha: a ficha e do Mestre, e o monstro nao sabe quem e o Mestre.
      * Sem o indice, o tick teria de varrer as fichas de todos os Mestres a cada
@@ -58,20 +56,20 @@ public final class ThreatSheetStore {
     }
 
     /** Lista na ordem em que o Mestre salvou. Cópia defensiva. */
-    public static List<ThreatSheet> snapshot(UUID uuid) {
-        if (uuid == null) {
+    public static List<ThreatSheet> snapshot(String sessionId) {
+        if (sessionId == null || sessionId.isBlank()) {
             return List.of();
         }
-        return BY_PLAYER.getOrDefault(uuid, List.of());
+        return BY_SESSION.getOrDefault(sessionId, List.of());
     }
 
-    /** Substitui tudo. Usado no load do NBT. */
-    public static void replaceAll(UUID uuid, List<ThreatSheet> sheets) {
-        if (uuid == null) {
+    /** Substitui tudo. Usado no load do SavedData da sessao. */
+    public static void replaceAll(String sessionId, List<ThreatSheet> sheets) {
+        if (sessionId == null || sessionId.isBlank()) {
             return;
         }
         if (sheets == null || sheets.isEmpty()) {
-            BY_PLAYER.remove(uuid);
+            BY_SESSION.remove(sessionId);
             rebuildIndex();
             return;
         }
@@ -86,8 +84,23 @@ public final class ThreatSheetStore {
                 break;
             }
         }
-        BY_PLAYER.put(uuid, Collections.unmodifiableList(copy));
+        BY_SESSION.put(sessionId, Collections.unmodifiableList(copy));
         rebuildIndex();
+    }
+
+    /** Limpa todo o cache de fichas. */
+    public static void clearAll() {
+        BY_SESSION.clear();
+        BY_ID.clear();
+    }
+
+    /** Carrega no cache somente as fichas da sessao informada. */
+    public static void loadSession(String sessionId, List<ThreatSheet> sheets) {
+        clearAll();
+        if (sessionId == null || sessionId.isBlank()) {
+            return;
+        }
+        replaceAll(sessionId, sheets);
     }
 
     /**
@@ -111,7 +124,7 @@ public final class ThreatSheetStore {
      */
     private static void rebuildIndex() {
         BY_ID.clear();
-        for (List<ThreatSheet> sheets : BY_PLAYER.values()) {
+        for (List<ThreatSheet> sheets : BY_SESSION.values()) {
             for (ThreatSheet sheet : sheets) {
                 if (sheet.hasId()) {
                     BY_ID.put(sheet.id(), sheet);
@@ -121,12 +134,12 @@ public final class ThreatSheetStore {
     }
 
     /** A ficha com essa chave, ou {@code null}. */
-    public static ThreatSheet find(UUID uuid, String key) {
+    public static ThreatSheet find(String sessionId, String key) {
         String wanted = RollPreset.normalizeKey(key == null ? "" : key.trim());
         if (wanted.isEmpty()) {
             return null;
         }
-        for (ThreatSheet sheet : snapshot(uuid)) {
+        for (ThreatSheet sheet : snapshot(sessionId)) {
             if (sheet.key().equals(wanted)) {
                 return sheet;
             }
@@ -139,12 +152,12 @@ public final class ThreatSheetStore {
      *
      * <p>E a busca que o item e a tag do mob usam, porque id nao muda com o nome.
      */
-    public static ThreatSheet findById(UUID uuid, String id) {
+    public static ThreatSheet findById(String sessionId, String id) {
         if (id == null || id.isBlank()) {
             return null;
         }
         String wanted = id.trim();
-        for (ThreatSheet sheet : snapshot(uuid)) {
+        for (ThreatSheet sheet : snapshot(sessionId)) {
             if (wanted.equals(sheet.id())) {
                 return sheet;
             }
@@ -158,12 +171,12 @@ public final class ThreatSheetStore {
      * <p>E a pergunta que a tela faz para montar a lista da direita: a lista mostra SO
      * as copias, e a mae fica no topo (07/10/2026).
      */
-    public static List<ThreatSheet> copiesOf(UUID uuid, String motherId) {
-        if (uuid == null || motherId == null || motherId.isBlank()) {
+    public static List<ThreatSheet> copiesOf(String sessionId, String motherId) {
+        if (sessionId == null || motherId == null || motherId.isBlank()) {
             return List.of();
         }
         List<ThreatSheet> out = new ArrayList<>();
-        for (ThreatSheet sheet : snapshot(uuid)) {
+        for (ThreatSheet sheet : snapshot(sessionId)) {
             if (motherId.equals(sheet.copyOf())) {
                 out.add(sheet);
             }
@@ -176,7 +189,7 @@ public final class ThreatSheetStore {
         if (player == null) {
             return SaveResult.NOT_FOUND;
         }
-        return createCopy(player.getUUID(), motherId);
+        return createCopy(SessionStore.get(player.level().getServer()).activeId(), motherId);
     }
 
     /**
@@ -193,8 +206,8 @@ public final class ThreatSheetStore {
      * <p><b>Por que numero de copia nao existe na tela:</b> a jogadora nao quis um
      * contador de copias no rodape. O nome ja diz o que ela precisa.
      */
-    public static SaveResult createCopy(UUID uuid, String motherId) {
-        ThreatSheet mother = findById(uuid, motherId);
+    public static SaveResult createCopy(String sessionId, String motherId) {
+        ThreatSheet mother = findById(sessionId, motherId);
         if (mother == null) {
             return SaveResult.NOT_FOUND;
         }
@@ -203,7 +216,7 @@ public final class ThreatSheetStore {
             // servidor recusa tambem: esconder botao no cliente nao e permissao.
             return SaveResult.COPY_OF_COPY;
         }
-        if (snapshot(uuid).size() >= MAX_SHEETS) {
+        if (snapshot(sessionId).size() >= MAX_SHEETS) {
             return SaveResult.LIMIT_REACHED;
         }
         String base = copyBase(mother.identity().name());
@@ -211,7 +224,7 @@ public final class ThreatSheetStore {
             ThreatSheet copy = mother.withId(ThreatSheet.newId())
                     .withCopyOf(mother.id())
                     .withName(base + " (" + n + ")");
-            SaveResult result = save(uuid, copy, "");
+            SaveResult result = save(sessionId, copy, "");
             if (result != SaveResult.NAME_TAKEN) {
                 return result;
             }
@@ -229,11 +242,11 @@ public final class ThreatSheetStore {
      *
      * @return a ficha criada, ou {@code null} se o limite de {@link #MAX_SHEETS} foi atingido
      */
-    public static ThreatSheet createBlank(UUID uuid) {
-        if (uuid == null) {
+    public static ThreatSheet createBlank(String sessionId) {
+        if (sessionId == null || sessionId.isBlank()) {
             return null;
         }
-        List<ThreatSheet> current = new ArrayList<>(snapshot(uuid));
+        List<ThreatSheet> current = new ArrayList<>(snapshot(sessionId));
         if (current.size() >= MAX_SHEETS) {
             return null;
         }
@@ -250,7 +263,7 @@ public final class ThreatSheetStore {
             }
             if (!taken) {
                 current.add(blank);
-                BY_PLAYER.put(uuid, Collections.unmodifiableList(current));
+                BY_SESSION.put(sessionId, Collections.unmodifiableList(current));
                 rebuildIndex();
                 return blank;
             }
@@ -273,14 +286,14 @@ public final class ThreatSheetStore {
     }
 
     /**
-     * Salva uma ficha, criando ou substituindo. Versao do jogador: extrai o UUID e
-     * delega, para os handlers de rede nao repetirem a extracao.
+     * Salva uma ficha, criando ou substituindo. Versao do jogador: deriva o sessionId
+     * da sessao ativa e delega, para os handlers de rede nao repetirem a extracao.
      */
     public static SaveResult save(ServerPlayer player, ThreatSheet sheet, String originalName) {
         if (player == null) {
             return SaveResult.EMPTY_NAME;
         }
-        return save(player.getUUID(), sheet, originalName);
+        return save(SessionStore.get(player.level().getServer()).activeId(), sheet, originalName);
     }
 
     /**
@@ -292,8 +305,8 @@ public final class ThreatSheetStore {
      *
      * @return o motivo da recusa, ou {@link SaveResult#OK}
      */
-    public static SaveResult save(UUID uuid, ThreatSheet sheet, String originalName) {
-        if (uuid == null || sheet == null) {
+    public static SaveResult save(String sessionId, ThreatSheet sheet, String originalName) {
+        if (sessionId == null || sessionId.isBlank() || sheet == null) {
             return SaveResult.EMPTY_NAME;
         }
         String key = sheet.key();
@@ -313,7 +326,7 @@ public final class ThreatSheetStore {
             return SaveResult.EMPTY_LEVEL;
         }
 
-        List<ThreatSheet> current = new ArrayList<>(snapshot(uuid));
+        List<ThreatSheet> current = new ArrayList<>(snapshot(sessionId));
         boolean isNew = originalName == null || originalName.isBlank();
         int index = -1;
         if (!isNew) {
@@ -356,7 +369,7 @@ public final class ThreatSheetStore {
                 stored = stored.withId(ThreatSheet.newId());
             }
             current.set(index, stored);
-            BY_PLAYER.put(uuid, Collections.unmodifiableList(current));
+            BY_SESSION.put(sessionId, Collections.unmodifiableList(current));
             rebuildIndex();
             return previousKey.equals(key) ? SaveResult.UPDATED : SaveResult.RENAMED;
         }
@@ -364,7 +377,7 @@ public final class ThreatSheetStore {
             sheet = sheet.withId(ThreatSheet.newId());
         }
         current.add(sheet);
-        BY_PLAYER.put(uuid, Collections.unmodifiableList(current));
+        BY_SESSION.put(sessionId, Collections.unmodifiableList(current));
         rebuildIndex();
         return SaveResult.CREATED;
     }
@@ -374,8 +387,8 @@ public final class ThreatSheetStore {
      * jogadora em 07/10/2026 ("apagar a mae apaga mae e copias juntas, na mesma
      * confirmacao"). Devolve a ficha pedida, ou {@code null} se ela nao existe.
      */
-    public static ThreatSheet remove(UUID uuid, String key) {
-        List<ThreatSheet> current = snapshot(uuid);
+    public static ThreatSheet remove(String sessionId, String key) {
+        List<ThreatSheet> current = snapshot(sessionId);
         if (current.isEmpty()) {
             return null;
         }
@@ -423,17 +436,20 @@ public final class ThreatSheetStore {
         }
 
         if (out.isEmpty()) {
-            BY_PLAYER.remove(uuid);
+            BY_SESSION.remove(sessionId);
         } else {
-            BY_PLAYER.put(uuid, Collections.unmodifiableList(out));
+            BY_SESSION.put(sessionId, Collections.unmodifiableList(out));
         }
         rebuildIndex();
         return removed;
     }
 
     /** Limpa o cache. Existe para teste e limpeza explicita; o logout nao chama. */
-    public static void forget(UUID uuid) {
-        BY_PLAYER.remove(uuid);
+    public static void forget(String sessionId) {
+        if (sessionId == null || sessionId.isBlank()) {
+            return;
+        }
+        BY_SESSION.remove(sessionId);
         rebuildIndex();
     }
 

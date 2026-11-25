@@ -14,6 +14,7 @@ import net.minecraft.commands.CommandBuildContext;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
 import net.minecraft.commands.arguments.EntityArgument;
+import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.network.chat.ClickEvent;
@@ -25,12 +26,18 @@ import net.minecraft.resources.Identifier;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.server.players.PlayerList;
+import net.minecraft.world.MenuProvider;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntitySpawnReason;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.Mob;
 import net.minecraft.world.entity.MobCategory;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.level.ClipContext;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.phys.BlockHitResult;
+import net.minecraft.world.phys.HitResult;
+import net.minecraft.world.phys.Vec3;
 
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
@@ -45,6 +52,47 @@ import java.util.concurrent.CompletableFuture;
 public class MasterCommands {
 
     private static final Random RANDOM = new Random();
+    private static final double MAX_OPEN_CHEST_DISTANCE = 24.0;
+    /** Menus abertos remotamente ignoram checagem de distancia no tick do ServerPlayer. */
+    private static final java.util.Set<net.minecraft.world.inventory.AbstractContainerMenu> REMOTE_CONTAINER_MENU_IDS =
+            java.util.Collections.newSetFromMap(new java.util.WeakHashMap<>());
+    /** Abertura remota em andamento: suprime incrementOpeners/animacao. */
+    private static final java.util.Set<java.util.UUID> REMOTE_OPENING_PLAYERS =
+            java.util.Collections.newSetFromMap(new java.util.WeakHashMap<>());
+    /** Contagem de incrementos suprimidos por jogador remoto (baú duplo = 2). */
+    private static final java.util.Map<java.util.UUID, Integer> REMOTE_ANIMATION_SUPPRESSED_COUNTS =
+            java.util.Collections.synchronizedMap(new java.util.WeakHashMap<>());
+
+    public static boolean isRemoteContainerMenu(net.minecraft.world.inventory.AbstractContainerMenu menu) {
+        return menu != null && REMOTE_CONTAINER_MENU_IDS.contains(menu);
+    }
+
+    public static void unmarkRemoteContainerMenu(net.minecraft.world.inventory.AbstractContainerMenu menu) {
+        if (menu != null) {
+            REMOTE_CONTAINER_MENU_IDS.remove(menu);
+        }
+    }
+
+    public static boolean isRemoteOpeningPlayer(java.util.UUID playerId) {
+        return playerId != null && REMOTE_OPENING_PLAYERS.contains(playerId);
+    }
+
+    public static void markRemoteAnimationSuppressed(java.util.UUID playerId) {
+        if (playerId != null) {
+            REMOTE_ANIMATION_SUPPRESSED_COUNTS.merge(playerId, 1, Integer::sum);
+        }
+    }
+
+    public static boolean consumeRemoteAnimationSuppressed(java.util.UUID playerId) {
+        if (playerId == null) return false;
+        synchronized (REMOTE_ANIMATION_SUPPRESSED_COUNTS) {
+            Integer count = REMOTE_ANIMATION_SUPPRESSED_COUNTS.get(playerId);
+            if (count == null || count <= 0) return false;
+            if (count == 1) REMOTE_ANIMATION_SUPPRESSED_COUNTS.remove(playerId);
+            else REMOTE_ANIMATION_SUPPRESSED_COUNTS.put(playerId, count - 1);
+            return true;
+        }
+    }
 
     public static void register() {
         CommandRegistrationCallback.EVENT.register(MasterCommands::onRegister);
@@ -132,7 +180,22 @@ public class MasterCommands {
                 .then(Commands.literal("session")
                     .then(Commands.literal("set")
                         .then(Commands.argument("name", StringArgumentType.greedyString())
-                            .executes(MasterCommands::setSessionName))))
+                            .executes(MasterCommands::setSessionName)))
+                    .then(Commands.literal("list")
+                        .executes(MasterCommands::sessionList))
+                    .then(Commands.literal("create")
+                        .then(Commands.argument("name", StringArgumentType.greedyString())
+                            .executes(MasterCommands::sessionCreate)))
+                    .then(Commands.literal("start")
+                        .then(Commands.argument("id", StringArgumentType.string())
+                            .executes(MasterCommands::sessionStart)))
+                    .then(Commands.literal("join")
+                        .then(Commands.argument("id", StringArgumentType.string())
+                            .executes(MasterCommands::sessionJoin)))
+                    .then(Commands.literal("leave")
+                        .executes(MasterCommands::sessionLeave))
+                    .then(Commands.literal("stop")
+                        .executes(MasterCommands::sessionStop)))
 
                 // /rpg insert enemy <type> <cam_perm true|false>
                 // /rpg insert camera -> arma o pedido; o proximo clique numa
@@ -206,6 +269,11 @@ public class MasterCommands {
                     .then(Commands.literal("remove")
                         .executes(MasterCommands::blockUnlock)))
 
+                // /rpg open_chest -> abre remotamente o container que o Mestre esta
+                // mirando, sem inserir itens. Apenas Mestre da sessao ativa.
+                .then(Commands.literal("open_chest")
+                    .executes(MasterCommands::openChest))
+
                 // /rpg preset create <nome> <formula> <cor>  -> cria e entrega o item
                 // /rpg preset use <nome>     -> rola o preset
                 // /rpg preset delete <nome>  -> apaga o preset (o item fica no inventário)
@@ -259,8 +327,7 @@ public class MasterCommands {
             return 0;
         }
 
-        boolean isMaster = SessionManager.isMaster(player);
-        player.sendSystemMessage(buildAsciiMenu(player, isMaster));
+        RpgNetworking.sendMenuToPlayer(player);
         return 1;
     }
 
@@ -268,6 +335,21 @@ public class MasterCommands {
         try {
             ServerPlayer player = ctx.getSource().getPlayerOrException();
             if (SessionManager.setMaster(player)) {
+                MinecraftServer server = ctx.getSource().getServer();
+                SessionStore store = SessionStore.get(server);
+                String id = store.isActive() ? store.activeId() : SessionStore.DEFAULT_ID;
+                boolean claimed = store.claimMaster(id, player.getUUID(), SessionManager.getMaxMasters());
+                SessionStore.SessionInfo info = store.get(id);
+                boolean joined = store.join(id, player.getUUID())
+                        || (info != null && info.members().contains(player.getUUID()));
+                if (!claimed || !joined) {
+                    SessionManager.releaseMaster(player);
+                    store.releaseMaster(player.getUUID());
+                    ctx.getSource().sendFailure(Component.literal("Could not claim master slot in session."));
+                    RpgNetworking.sendMenuToPlayer(player);
+                    return 0;
+                }
+                SessionStore.applyToServer(server);
                 broadcast(ctx, Component.translatable("message.tabletoprpg.master_claimed_broadcast", player.getName().getString()));
                 RpgNetworking.sendToAll(ctx.getSource().getServer());
                 // O payload de iniciativa so leva a lista de candidatos para quem ja e
@@ -275,12 +357,14 @@ public class MasterCommands {
                 // adicionar/rolar mob vazia ate o proximo comando de iniciativa.
                 InitiativeSync.sendAll(ctx.getSource().getServer());
                 BlockLockManager.sendSnapshotTo(player);
-                refreshChatMenu(ctx);
+                // O cargo mudou: a tela R precisa trocar [Claim Master] por [Start Session].
+                RpgNetworking.sendMenuToPlayer(player);
                 return 1;
             } else {
                 ctx.getSource().sendFailure(Component.translatable("message.tabletoprpg.master_slots_in_use",
                         SessionManager.getMasterCount(), SessionManager.getMaxMasters(),
                         SessionManager.getMasterName()));
+                RpgNetworking.sendMenuToPlayer(player);
                 return 0;
             }
         } catch (Exception e) {
@@ -297,6 +381,9 @@ public class MasterCommands {
                 // Com varios mestres, sair um NAO derruba a sessao: so o ultimo mestre que sai reseta o combate (22/10/2026).
                 boolean lastMaster = SessionManager.getMasterCount() <= 1;
                 SessionManager.releaseMaster(player);
+                SessionStore store = SessionStore.get(ctx.getSource().getServer());
+                store.releaseMaster(player.getUUID());
+                SessionStore.applyToServer(ctx.getSource().getServer());
                 if (lastMaster) {
                     CombatController.reset(ctx.getSource().getServer());
                 }
@@ -491,6 +578,159 @@ public class MasterCommands {
         RpgNetworking.sendToAll(ctx.getSource().getServer());
         refreshChatMenu(ctx);
         return 1;
+    }
+
+    private static int sessionList(CommandContext<CommandSourceStack> ctx) {
+        try {
+            ctx.getSource().getPlayerOrException();
+        } catch (Exception e) {
+            ctx.getSource().sendFailure(Component.literal("Only players can list sessions."));
+            return 0;
+        }
+        SessionStore store = SessionStore.get(ctx.getSource().getServer());
+        ctx.getSource().sendSystemMessage(Component.literal("Sessions:"));
+        for (SessionStore.SessionInfo info : store.all()) {
+            String marker = info.id().equals(store.activeId()) ? " *" : "";
+            ctx.getSource().sendSystemMessage(Component.literal(" - " + info.id() + " | " + info.name()
+                    + " | " + (info.started() ? "STARTED" : "saved")
+                    + " | masters: " + info.masters().size()
+                    + " | members: " + info.members().size() + marker));
+        }
+        return 1;
+    }
+
+    private static int sessionCreate(CommandContext<CommandSourceStack> ctx) {
+        if (!verifyMasterPermission(ctx)) return 0;
+        try {
+            ServerPlayer player = ctx.getSource().getPlayerOrException();
+            String name = StringArgumentType.getString(ctx, "name").trim();
+            if (name.isEmpty()) {
+                ctx.getSource().sendFailure(Component.literal("Session name cannot be empty."));
+                return 0;
+            }
+            if (name.length() > 64) {
+                name = name.substring(0, 64);
+            }
+            MinecraftServer server = ctx.getSource().getServer();
+            SessionStore store = SessionStore.get(server);
+            SessionStore.SessionInfo info = store.create(name, player.getUUID());
+            if (!store.setActive(info.id())) {
+                ctx.getSource().sendFailure(Component.literal("Could not start session " + info.id() + "."));
+                return 0;
+            }
+            store.clearAllMembers();
+            store.join(info.id(), player.getUUID());
+            SessionStore.applyToServer(server);
+            broadcast(ctx, "Session " + info.id() + " (" + info.name() + ") created and started.");
+            RpgNetworking.sendToAll(server);
+            RpgNetworking.sendMenuToPlayer(player);
+            return 1;
+        } catch (Exception e) {
+            TabletopRpg.LOGGER.error("[TabletopRPG] Error creating session: {}", e.getMessage());
+            ctx.getSource().sendFailure(Component.literal("Could not create session."));
+            return 0;
+        }
+    }
+
+    private static int sessionStart(CommandContext<CommandSourceStack> ctx) {
+        if (!verifyMasterPermission(ctx)) return 0;
+        try {
+            ServerPlayer player = ctx.getSource().getPlayerOrException();
+            String id = StringArgumentType.getString(ctx, "id").trim();
+            SessionStore store = SessionStore.get(ctx.getSource().getServer());
+            if (store.get(id) == null) {
+                ctx.getSource().sendFailure(Component.literal("Session " + id + " not found."));
+                return 0;
+            }
+            if (!store.claimMaster(id, player.getUUID(), SessionManager.getMaxMasters())) {
+                ctx.getSource().sendFailure(Component.literal("Could not claim Master in session " + id + "."));
+                return 0;
+            }
+            if (!store.setActive(id)) {
+                ctx.getSource().sendFailure(Component.literal("Could not start session " + id + "."));
+                return 0;
+            }
+            store.clearAllMembers();
+            store.join(id, player.getUUID());
+            SessionStore.applyToServer(ctx.getSource().getServer());
+            broadcast(ctx, "Session " + id + " started by " + player.getName().getString() + ".");
+            return 1;
+        } catch (Exception e) {
+            TabletopRpg.LOGGER.error("[TabletopRPG] Error starting session: {}", e.getMessage());
+            ctx.getSource().sendFailure(Component.literal("Could not start session."));
+            return 0;
+        }
+    }
+
+    private static int sessionJoin(CommandContext<CommandSourceStack> ctx) {
+        try {
+            ServerPlayer player = ctx.getSource().getPlayerOrException();
+            String id = StringArgumentType.getString(ctx, "id").trim();
+            SessionStore store = SessionStore.get(ctx.getSource().getServer());
+            if (store.get(id) == null) {
+                ctx.getSource().sendFailure(Component.literal("Session " + id + " not found."));
+                return 0;
+            }
+            if (!store.joinExclusive(id, player.getUUID())) {
+                ctx.getSource().sendFailure(Component.literal("Already in session " + id + "."));
+                return 0;
+            }
+            player.sendSystemMessage(Component.literal("Joined session " + id + "."));
+            SessionStore.applyToServer(ctx.getSource().getServer());
+            return 1;
+        } catch (Exception e) {
+            ctx.getSource().sendFailure(Component.literal("Could not join session."));
+            return 0;
+        }
+    }
+
+    private static int sessionLeave(CommandContext<CommandSourceStack> ctx) {
+        try {
+            ServerPlayer player = ctx.getSource().getPlayerOrException();
+            if (SessionStore.get(ctx.getSource().getServer()).leave(player.getUUID())) {
+                player.sendSystemMessage(Component.literal("You left all sessions."));
+            } else {
+                player.sendSystemMessage(Component.literal("You were not in any session."));
+            }
+            SessionStore.applyToServer(ctx.getSource().getServer());
+            return 1;
+        } catch (Exception e) {
+            ctx.getSource().sendFailure(Component.literal("Could not leave session."));
+            return 0;
+        }
+    }
+
+    private static int sessionStop(CommandContext<CommandSourceStack> ctx) {
+        if (!verifyMasterPermission(ctx)) return 0;
+        try {
+            ctx.getSource().getPlayerOrException();
+            MinecraftServer server = ctx.getSource().getServer();
+            SessionStore store = SessionStore.get(server);
+            String active = store.activeId();
+            if (active.isEmpty()) {
+                ctx.getSource().sendFailure(Component.literal("No session is active."));
+                return 0;
+            }
+            store.clearActive();
+            store.clearAllMembers();
+            for (UUID id : SessionManager.getMasterUuids()) {
+                store.releaseMaster(id);
+            }
+            SessionManager.releaseMaster();
+            InitiativeCommands.onModeChanged(server, SessionManager.GameMode.FREE);
+            SessionManager.setMode(SessionManager.GameMode.FREE);
+            CombatController.reset(server);
+            RpgNetworking.sendAuraStateToAll(server);
+            RpgNetworking.sendSpectatorTargetsToAll(server);
+            TurnManager.reset();
+            SessionManager.clearActivePlayer();
+            SessionStore.applyToServer(server);
+            broadcast(ctx, "Session " + active + " stopped.");
+            return 1;
+        } catch (Exception e) {
+            ctx.getSource().sendFailure(Component.literal("Could not stop session."));
+            return 0;
+        }
     }
 
     /**
@@ -726,7 +966,7 @@ public class MasterCommands {
      * cima de uma mesa com dez ameacas (02/10/2026).
      */
     private static int openMobSheetByName(CommandContext<CommandSourceStack> ctx) {
-        if (!verifyMasterPermission(ctx)) return 0;
+        if (!verifyActiveSessionMasterPermission(ctx)) return 0;
         try {
             ServerPlayer master = ctx.getSource().getPlayerOrException();
             String rawName = StringArgumentType.getString(ctx, "name");
@@ -736,7 +976,7 @@ public class MasterCommands {
                         "message.tabletoprpg.threat_sheet_name_required"));
                 return 0;
             }
-            ThreatSheet sheet = ThreatSheetStore.find(master.getUUID(), wanted);
+            ThreatSheet sheet = ThreatSheetStore.find(SessionStore.get(master.level().getServer()).activeId(), wanted);
             if (sheet == null) {
                 ctx.getSource().sendFailure(Component.translatable(
                         "message.tabletoprpg.threat_sheet_not_found_by_name", rawName));
@@ -763,7 +1003,7 @@ public class MasterCommands {
      * a que o Mestre mais quer transformar em item para o inventario.
      */
     private static int giveMobSheetByName(CommandContext<CommandSourceStack> ctx) {
-        if (!verifyMasterPermission(ctx)) return 0;
+        if (!verifyActiveSessionMasterPermission(ctx)) return 0;
         try {
             ServerPlayer master = ctx.getSource().getPlayerOrException();
             String rawName = StringArgumentType.getString(ctx, "name");
@@ -773,7 +1013,7 @@ public class MasterCommands {
                         "message.tabletoprpg.threat_sheet_name_required"));
                 return 0;
             }
-            ThreatSheet sheet = ThreatSheetStore.find(master.getUUID(), wanted);
+            ThreatSheet sheet = ThreatSheetStore.find(SessionStore.get(master.level().getServer()).activeId(), wanted);
             if (sheet == null) {
                 ctx.getSource().sendFailure(Component.translatable(
                         "message.tabletoprpg.threat_sheet_not_found_by_name", rawName));
@@ -802,10 +1042,14 @@ public class MasterCommands {
      */
     private static CompletableFuture<Suggestions> suggestSheetNames(
             CommandContext<CommandSourceStack> ctx, SuggestionsBuilder builder) {
+        if (!verifyActiveSessionMasterPermission(ctx)) {
+            return builder.buildFuture();
+        }
         String remaining = builder.getRemaining().toLowerCase(Locale.ROOT);
         try {
             ServerPlayer master = ctx.getSource().getPlayerOrException();
-            for (ThreatSheet sheet : ThreatSheetStore.snapshot(master.getUUID())) {
+            for (ThreatSheet sheet : ThreatSheetStore.snapshot(
+                    SessionStore.get(master.level().getServer()).activeId())) {
                 String name = sheet.identity().name();
                 if (!name.isEmpty() && name.toLowerCase(Locale.ROOT).startsWith(remaining)) {
                     builder.suggest(name);
@@ -1026,6 +1270,94 @@ public class MasterCommands {
         }
         options.add(current.toString());
         return options;
+    }
+
+    /**
+     * /rpg open_chest: abre remotamente o container mirado pelo Mestre.
+     *
+     * <p>Somente Mestre da sessao ativa pode usar. O alvo e resolvido por raycast
+     * do servidor a partir do olhar do Mestre, limitado a 64 blocos para evitar
+     * uso acidental em alvos absurdamente distantes, mas sem exigir distancia de
+     * interacao vanilla. O comando abre a interface ({@link MenuProvider}) para o
+     * proprio Mestre e nao move itens.
+     *
+     * <p>Respeita lock/permissoes existentes: bloco trancado pelo BlockLockManager
+     * e recusado. Como o comando e restrito a Mestre da sessao ativa, a semantica
+     * segue a permissao de Mestre do sistema de lock. Double chest e tratado pelo
+     * {@code MenuProvider} retornado pelo estado no bloco atingido.
+     *
+     * <p>Limitacao: a abertura remota nao garante o som vanilla de abrir bau a
+     * distancia; o som pode depender do comportamento do container/bloco no cliente.
+     */
+    private static int openChest(CommandContext<CommandSourceStack> ctx) {
+        if (!verifyActiveSessionMasterPermission(ctx)) return 0;
+        try {
+            ServerPlayer master = ctx.getSource().getPlayerOrException();
+            return openLookedContainer(master) ? 1 : 0;
+        } catch (Exception e) {
+            TabletopRpg.LOGGER.error("[TabletopRPG] Error opening chest remotely: {}", e.getMessage());
+            ctx.getSource().sendFailure(Component.translatable("message.tabletoprpg.open_chest.failed"));
+            return 0;
+        }
+    }
+
+    /**
+     * Abre remotamente o container mirado pelo jogador.
+     *
+     * <p>Reutilizavel pelo comando {@code /rpg open_chest} e pelo payload C2S de
+     * clique remoto. O servidor valida tudo: sessao ativa + mestre, raycast de 24
+     * blocos, alvo com {@link MenuProvider}. Lock de bloco nao impede Mestre da
+     * sessao ativa, mesma semantica do comando.
+     */
+    public static boolean openLookedContainer(ServerPlayer master) {
+        MinecraftServer server = master.level().getServer();
+        if (server == null) {
+            return false;
+        }
+        SessionStore store = SessionStore.get(server);
+        if (!store.isActive() || !store.isMaster(master.getUUID())) {
+            return false;
+        }
+        ServerLevel level = (ServerLevel) master.level();
+        BlockHitResult hit = raycastLook(master, MAX_OPEN_CHEST_DISTANCE);
+        if (hit.getType() != HitResult.Type.BLOCK) {
+            master.sendSystemMessage(Component.translatable("message.tabletoprpg.open_chest.not_looking"));
+            return false;
+        }
+
+        BlockPos pos = hit.getBlockPos();
+        BlockState state = level.getBlockState(pos);
+        MenuProvider provider = state.getMenuProvider(level, pos);
+        if (provider == null) {
+            master.sendSystemMessage(Component.translatable("message.tabletoprpg.open_chest.not_container"));
+            return false;
+        }
+
+        if (BlockLockManager.isPartLocked(level, pos)) {
+            TabletopRpg.LOGGER.debug("[TabletopRPG] Remote open on locked block by session master at {}", pos);
+        }
+
+        java.util.UUID masterId = master.getUUID();
+        REMOTE_OPENING_PLAYERS.add(masterId);
+        try {
+            master.openMenu(provider);
+        } finally {
+            REMOTE_OPENING_PLAYERS.remove(masterId);
+        }
+        if (master.containerMenu != null) {
+            REMOTE_CONTAINER_MENU_IDS.add(master.containerMenu);
+        }
+        master.sendSystemMessage(Component.translatable("message.tabletoprpg.open_chest.opened",
+                pos.getX(), pos.getY(), pos.getZ()));
+        return true;
+    }
+
+    private static BlockHitResult raycastLook(ServerPlayer player, double maxDistance) {
+        Vec3 eye = player.getEyePosition();
+        Vec3 look = player.getLookAngle();
+        Vec3 end = eye.add(look.x * maxDistance, look.y * maxDistance, look.z * maxDistance);
+        ClipContext context = new ClipContext(eye, end, ClipContext.Block.OUTLINE, ClipContext.Fluid.NONE, player);
+        return player.level().clip(context);
     }
 
     /**
@@ -1517,6 +1849,21 @@ public class MasterCommands {
         return 1;
     }
 
+    private static boolean isSessionMaster(ServerPlayer player) {
+        MinecraftServer server = player.level().getServer();
+        if (server == null) {
+            return false;
+        }
+        SessionStore store = SessionStore.get(server);
+        return store.isActive() && store.isMaster(player.getUUID());
+    }
+
+    private static boolean isSessionMasterContext(CommandContext<CommandSourceStack> ctx, ServerPlayer player) {
+        MinecraftServer server = ctx.getSource().getServer();
+        SessionStore store = SessionStore.get(server);
+        return store.isActive() && store.isMaster(player.getUUID());
+    }
+
     /**
      * O jogador que está rodando o comando, ou {@code null} se quem chamou foi o console.
      *
@@ -1547,33 +1894,38 @@ public class MasterCommands {
                     StringArgumentType.getString(ctx, "formula"),
                     StringArgumentType.getString(ctx, "color"));
         } catch (RollPreset.PresetException e) {
-            // A mensagem do DiceFormula chega aqui crua e é a mesma que a jogadora
-            // veria num /rpg roll inválido. É ela que diz onde a fórmula está errada.
             ctx.getSource().sendFailure(Component.translatable("message.tabletoprpg.preset_create_failed",
                     e.toComponent()));
             return 0;
         }
 
-        UUID uuid = player.getUUID();
-        // A busca e SO entre os presets da propria jogadora: um preset compartilhado
-        // de outra pessoa nao impede a jogadora de ter um preset com o mesmo nome.
-        RollPreset existing = RollPresetStore.findOwn(uuid, preset.key()).orElse(null);
+        boolean sessionMaster = isSessionMasterContext(ctx, player);
+        RollPreset existing = sessionMaster
+                ? RollPresetStore.findSessionOwn(preset.key()).orElse(null)
+                : RollPresetStore.findOwn(player.getUUID(), preset.key()).orElse(null);
         if (existing != null) {
-            // Decisao do usuario em 01/10/2026: create nao sobrescreve. Recusar e
-            // dizer o que fazer e o que segura a surpresa de digitar "create ataque
-            // 2d10 blue" para MUDAR o preset e receber o item do preset antigo como
-            // se tivesse dado certo -- o erro so apareceria na hora de rolar.
             ctx.getSource().sendFailure(Component.translatable("message.tabletoprpg.preset_already_exists",
                     existing.name()));
             return 0;
         }
-        if (RollPresetStore.count(uuid) >= RollPresetStore.MAX_PRESETS) {
+        int count = sessionMaster ? RollPresetStore.countSession() : RollPresetStore.count(player.getUUID());
+        if (count >= RollPresetStore.MAX_PRESETS) {
             ctx.getSource().sendFailure(Component.translatable("message.tabletoprpg.preset_limit",
                     RollPresetStore.MAX_PRESETS));
             return 0;
         }
 
-        RollPresetStore.put(uuid, preset);
+        if (sessionMaster) {
+            RollPresetStore.putSession(preset);
+            SessionStore store = SessionStore.get(ctx.getSource().getServer());
+            SessionStore.SessionInfo active = store.active();
+            if (active != null) {
+                store.replacePresets(active.id(), RollPresetStore.snapshotSession());
+                RpgNetworking.broadcastPresetListToSessionMasters(ctx.getSource().getServer(), active.id());
+            }
+        } else {
+            RollPresetStore.put(player.getUUID(), preset);
+        }
         ModItems.giveRollPreset(player, preset);
 
         ctx.getSource().sendSuccess(() -> Component.translatable("message.tabletoprpg.preset_created",
@@ -1598,10 +1950,10 @@ public class MasterCommands {
         }
 
         String name = StringArgumentType.getString(ctx, "name");
-        // Editar e apagar sao atos de DONO: a busca e so entre os presets da propria
-        // jogadora. Um preset compartilhado de outra pessoa existe, mas nao pode
-        // ser editado por quem nao o criou.
-        RollPreset existing = RollPresetStore.findOwn(player.getUUID(), name).orElse(null);
+        boolean sessionMaster = isSessionMasterContext(ctx, player);
+        RollPreset existing = sessionMaster
+                ? RollPresetStore.findSessionOwn(name).orElse(null)
+                : RollPresetStore.findOwn(player.getUUID(), name).orElse(null);
         if (existing == null) {
             if (RollPresetStore.findShared(name).isPresent()) {
                 ctx.getSource().sendFailure(Component.translatable("message.tabletoprpg.preset_not_owner", name));
@@ -1613,13 +1965,6 @@ public class MasterCommands {
 
         RollPreset edited;
         try {
-            // O nome vem do preset ja salvo, nao do argumento: o argumento e a chave de
-            // busca e pode estar escrito de outra forma ("ATAQUE" acha "Ataque").
-            // Trocar o nome no proprio create/edit faria o preset sumir de baixo do
-            // item que ja existe no inventario.
-            //
-            // A flag de rolagem publica e a do preset que ja existia: o comando
-            // `/rpg preset edit` mexe na formula e na cor, nao na visibilidade.
             edited = RollPreset.create(existing.name(),
                     StringArgumentType.getString(ctx, "formula"),
                     StringArgumentType.getString(ctx, "color"),
@@ -1630,7 +1975,17 @@ public class MasterCommands {
             return 0;
         }
 
-        RollPresetStore.put(player.getUUID(), edited);
+        if (sessionMaster) {
+            RollPresetStore.putSession(edited);
+            SessionStore store = SessionStore.get(ctx.getSource().getServer());
+            SessionStore.SessionInfo active = store.active();
+            if (active != null) {
+                store.replacePresets(active.id(), RollPresetStore.snapshotSession());
+                RpgNetworking.broadcastPresetListToSessionMasters(ctx.getSource().getServer(), active.id());
+            }
+        } else {
+            RollPresetStore.put(player.getUUID(), edited);
+        }
         ModItems.refreshRollPresetItems(player, edited);
 
         ctx.getSource().sendSuccess(() -> Component.translatable("message.tabletoprpg.preset_edited",
@@ -1653,7 +2008,10 @@ public class MasterCommands {
         }
 
         String name = StringArgumentType.getString(ctx, "name");
-        RollPreset preset = RollPresetStore.find(player.getUUID(), name).orElse(null);
+        boolean sessionMaster = isSessionMasterContext(ctx, player);
+        RollPreset preset = sessionMaster
+                ? RollPresetStore.findSession(name).orElseGet(() -> RollPresetStore.findShared(name).map(RollPresetStore.SharedPreset::preset).orElse(null))
+                : RollPresetStore.find(player.getUUID(), name).orElse(null);
         if (preset == null) {
             ctx.getSource().sendFailure(Component.translatable("message.tabletoprpg.preset_not_found", name));
             return 0;
@@ -1682,7 +2040,8 @@ public class MasterCommands {
             return 0;
         }
 
-        List<RollPreset> presets = RollPresetStore.list(player.getUUID());
+        boolean sessionMaster = isSessionMasterContext(ctx, player);
+        List<RollPreset> presets = sessionMaster ? RollPresetStore.listSession() : RollPresetStore.list(player.getUUID());
         if (presets.isEmpty()) {
             ctx.getSource().sendFailure(Component.translatable("message.tabletoprpg.preset_list_empty"));
             return 0;
@@ -1715,7 +2074,10 @@ public class MasterCommands {
         }
 
         String name = StringArgumentType.getString(ctx, "name");
-        RollPreset preset = RollPresetStore.find(player.getUUID(), name).orElse(null);
+        boolean sessionMaster = isSessionMasterContext(ctx, player);
+        RollPreset preset = sessionMaster
+                ? RollPresetStore.findSession(name).orElseGet(() -> RollPresetStore.findShared(name).map(RollPresetStore.SharedPreset::preset).orElse(null))
+                : RollPresetStore.find(player.getUUID(), name).orElse(null);
         if (preset == null) {
             ctx.getSource().sendFailure(Component.translatable("message.tabletoprpg.preset_not_found", name));
             return 0;
@@ -1738,16 +2100,25 @@ public class MasterCommands {
         }
 
         String name = StringArgumentType.getString(ctx, "name");
-        RollPreset removed = RollPresetStore.remove(player.getUUID(), name).orElse(null);
+        boolean sessionMaster = isSessionMasterContext(ctx, player);
+        RollPreset removed = sessionMaster
+                ? RollPresetStore.removeSession(name).orElse(null)
+                : RollPresetStore.remove(player.getUUID(), name).orElse(null);
         if (removed == null) {
-            // Apagar e ato de DONO: um preset compartilhado de outra pessoa nao pode
-            // ser apagado por quem nao o criou.
             if (RollPresetStore.findShared(name).isPresent()) {
                 ctx.getSource().sendFailure(Component.translatable("message.tabletoprpg.preset_not_owner", name));
                 return 0;
             }
             ctx.getSource().sendFailure(Component.translatable("message.tabletoprpg.preset_not_found", name));
             return 0;
+        }
+        if (sessionMaster) {
+            SessionStore store = SessionStore.get(ctx.getSource().getServer());
+            SessionStore.SessionInfo active = store.active();
+            if (active != null) {
+                store.replacePresets(active.id(), RollPresetStore.snapshotSession());
+                RpgNetworking.broadcastPresetListToSessionMasters(ctx.getSource().getServer(), active.id());
+            }
         }
         ctx.getSource().sendSuccess(() -> Component.translatable("message.tabletoprpg.preset_deleted",
                 removed.name()), true);
@@ -1762,21 +2133,20 @@ public class MasterCommands {
             return 0;
         }
 
-        List<RollPreset> presets = RollPresetStore.list(player.getUUID());
-        List<RollPresetStore.SharedPreset> shared = RollPresetStore.listShared(player.getUUID());
+        boolean sessionMaster = isSessionMasterContext(ctx, player);
+        List<RollPreset> presets = sessionMaster ? RollPresetStore.listSession() : RollPresetStore.list(player.getUUID());
+        List<RollPresetStore.SharedPreset> shared = sessionMaster
+                ? RollPresetStore.listSharedForSession()
+                : RollPresetStore.listShared(player.getUUID());
         if (presets.isEmpty() && shared.isEmpty()) {
             ctx.getSource().sendSuccess(() -> Component.translatable("message.tabletoprpg.preset_list_empty"), false);
             return 0;
         }
         for (RollPreset preset : presets) {
-            // Copia final: a variavel do for nao e "effectively final" e o
-            // sendSuccess recebe um Supplier que a captura.
             RollPreset entry = preset;
             ctx.getSource().sendSuccess(() -> Component.translatable("message.tabletoprpg.preset_list_entry",
                     entry.name(), entry.formula(), entry.color().displayName()), false);
         }
-        // Os compartilhados entram depois, com a marca de que vem de outra pessoa:
-        // eles podem ser usados, mas nao editados nem apagados por quem nao e dono.
         for (RollPresetStore.SharedPreset sharedEntry : shared) {
             RollPreset entry = sharedEntry.preset();
             ctx.getSource().sendSuccess(() -> Component.translatable("message.tabletoprpg.preset_list_entry_shared",
@@ -1800,8 +2170,10 @@ public class MasterCommands {
         if (player == null) {
             return builder.buildFuture();
         }
+        boolean sessionMaster = isSessionMasterContext(ctx, player);
         String remaining = builder.getRemainingLowerCase();
-        for (RollPreset preset : RollPresetStore.list(player.getUUID())) {
+        List<RollPreset> presets = sessionMaster ? RollPresetStore.listSession() : RollPresetStore.list(player.getUUID());
+        for (RollPreset preset : presets) {
             String commandName = preset.commandName();
             if (commandName.toLowerCase(Locale.ROOT).startsWith(remaining)) {
                 builder.suggest(commandName);
@@ -1825,12 +2197,17 @@ public class MasterCommands {
         if (player == null) {
             return builder.buildFuture();
         }
+        boolean sessionMaster = isSessionMasterContext(ctx, player);
         String remaining = builder.getRemainingLowerCase();
-        for (RollPreset preset : RollPresetStore.list(player.getUUID())) {
+        List<RollPreset> presets = sessionMaster ? RollPresetStore.listSession() : RollPresetStore.list(player.getUUID());
+        for (RollPreset preset : presets) {
             addPresetSuggestion(builder, preset.commandName(), remaining);
         }
-        for (RollPresetStore.SharedPreset shared : RollPresetStore.listShared(player.getUUID())) {
-            addPresetSuggestion(builder, shared.preset().commandName(), remaining);
+        List<RollPresetStore.SharedPreset> shared = sessionMaster
+                ? RollPresetStore.listSharedForSession()
+                : RollPresetStore.listShared(player.getUUID());
+        for (RollPresetStore.SharedPreset sharedPreset : shared) {
+            addPresetSuggestion(builder, sharedPreset.preset().commandName(), remaining);
         }
         return builder.buildFuture();
     }
@@ -2165,6 +2542,17 @@ public class MasterCommands {
         return false;
     }
 
+    private static boolean verifyActiveSessionMasterPermission(CommandContext<CommandSourceStack> ctx) {
+        if (ctx.getSource().getEntity() instanceof ServerPlayer player) {
+            SessionStore store = SessionStore.get(ctx.getSource().getServer());
+            if (!store.activeId().isEmpty() && store.isMaster(player.getUUID())) {
+                return true;
+            }
+        }
+        ctx.getSource().sendFailure(Component.translatable("message.tabletoprpg.master_only_action"));
+        return false;
+    }
+
     private static void broadcast(CommandContext<CommandSourceStack> ctx, String message) {
         broadcast(ctx, Component.literal(message));
     }
@@ -2181,7 +2569,7 @@ public class MasterCommands {
      */
     private static void refreshChatMenu(CommandContext<CommandSourceStack> ctx) {
         if (ctx.getSource().getEntity() instanceof ServerPlayer player) {
-            sendMenu(player);
+            RpgNetworking.sendMenuToPlayer(player);
         }
     }
 

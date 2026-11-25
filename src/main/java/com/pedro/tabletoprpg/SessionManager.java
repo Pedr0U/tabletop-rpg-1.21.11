@@ -127,7 +127,21 @@ public class SessionManager {
     }
 
     public static boolean isMaster(ServerPlayer player) {
-        return player != null && masterUuids.contains(player.getUUID());
+        if (player == null) {
+            return false;
+        }
+        if (masterUuids.contains(player.getUUID())) {
+            return true;
+        }
+        // Fallback defensivo: SessionStore e a fonte de verdade da sessao ativa.
+        // Se houver dessincronizacao em memoria, o Mestre da sessao ativa nao
+        // deve perder permissoes criticas (ex.: quebrar blocos).
+        net.minecraft.server.MinecraftServer server = player.level().getServer();
+        if (server == null) {
+            return false;
+        }
+        SessionStore.SessionInfo active = SessionStore.get(server).active();
+        return active != null && active.masters().contains(player.getUUID());
     }
 
     /**
@@ -203,6 +217,46 @@ public class SessionManager {
     /** Quantos jogadores ocupam o cargo de mestre agora. */
     public static int getMasterCount() {
         return masterUuids.size();
+    }
+
+    /** Copia dos UUIDs dos mestres atuais, na ordem em que clamaram. */
+    public static List<UUID> getMasterUuids() {
+        return new ArrayList<>(masterUuids);
+    }
+
+    /**
+     * Sincroniza o estado em memoria dos mestres com a sessao ativa persistida.
+     *
+     * <p>Fonte de verdade para "quem e mestre da sessao ativa" e o
+     * {@link SessionStore}. O {@link SessionManager} mantem um espelho em
+     * memoria usado por checagens rapidas (quebra de bloco, turno, etc.). Se os
+     * dois divergirem, o mestre da sessao ativa pode ficar sem permissoes
+     * locais. Esta sincronizacao e defensiva e so reflete a sessao ativa.
+     */
+    public static void syncMastersFromActiveSession(net.minecraft.server.MinecraftServer server,
+                                                    SessionStore.SessionInfo active) {
+        Map<UUID, String> oldNames = new HashMap<>(masterNames);
+        masterUuids.clear();
+        masterNames.clear();
+        if (active == null || server == null) {
+            return;
+        }
+        for (UUID id : active.masters()) {
+            if (id == null) {
+                continue;
+            }
+            masterUuids.add(id);
+            ServerPlayer online = server.getPlayerList().getPlayer(id);
+            String name;
+            if (online != null) {
+                name = online.getName().getString();
+            } else if (oldNames.containsKey(id)) {
+                name = oldNames.get(id);
+            } else {
+                name = id.toString().substring(0, 8);
+            }
+            masterNames.put(id, name);
+        }
     }
 
     /** Quantos jogadores PODEM ocupar o cargo de mestre (1..5). */

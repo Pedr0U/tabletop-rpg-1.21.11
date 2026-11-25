@@ -8,9 +8,9 @@
     "PlayerSheetPersistenceMixin",
     "PlayerRollPresetPersistenceMixin",
     "PlayerThreatSheetPersistenceMixin",
-    "PlayerDiaryPersistenceMixin"
-  ],
-  "server": [
+    "PlayerDiaryPersistenceMixin",
+    "ServerPlayerContainerMixin",
+    "ContainerOpenersCounterMixin",
     "ServerGamePacketListenerImplMixin",
     "ServerGamePacketListenerImplAccessor"
   ],

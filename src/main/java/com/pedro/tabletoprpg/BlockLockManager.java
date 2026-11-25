@@ -508,6 +508,18 @@ public final class BlockLockManager {
         return BlockLockStore.get(serverLevel.getServer()).isLocked(level.dimension(), pos);
     }
 
+    /**
+     * Alguma parte do bloco logico (porta de duas alturas, etc.) esta trancada?
+     * Usado por fluxos que abrem/interagem remotamente e precisam respeitar a
+     * mesma semantica de tranca do clique no bloco.
+     */
+    public static boolean isPartLocked(Level level, BlockPos pos) {
+        if (!(level instanceof ServerLevel)) {
+            return false;
+        }
+        return anyPartLocked(level, blockParts(level, pos));
+    }
+
     // --- o que conta como "bloco trancavel" ---
 
     /**

@@ -132,6 +132,8 @@ public class TabletopRpgClient implements ClientModInitializer {
      */
     public static volatile boolean isMaster = false;
 
+    static boolean pendingMasterSessionList = false;
+
     /**
      * True quando o personagem está <b>deitado</b> (HP da ficha &lt;= 0).
      *
@@ -147,6 +149,9 @@ public class TabletopRpgClient implements ClientModInitializer {
      * para STANDING).
      */
     public static volatile boolean downed = false;
+
+    /** Edge detection do clique direito para abertura remota de container. */
+    private static boolean wasUseDown = false;
 
     /**
      * UUIDs de TODOS os personagens que o servidor marcou como deitados.
@@ -324,6 +329,7 @@ public class TabletopRpgClient implements ClientModInitializer {
             auras = List.of();
             lastHoveredId = -1;
             hoverMaxDistance = 0;
+            wasUseDown = false;
             // O destaque de ficha e estado do mundo que esta saindo: no mundo novo
             // os ids de entidade sao outros, e manter a lista antiga destacaria a
             // entidade errada ate o servidor mandar a nova.
@@ -426,6 +432,7 @@ public class TabletopRpgClient implements ClientModInitializer {
 
             // Envia o hover (entidade sob o crosshair) para o highlight Glowing.
             tickHover(client);
+            tickRemoteChestOpen(client);
 
             if (rpgMenuKey == null) {
                 return;
@@ -469,31 +476,60 @@ public class TabletopRpgClient implements ClientModInitializer {
 
         ClientPlayNetworking.registerGlobalReceiver(RpgNetworking.MenuDataPayload.TYPE, (payload, context) -> {
             context.client().execute(() -> {
+                boolean openMasterList = pendingMasterSessionList && payload.isMaster();
+                pendingMasterSessionList = false;
                 if (context.client().player == null) {
                     LOGGER.warn("[TabletopRPG] MenuDataPayload recebido, mas sem jogador no cliente.");
                     return;
                 }
-                LOGGER.info("[TabletopRPG] MenuDataPayload recebido -> abrindo RpgMenuScreen.");
+                LOGGER.info("[TabletopRPG] MenuDataPayload recebido -> abrindo tela de sessao.");
                 // O menu sabe se quem abriu e o Mestre: e uma das fontes da
                 // flag local (a outra e o retrato das trancas, no JOIN).
-                // A flag e sempre atualizada, mas a tela aberta so e trocada se
-                // for o proprio menu (ou se nao houver tela): o servidor manda
-                // este payload tambem quando o cargo muda, e trocar a tela
-                // debaixo do jogador atrapalhava quem estava na iniciativa
-                // (03/11/2026).
+                // A flag e sempre atualizada, mas a tela so e trocada se for o
+                // menu, a porta de sessao, a lista ou se nao houver tela: o
+                // servidor manda este payload tambem quando o cargo muda, e
+                // trocar a tela debaixo do jogador atrapalhava quem estava na
+                // iniciativa (03/11/2026).
                 isMaster = payload.isMaster();
-                if (context.client().screen != null
-                        && !(context.client().screen instanceof RpgMenuScreen)) {
+                Screen current = context.client().screen;
+                if (current != null
+                        && !(current instanceof RpgMenuScreen)
+                        && !(current instanceof SessionGateScreen)
+                        && !(current instanceof SessionListScreen)) {
                     return;
                 }
-                RpgMenuScreen screen = new RpgMenuScreen(
-                    payload.isMaster(),
-                    payload.isMyTurn(),
-                    payload.sessionName(),
-                    payload.modeName(),
-                    payload.activePlayerName(),
-                    payload.playerNames()
-                );
+                Screen screen;
+                if (openMasterList) {
+                    screen = new SessionListScreen(null, payload.sessions(), true, true);
+                } else if (payload.isMaster() && !payload.hasActiveSession()) {
+                    // Mestre sem sessao ativa deve escolher/criar sessao (gate "Iniciar Sessao" ou R).
+                    Screen parent = current instanceof SessionListScreen
+                            ? ((SessionListScreen) current).getParentScreen()
+                            : null;
+                    screen = new SessionListScreen(parent, payload.sessions(), true, true);
+                } else if (!payload.isMaster()
+                        && (payload.masterCount() == 0 || !payload.hasActiveSession() || !payload.memberOfActive())) {
+                    screen = new SessionGateScreen(
+                        null,
+                        payload.masterCount() < payload.maxMasters(),
+                        payload.hasActiveSession(),
+                        payload.sessions()
+                    );
+                } else {
+                    screen = new RpgMenuScreen(
+                        payload.isMaster(),
+                        payload.isMyTurn(),
+                        payload.sessionName(),
+                        payload.modeName(),
+                        payload.activePlayerName(),
+                        payload.playerNames(),
+                        payload.hasActiveSession(),
+                        payload.memberOfActive(),
+                        payload.sessions(),
+                        payload.maxMasters(),
+                        payload.masterCount()
+                    );
+                }
                 context.client().setScreen(screen);
             });
         });
@@ -924,6 +960,39 @@ public class TabletopRpgClient implements ClientModInitializer {
             name = name.substring(0, 64);
         }
         ClientPlayNetworking.send(new RpgNetworking.SheetQueryPayload(name));
+    }
+
+    /**
+     * Clique direito remoto para abrir container (item 2 aprovado).
+     *
+     * <p>Cliente envia apenas o pedido no edge do clique; servidor valida sessao,
+     * cargo de Mestre, alvo, lock/permissoes e abre o menu.
+     */
+    private static void tickRemoteChestOpen(Minecraft client) {
+        boolean useDown = client.options != null && client.options.keyUse.isDown();
+        boolean clicked = useDown && !wasUseDown;
+        wasUseDown = useDown;
+        if (!clicked) {
+            return;
+        }
+        if (client.getConnection() == null || client.player == null || client.level == null) {
+            return;
+        }
+        if (client.screen != null || !isMaster) {
+            return;
+        }
+        if (!client.player.getMainHandItem().isEmpty()) {
+            return;
+        }
+        // Raycast proprio ate 24 blocos: o hitResult vanilla fica limitado ao alcance de interacao.
+        net.minecraft.world.phys.Vec3 eye = client.player.getEyePosition();
+        net.minecraft.world.phys.Vec3 end = eye.add(client.player.getLookAngle().scale(24.0));
+        BlockHitResult blockHit = client.level.clip(new ClipContext(
+                eye, end, ClipContext.Block.OUTLINE, ClipContext.Fluid.NONE, client.player));
+        if (blockHit.getType() != HitResult.Type.BLOCK) {
+            return;
+        }
+        ClientPlayNetworking.send(new RpgNetworking.OpenChestRequestPayload());
     }
 
     /**

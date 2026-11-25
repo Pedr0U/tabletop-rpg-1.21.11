@@ -495,4 +495,52 @@ class RollPresetTest {
             RollPresetStore.forget(b);
         }
     }
+
+    @Test
+    @DisplayName("cache de sessao fica separado do pessoal")
+    void sessionCacheIsSeparateFromPersonal() throws Exception {
+        UUID uuid = UUID.randomUUID();
+        RollPresetStore.forget(uuid);
+        RollPresetStore.clearSessionCache();
+        try {
+            RollPresetStore.put(uuid, RollPreset.create("Pessoal", "1d20", "red"));
+            RollPresetStore.loadSession("S1", List.of(RollPreset.create("Sessao", "2d6", "blue")));
+
+            assertEquals(1, RollPresetStore.count(uuid));
+            assertEquals(1, RollPresetStore.countSession());
+            assertTrue(RollPresetStore.find(uuid, "Pessoal").isPresent());
+            assertFalse(RollPresetStore.find(uuid, "Sessao").isPresent());
+            assertTrue(RollPresetStore.findSession("Sessao").isPresent());
+            assertFalse(RollPresetStore.findSession("Pessoal").isPresent());
+
+            RollPresetStore.clearSessionCache();
+            assertTrue(RollPresetStore.listSession().isEmpty());
+            assertEquals(1, RollPresetStore.count(uuid));
+            assertTrue(RollPresetStore.find(uuid, "Pessoal").isPresent());
+        } finally {
+            RollPresetStore.clearSessionCache();
+            RollPresetStore.forget(uuid);
+        }
+    }
+
+    @Test
+    @DisplayName("loadSession limpa SHARED volatil da sessao anterior")
+    void loadSessionClearsShared() throws Exception {
+        UUID uuid = UUID.randomUUID();
+        RollPresetStore.forget(uuid);
+        RollPresetStore.clearSessionCache();
+        try {
+            RollPresetStore.loadSession("S1", List.of(RollPreset.create("Ataque", "1d20", "red", true)));
+            assertTrue(RollPresetStore.findShared("Ataque").isPresent());
+            assertEquals(RollPresetStore.SESSION_OWNER, RollPresetStore.findShared("Ataque").orElseThrow().owner());
+
+            RollPresetStore.loadSession("S2", List.of(RollPreset.create("Defesa", "1d20", "blue", false)));
+            assertTrue(RollPresetStore.findShared("Ataque").isEmpty());
+            assertTrue(RollPresetStore.findSession("Defesa").isPresent());
+            assertTrue(RollPresetStore.findSession("Ataque").isEmpty());
+        } finally {
+            RollPresetStore.clearSessionCache();
+            RollPresetStore.forget(uuid);
+        }
+    }
 }

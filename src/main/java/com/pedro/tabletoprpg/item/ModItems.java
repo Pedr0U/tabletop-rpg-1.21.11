@@ -7,6 +7,7 @@ import com.pedro.tabletoprpg.RollPreset;
 import com.pedro.tabletoprpg.RollPresetColor;
 import com.pedro.tabletoprpg.RollPresetStore;
 import com.pedro.tabletoprpg.SessionManager;
+import com.pedro.tabletoprpg.SessionStore;
 import com.pedro.tabletoprpg.TabletopRpg;
 import net.fabricmc.fabric.api.event.player.UseItemCallback;
 import net.minecraft.core.Registry;
@@ -19,6 +20,7 @@ import net.minecraft.core.registries.Registries;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceKey;
+import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.item.CreativeModeTab;
@@ -595,8 +597,18 @@ public final class ModItems {
             // O preset pode ter sido deletado com `/rpg preset delete` depois que o
             // item foi entregue: o item fica na mochila de proposito. Aqui e o aviso
             // de que o preset nao existe mais.
-            RollPreset preset = RollPresetStore.find(serverPlayer.getUUID(),
-                    tag.getString(NBT_PRESET).orElse("")).orElse(null);
+            String presetName = tag.getString(NBT_PRESET).orElse("");
+            boolean sessionMaster = false;
+            MinecraftServer server = serverPlayer.level().getServer();
+            if (server != null) {
+                SessionStore store = SessionStore.get(server);
+                sessionMaster = store.isActive() && store.isMaster(serverPlayer.getUUID());
+            }
+            RollPreset preset = sessionMaster
+                    ? RollPresetStore.findSession(presetName)
+                            .orElseGet(() -> RollPresetStore.findShared(presetName)
+                                    .map(RollPresetStore.SharedPreset::preset).orElse(null))
+                    : RollPresetStore.find(serverPlayer.getUUID(), presetName).orElse(null);
             if (preset == null) {
                 serverPlayer.displayClientMessage(
                         Component.translatable("message.tabletoprpg.preset_not_found",
@@ -642,7 +654,8 @@ public final class ModItems {
         }
 
         String sheetId = tag.getString(NBT_THREAT_SHEET).orElse("");
-            ThreatSheet sheet = ThreatSheetStore.findById(serverPlayer.getUUID(), sheetId);
+            ThreatSheet sheet = ThreatSheetStore.findById(
+                    SessionStore.get(serverPlayer.level().getServer()).activeId(), sheetId);
             if (sheet == null) {
                 // A ficha foi apagada depois que o item foi entregue. O item fica na
                 // mochila de proposito: e o mesmo tratamento do preset apagado.

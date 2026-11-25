@@ -379,7 +379,7 @@ public static boolean handleEntityClick(ServerPlayer player, ServerLevel level,
         }
 
         String sheetId = ModItems.threatSheetId(stack);
-        ThreatSheet sheet = ThreatSheetStore.findById(player.getUUID(), sheetId);
+        ThreatSheet sheet = ThreatSheetStore.findById(SessionStore.get(player.level().getServer()).activeId(), sheetId);
         if (sheet == null) {
             player.displayClientMessage(
                     Component.translatable("message.tabletoprpg.threat_sheet_not_found", sheetId), true);
@@ -478,7 +478,7 @@ public static Mob mobUnderCrosshair(ServerPlayer player) {
             return false;
         }
         String sheetId = ModItems.threatSheetId(stack);
-        ThreatSheet sheet = ThreatSheetStore.findById(player.getUUID(), sheetId);
+        ThreatSheet sheet = ThreatSheetStore.findById(SessionStore.get(player.level().getServer()).activeId(), sheetId);
         if (sheet == null) {
             player.displayClientMessage(
                     Component.translatable("message.tabletoprpg.threat_sheet_not_found", sheetId), true);

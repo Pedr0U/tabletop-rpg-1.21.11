@@ -1,11 +1,16 @@
 package com.pedro.tabletoprpg.mixin;
 
+import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
+import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
 import com.pedro.tabletoprpg.CombatController;
 import com.pedro.tabletoprpg.DamageControlHandler;
+import com.pedro.tabletoprpg.MasterCommands;
 import com.pedro.tabletoprpg.SessionManager;
 import net.minecraft.network.protocol.game.ServerboundMovePlayerPacket;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.server.network.ServerGamePacketListenerImpl;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.inventory.AbstractContainerMenu;
 import net.minecraft.world.phys.Vec3;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
@@ -27,6 +32,20 @@ public abstract class ServerGamePacketListenerImplMixin {
 
     // "Espelha" o campo público player já existente na classe original
     @Shadow public ServerPlayer player;
+
+    /**
+     * Keep-open remoto: o servidor valida stillValid em handlers de pacote (click,
+     * close etc.). Para menu remoto aprovado, tratamos como válido no lado servidor
+     * sem alterar o comportamento vanilla do container/contador de abridores.
+     */
+    @WrapOperation(method = "*", at = @At(value = "INVOKE", target = "Lnet/minecraft/world/inventory/AbstractContainerMenu;stillValid(Lnet/minecraft/world/entity/player/Player;)Z"), require = 0)
+    private boolean tabletoprpg$remoteContainerStillValid(AbstractContainerMenu menu, Player player, Operation<Boolean> original) {
+        if (MasterCommands.isRemoteContainerMenu(menu)) {
+            com.pedro.tabletoprpg.TabletopRpg.LOGGER.debug("[TabletopRPG] remote container stillValid forced true in packet handler for {}", player.getScoreboardName());
+            return true;
+        }
+        return original.call(menu, player);
+    }
 
     @Inject(method = "handleMovePlayer", at = @At("HEAD"), cancellable = true)
     private void tabletopRpg$cancelMoveIfLocked(ServerboundMovePlayerPacket packet, CallbackInfo ci) {

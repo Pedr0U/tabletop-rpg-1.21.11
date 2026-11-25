@@ -32,6 +32,7 @@ class DiaryStoreTest {
     void limpaCache() {
         // O store e estatico; sem isto a delecao de um teste aparece no seguinte.
         DiaryStore.forget(player);
+        DiaryStore.clearSessionCache();
     }
 
     private DiaryEntry criaRaiz(String titulo) throws DiaryStore.DiaryException {
@@ -601,5 +602,34 @@ class DiaryStoreTest {
         // "Sem pai" nao acha o id 77, entao o caminho para nele.
         assertEquals("Sem pai", DiaryStore.breadcrumb(player, 1));
         assertEquals("Sem pai > Filho", DiaryStore.breadcrumb(player, 2));
+    }
+
+    @Test
+    @DisplayName("o diario da sessao ativa e separado do pessoal e viaja no snapshot")
+    void sessaoSeparadaDoPessoal() throws Exception {
+        criaRaiz("Pessoal");
+        DiaryStore.loadSession("ABCD", new DiaryStore.Diary(List.of(
+                entrada(1, DiaryEntry.ROOT, "Sessao", 1L, 0L)), 2, 5L));
+
+        assertTrue(DiaryStore.hasSession());
+        assertEquals("ABCD", DiaryStore.sessionId());
+        assertEquals(List.of("Sessao"), titulos(DiaryStore.entriesSession()));
+        assertEquals(List.of("Pessoal"), titulos(DiaryStore.entries(player)));
+
+        DiaryStore.createSession(DiaryEntry.ROOT, "Nova da sessao", "");
+        assertEquals(2, DiaryStore.entriesSession().size());
+        assertEquals(1, DiaryStore.entries(player).size());
+
+        DiaryStore.Diary snapshot = DiaryStore.snapshotSession();
+        assertEquals(3, snapshot.nextId());
+        assertEquals(5L, snapshot.pinCounter());
+
+        DiaryStore.setPinnedSession(1, true);
+        assertEquals(6L, DiaryStore.snapshotSession().pinCounter());
+
+        DiaryStore.clearSessionCache();
+        assertFalse(DiaryStore.hasSession());
+        assertTrue(DiaryStore.entriesSession().isEmpty());
+        assertEquals(List.of("Pessoal"), titulos(DiaryStore.entries(player)));
     }
 }

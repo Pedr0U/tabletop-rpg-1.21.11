@@ -66,6 +66,8 @@ public class SheetModelStore extends SavedData {
     private static final SavedDataType<SheetModelStore> TYPE = new SavedDataType<>(
             "tabletop_rpg_sheet_model", SheetModelStore::new, CODEC, DataFixTypes.LEVEL);
 
+    private static volatile SheetModel globalFallback = SheetModel.defaults();
+
     private SheetModel model;
 
     /**
@@ -89,24 +91,19 @@ public class SheetModelStore extends SavedData {
     }
 
     /**
-     * Troca o modelo e marca o dado como sujo para o vanilla gravar.
-     *
-     * <p>Publica tambem no {@link SheetModelHolder}, porque e o que as fichas ja
-     * carregadas vao ler no proximo alinhamento.
+     * Troca o modelo global/fallback e marca o dado como sujo para o vanilla gravar.
      */
     public void update(SheetModel model) {
         this.model = model == null ? SheetModel.defaults() : model;
+        globalFallback = this.model;
         setDirty();
-        SheetModelHolder.set(this.model);
     }
 
     /**
-     * Carrega (ou cria) o modelo do mundo e o publica.
+     * Carrega (ou cria) o modelo global/fallback do mundo.
      *
-     * <p><b>Chamar sempre antes de usar o modelo no servidor.</b> O
-     * {@link SheetModelHolder} comeca no padrao, e sem esta chamada uma ficha
-     * criada logo apos o login do jogador seria alinhada contra o padrao em vez
-     * do modelo salvo.
+     * <p><b>NAO publica no holder por si so.</b> Quem publica e o modelo efetivo
+     * (sessao ativa ou fallback global), resolvido por {@link SessionStore}.
      */
     public static SheetModelStore get(MinecraftServer server) {
         // computeIfAbsent, e NAO get. Sao duas sobrecargas parecidas do
@@ -118,8 +115,18 @@ public class SheetModelStore extends SavedData {
         // store vinha null e a linha seguinte desreferenciava. Compilava
         // tranquilo, porque null e um retorno legal para get().
         SheetModelStore store = server.overworld().getDataStorage().computeIfAbsent(TYPE);
-        SheetModelHolder.set(store.model());
+        globalFallback = store.model();
         return store;
+    }
+
+    /** Modelo global/fallback atual, sem criar dependencia com sessao ativa. */
+    public static SheetModel fallbackModel(MinecraftServer server) {
+        return server == null ? globalFallback : get(server).model();
+    }
+
+    /** Modelo global/fallback quando nao ha servidor; usado como ultimo recurso. */
+    public static SheetModel fallbackModel() {
+        return globalFallback == null ? SheetModel.defaults() : globalFallback;
     }
 
     /**
@@ -137,6 +144,7 @@ public class SheetModelStore extends SavedData {
     public static void register() {
         ServerLifecycleEvents.SERVER_STARTED.register(server -> {
             SheetModelStore store = get(server);
+            SheetModelHolder.set(SessionStore.get(server).effectiveSheetModel());
             TabletopRpg.LOGGER.info("[TabletopRPG] Modelo da ficha carregado: {} atributo(s), {} pericia(s).",
                     store.model().attributeCount(), store.model().periciaCount());
             // Realinha logo aqui, e nao so quando alguem editar o modelo.

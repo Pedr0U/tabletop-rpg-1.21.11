@@ -64,14 +64,26 @@ public final class DiaryStore {
      * jogadores podem ter o mesmo id local sem colidir, porque toda operacao acontece
      * dentro de um {@code playerUuid}. E gravar o valor evita que, ao renomear/reordenar, o
      * proximo id colida com um que ja existe.
+     *
+     * <p><b>Por que o {@code pinCounter} tambem vai junto:</b> o pino usa um contador
+     * global para decidir "quem foi fixado depois". No diario pessoal ele era um estatico
+     * de processo; no diario compartilhado da sessao ele precisa viajar com a sessao,
+     * senao dois Mestres em sessoes/servidores diferentes produziriam ordens de pino
+     * inconsistentes.
      */
-    public record Diary(List<DiaryEntry> entries, int nextId) {
-        public static final Diary EMPTY = new Diary(List.of(), 1);
+    public record Diary(List<DiaryEntry> entries, int nextId, long pinCounter) {
+        public static final Diary EMPTY = new Diary(List.of(), 1, 1L);
 
         public static final Codec<Diary> CODEC = RecordCodecBuilder.create(i -> i.group(
                 Codec.list(DiaryEntry.CODEC).optionalFieldOf("entries", List.of()).forGetter(Diary::entries),
-                Codec.INT.optionalFieldOf("nextId", 1).forGetter(Diary::nextId)
+                Codec.INT.optionalFieldOf("nextId", 1).forGetter(Diary::nextId),
+                Codec.LONG.optionalFieldOf("pinCounter", 1L).forGetter(Diary::pinCounter)
         ).apply(i, Diary::new));
+
+        /** Compatibilidade com chamadores antigos que nao conhecem pinCounter. */
+        public Diary(List<DiaryEntry> entries, int nextId) {
+            this(entries, nextId, 1L);
+        }
     }
 
     /** Como a lista de cards e ordenada. O rotulo do botao e o {@link #label()}. */
@@ -121,6 +133,10 @@ public final class DiaryStore {
     /** O conteudo salvo de cada jogador. O indice e derivado da lista. */
     private static final Map<UUID, Diary> DIARIES = new HashMap<>();
 
+    /** Cache do diario da sessao ativa, no padrao de Threat/Roll. */
+    private static String sessionId;
+    private static Diary SESSION_DIARY = Diary.EMPTY;
+
     /**
      * O que o Reverter sabe desfazer, do mais antigo ao mais recente. So nesta sessao do
      * servidor: <b>nao vai para o NBT</b>.
@@ -162,26 +178,83 @@ public final class DiaryStore {
     private DiaryStore() {
     }
 
+    // ------------------------------------------------------------ sesao ativa
+
+    /** Carrega o diario da sessao ativa a partir do SavedData. */
+    public static void loadSession(String id, Diary loaded) {
+        sessionId = id == null || id.isBlank() ? null : id;
+        Diary source = loaded == null ? Diary.EMPTY : loaded;
+        SESSION_DIARY = new Diary(new ArrayList<>(source.entries()), source.nextId(), source.pinCounter());
+    }
+
+    public static void clearSessionCache() {
+        sessionId = null;
+        SESSION_DIARY = Diary.EMPTY;
+    }
+
+    public static boolean hasSession() {
+        return sessionId != null;
+    }
+
+    public static String sessionId() {
+        return sessionId;
+    }
+
+    /** Copia defensiva do estado da sessao, para gravar no SavedData. */
+    public static Diary snapshotSession() {
+        return new Diary(List.copyOf(SESSION_DIARY.entries()), SESSION_DIARY.nextId(),
+                SESSION_DIARY.pinCounter());
+    }
+
     // ---------------------------------------------------------------- leitura
 
-    /** O diario inteiro do jogador, ou vazio. Copia defensiva da lista. */
-    public static Diary diary(UUID playerUuid) {
+    private static Diary diary(UUID playerUuid, boolean shared) {
+        if (shared) {
+            return hasSession() ? SESSION_DIARY : Diary.EMPTY;
+        }
         Diary stored = playerUuid == null ? null : DIARIES.get(playerUuid);
         return stored == null ? Diary.EMPTY : stored;
     }
 
-    /** Todas as anotacoes, planas. A tela monta os niveis a partir do {@code parentId}. */
-    public static List<DiaryEntry> entries(UUID playerUuid) {
-        return new ArrayList<>(diary(playerUuid).entries());
+    /** O diario inteiro do jogador, ou vazio. Copia defensiva da lista. */
+    public static Diary diary(UUID playerUuid) {
+        return diary(playerUuid, false);
     }
 
-    public static Optional<DiaryEntry> find(UUID playerUuid, int id) {
-        for (DiaryEntry entry : diary(playerUuid).entries()) {
+    /** O diario da sessao ativa, para os Mestres. */
+    public static Diary diarySession() {
+        return diary(null, true);
+    }
+
+    private static List<DiaryEntry> entries(UUID playerUuid, boolean shared) {
+        return new ArrayList<>(diary(playerUuid, shared).entries());
+    }
+
+    /** Todas as anotacoes, planas. A tela monta os niveis a partir do {@code parentId}. */
+    public static List<DiaryEntry> entries(UUID playerUuid) {
+        return entries(playerUuid, false);
+    }
+
+    /** Todas as anotacoes da sessao ativa, planas. */
+    public static List<DiaryEntry> entriesSession() {
+        return entries(null, true);
+    }
+
+    private static Optional<DiaryEntry> find(UUID playerUuid, boolean shared, int id) {
+        for (DiaryEntry entry : diary(playerUuid, shared).entries()) {
             if (entry.id() == id) {
                 return Optional.of(entry);
             }
         }
         return Optional.empty();
+    }
+
+    public static Optional<DiaryEntry> find(UUID playerUuid, int id) {
+        return find(playerUuid, false, id);
+    }
+
+    public static Optional<DiaryEntry> findSession(int id) {
+        return find(null, true, id);
     }
 
     /**
@@ -193,6 +266,11 @@ public final class DiaryStore {
      */
     public static List<DiaryEntry> children(UUID playerUuid, int parentId) {
         return childrenOf(diary(playerUuid).entries(), parentId);
+    }
+
+    /** As anotacoes da sessao ativa filhas diretas de {@code parentId}. */
+    public static List<DiaryEntry> childrenSession(int parentId) {
+        return childrenOf(diarySession().entries(), parentId);
     }
 
     /**
@@ -437,6 +515,28 @@ public final class DiaryStore {
 
     // --------------------------------------------------------------- escrita
 
+    private static void put(UUID playerUuid, boolean shared, Diary diary) {
+        if (shared) {
+            SESSION_DIARY = diary;
+        } else {
+            DIARIES.put(playerUuid, diary);
+        }
+    }
+
+    private static Diary newDiary(boolean shared, List<DiaryEntry> entries, int nextId) {
+        return shared ? new Diary(entries, nextId, SESSION_DIARY.pinCounter())
+                : new Diary(entries, nextId);
+    }
+
+    private static long nextPin(boolean shared) {
+        if (!shared) {
+            return ++pinCounter;
+        }
+        long sequencia = SESSION_DIARY.pinCounter() + 1L;
+        SESSION_DIARY = new Diary(SESSION_DIARY.entries(), SESSION_DIARY.nextId(), sequencia);
+        return sequencia;
+    }
+
     /**
      * Cria uma anotacao e devolve o que foi criado.
      *
@@ -446,6 +546,20 @@ public final class DiaryStore {
      */
     public static DiaryEntry create(UUID playerUuid, int parentId, String title, String description)
             throws DiaryException {
+        return create(playerUuid, false, parentId, title, description);
+    }
+
+    /** Cria uma anotacao no diario da sessao ativa (Mestres). */
+    public static DiaryEntry createSession(int parentId, String title, String description)
+            throws DiaryException {
+        if (!hasSession()) {
+            throw new DiaryException("no active session");
+        }
+        return create(null, true, parentId, title, description);
+    }
+
+    private static DiaryEntry create(UUID playerUuid, boolean shared, int parentId,
+                                     String title, String description) throws DiaryException {
 
         String clean = title == null ? "" : title.trim();
         if (clean.isEmpty()) {
@@ -459,15 +573,15 @@ public final class DiaryStore {
             throw new DiaryException("diary title must be at most " + DiaryEntry.MAX_TITLE
                     + " characters (got " + clean.length() + ")");
         }
-        List<DiaryEntry> current = entries(playerUuid);
+        List<DiaryEntry> current = entries(playerUuid, shared);
         if (current.size() >= MAX_ENTRIES) {
             throw new DiaryException("diary is full (max " + MAX_ENTRIES + " entries)");
         }
-        if (parentId != DiaryEntry.ROOT && find(playerUuid, parentId).isEmpty()) {
+        if (parentId != DiaryEntry.ROOT && find(playerUuid, shared, parentId).isEmpty()) {
             throw new DiaryException("parent entry does not exist: " + parentId);
         }
 
-        Diary diary = diary(playerUuid);
+        Diary diary = diary(playerUuid, shared);
         int id = diary.nextId() <= 0 ? 1 : diary.nextId();
         DiaryEntry entry = new DiaryEntry(id, parentId, clean, description,
                 System.currentTimeMillis(), 0L);
@@ -476,14 +590,18 @@ public final class DiaryStore {
         // e cria a 6a primeiro ficaria com um espelho so da 6a, e nenhuma das outras 5
         // poderia nunca mais ser marcada como pendente -- o `ensureCommitted` nao roda
         // depois, porque o mapa ja existe.
-        ensureCommitted(playerUuid);
+        if (!shared) {
+            ensureCommitted(playerUuid);
+        }
         List<DiaryEntry> next = new ArrayList<>(current);
         next.add(entry);
-        DIARIES.put(playerUuid, new Diary(next, id + 1));
+        put(playerUuid, shared, newDiary(shared, next, id + 1));
         // Uma secao que a jogadora acabou de criar por pedido dela NAO e rascunho. Sem esta
         // linha o no nasceria sem espelho, "pendente" por definicao, e a secao apareceria
         // com a marca amarela de alteracao nao salva que ela nunca fez.
-        markCommitted(playerUuid, entry);
+        if (!shared) {
+            markCommitted(playerUuid, entry);
+        }
         return entry;
     }
 
@@ -535,6 +653,11 @@ public final class DiaryStore {
         return SUBSECTION_PREFIX + (children(playerUuid, parentId).size() + 1);
     }
 
+    /** O titulo automatico no diario da sessao ativa. */
+    public static String defaultSubsectionTitleSession(int parentId) {
+        return SUBSECTION_PREFIX + (childrenSession(parentId).size() + 1);
+    }
+
     /**
      * Grava o titulo e a descricao que a jogadora digitou, e marca como modificada agora.
      *
@@ -542,6 +665,20 @@ public final class DiaryStore {
      */
     public static DiaryEntry save(UUID playerUuid, int id, String title, String description)
             throws DiaryException {
+        return save(playerUuid, false, id, title, description);
+    }
+
+    /** Grava titulo e descricao no diario da sessao ativa (Mestres). */
+    public static DiaryEntry saveSession(int id, String title, String description)
+            throws DiaryException {
+        if (!hasSession()) {
+            throw new DiaryException("no active session");
+        }
+        return save(null, true, id, title, description);
+    }
+
+    private static DiaryEntry save(UUID playerUuid, boolean shared, int id, String title,
+                                   String description) throws DiaryException {
 
         String clean = title == null ? "" : title.trim();
         if (clean.isEmpty()) {
@@ -551,7 +688,7 @@ public final class DiaryStore {
             throw new DiaryException("diary title must be at most " + DiaryEntry.MAX_TITLE
                     + " characters (got " + clean.length() + ")");
         }
-        DiaryEntry found = find(playerUuid, id)
+        DiaryEntry found = find(playerUuid, shared, id)
                 .orElseThrow(() -> new DiaryException("entry does not exist: " + id));
         String cleanDesc = description == null ? "" : description;
 
@@ -562,8 +699,10 @@ public final class DiaryStore {
             return found;
         }
 
-        ensureCommitted(playerUuid);
-        List<DiaryEntry> next = entries(playerUuid);
+        if (!shared) {
+            ensureCommitted(playerUuid);
+        }
+        List<DiaryEntry> next = entries(playerUuid, shared);
         for (int i = 0; i < next.size(); i++) {
             DiaryEntry entry = next.get(i);
             if (entry.id() == id) {
@@ -571,9 +710,12 @@ public final class DiaryStore {
                 // fixada nao pode desarrumar a lista.
                 next.set(i, new DiaryEntry(entry.id(), entry.parentId(), clean, cleanDesc,
                         System.currentTimeMillis(), entry.pinSeq()));
-                undoStack(playerUuid).push(new Edited(entry.id(), entry.title(),
-                        entry.description(), entry.modifiedAt(), diary(playerUuid).nextId()));
-                DIARIES.put(playerUuid, new Diary(next, diary(playerUuid).nextId()));
+                int nextId = diary(playerUuid, shared).nextId();
+                if (!shared) {
+                    undoStack(playerUuid).push(new Edited(entry.id(), entry.title(),
+                            entry.description(), entry.modifiedAt(), nextId));
+                }
+                put(playerUuid, shared, newDiary(shared, next, nextId));
                 return next.get(i);
             }
         }
@@ -589,12 +731,23 @@ public final class DiaryStore {
      * @return {@code false} se o id nao existir, para nao limpar um desfazer por engano
      */
     public static boolean delete(UUID playerUuid, int id) {
-        List<DiaryEntry> current = entries(playerUuid);
-        DiaryEntry target = find(playerUuid, id).orElse(null);
+        return delete(playerUuid, false, id);
+    }
+
+    /** Apaga no diario da sessao ativa, em cascata (Mestres). */
+    public static boolean deleteSession(int id) {
+        return hasSession() && delete(null, true, id);
+    }
+
+    private static boolean delete(UUID playerUuid, boolean shared, int id) {
+        List<DiaryEntry> current = entries(playerUuid, shared);
+        DiaryEntry target = find(playerUuid, shared, id).orElse(null);
         if (target == null) {
             return false;
         }
-        ensureCommitted(playerUuid);
+        if (!shared) {
+            ensureCommitted(playerUuid);
+        }
         List<DiaryEntry> subtree = subtreeOf(current, id);
         Map<Integer, DiaryEntry> gone = indexById(subtree);
         List<DiaryEntry> next = new ArrayList<>();
@@ -606,8 +759,11 @@ public final class DiaryStore {
         // O espelho NAO e apagado junto. O desfazer traz a subarvore de volta com o texto
         // que ela tinha, e e contra esse texto aceito que ela passa a ser comparada: volta
         // limpa se nao tinha rascunho, e continua marcada se tinha.
-        undoStack(playerUuid).push(new Deleted(subtree, diary(playerUuid).nextId()));
-        DIARIES.put(playerUuid, new Diary(next, diary(playerUuid).nextId()));
+        int nextId = diary(playerUuid, shared).nextId();
+        if (!shared) {
+            undoStack(playerUuid).push(new Deleted(subtree, nextId));
+        }
+        put(playerUuid, shared, newDiary(shared, next, nextId));
         return true;
     }
 
@@ -771,14 +927,25 @@ public final class DiaryStore {
 
     /** Fixa ou desfixa. Fixar joga para o topo da lista; desfixar devolve a ordenacao atual. */
     public static void setPinned(UUID playerUuid, int id, boolean pinned) {
-        List<DiaryEntry> next = entries(playerUuid);
+        setPinned(playerUuid, false, id, pinned);
+    }
+
+    /** Fixa ou desfixa no diario da sessao ativa (Mestres). */
+    public static void setPinnedSession(int id, boolean pinned) {
+        if (hasSession()) {
+            setPinned(null, true, id, pinned);
+        }
+    }
+
+    private static void setPinned(UUID playerUuid, boolean shared, int id, boolean pinned) {
+        List<DiaryEntry> next = entries(playerUuid, shared);
         for (int i = 0; i < next.size(); i++) {
             DiaryEntry entry = next.get(i);
             if (entry.id() == id) {
-                long pinSeq = pinned ? ++pinCounter : 0L;
+                long pinSeq = pinned ? nextPin(shared) : 0L;
                 next.set(i, new DiaryEntry(entry.id(), entry.parentId(), entry.title(),
                         entry.description(), entry.modifiedAt(), pinSeq));
-                DIARIES.put(playerUuid, new Diary(next, diary(playerUuid).nextId()));
+                put(playerUuid, shared, newDiary(shared, next, diary(playerUuid, shared).nextId()));
                 return;
             }
         }

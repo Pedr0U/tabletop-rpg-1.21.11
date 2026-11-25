@@ -10,7 +10,6 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
-import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -30,7 +29,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class ThreatSheetStoreTest {
 
-    private static final UUID U = UUID.fromString("00000000-0000-0000-0000-000000000001");
+    private static final String S = "TEST";
 
     private static ThreatSheet ficha(String nome) {
         return new ThreatSheet("",
@@ -49,11 +48,11 @@ class ThreatSheetStoreTest {
 
     /** Salva e devolve a ficha com o id que o servidor atribuiu. */
     private static ThreatSheet salva(String nome) {
-        ThreatSheetStore.forget(U);
+        ThreatSheetStore.forget(S);
         ThreatSheet saved = ficha(nome);
-        ThreatSheetStore.SaveResult resultado = ThreatSheetStore.save(U, saved, "");
+        ThreatSheetStore.SaveResult resultado = ThreatSheetStore.save(S, saved, "");
         assertTrue(resultado.ok(), "save: " + resultado);
-        return ThreatSheetStore.find(U, nome);
+        return ThreatSheetStore.find(S, nome);
     }
 
     @Test
@@ -61,9 +60,9 @@ class ThreatSheetStoreTest {
     void copiaNasceComMenorNumeroLivre() {
         ThreatSheet mae = salva("Creeper");
 
-        ThreatSheetStore.SaveResult primeira = ThreatSheetStore.createCopy(U, mae.id());
+        ThreatSheetStore.SaveResult primeira = ThreatSheetStore.createCopy(S, mae.id());
         assertEquals(ThreatSheetStore.SaveResult.CREATED, primeira);
-        ThreatSheet copia = ThreatSheetStore.find(U, "Creeper (1)");
+        ThreatSheet copia = ThreatSheetStore.find(S, "Creeper (1)");
         assertNotNull(copia);
         assertTrue(copia.isCopy());
         assertEquals(mae.id(), copia.copyOf());
@@ -76,65 +75,65 @@ class ThreatSheetStoreTest {
         assertEquals(mae.actions(), copia.actions());
         assertEquals(mae.vitals(), copia.vitals());
 
-        assertEquals(ThreatSheetStore.SaveResult.CREATED, ThreatSheetStore.createCopy(U, mae.id()));
-        assertNotNull(ThreatSheetStore.find(U, "Creeper (2)"));
+        assertEquals(ThreatSheetStore.SaveResult.CREATED, ThreatSheetStore.createCopy(S, mae.id()));
+        assertNotNull(ThreatSheetStore.find(S, "Creeper (2)"));
 
         // Menor numero livre: apagar a (1) e copiar de novo faz nascer (1).
-        assertNotNull(ThreatSheetStore.remove(U, "Creeper (1)"));
-        assertEquals(ThreatSheetStore.SaveResult.CREATED, ThreatSheetStore.createCopy(U, mae.id()));
-        assertNotNull(ThreatSheetStore.find(U, "Creeper (1)"));
-        assertNull(ThreatSheetStore.find(U, "Creeper (3)"));
+        assertNotNull(ThreatSheetStore.remove(S, "Creeper (1)"));
+        assertEquals(ThreatSheetStore.SaveResult.CREATED, ThreatSheetStore.createCopy(S, mae.id()));
+        assertNotNull(ThreatSheetStore.find(S, "Creeper (1)"));
+        assertNull(ThreatSheetStore.find(S, "Creeper (3)"));
     }
 
     @Test
     @DisplayName("renomear a mae nao renomeia copias existentes, so as novas")
     void renomearMaeNaoRenomeiaCopiaExistente() {
         ThreatSheet mae = salva("Goblin");
-        assertEquals(ThreatSheetStore.SaveResult.CREATED, ThreatSheetStore.createCopy(U, mae.id()));
-        ThreatSheet copia = ThreatSheetStore.find(U, "Goblin (1)");
+        assertEquals(ThreatSheetStore.SaveResult.CREATED, ThreatSheetStore.createCopy(S, mae.id()));
+        ThreatSheet copia = ThreatSheetStore.find(S, "Goblin (1)");
 
         ThreatSheet maeRenomeada = mae.withName("Orc");
         assertEquals(ThreatSheetStore.SaveResult.RENAMED,
-                ThreatSheetStore.save(U, maeRenomeada, "Goblin"));
+                ThreatSheetStore.save(S, maeRenomeada, "Goblin"));
 
         // A copia existente mantem o nome antigo E o vinculo com a mae.
-        ThreatSheet copiaDepois = ThreatSheetStore.findById(U, copia.id());
+        ThreatSheet copiaDepois = ThreatSheetStore.findById(S, copia.id());
         assertEquals("Goblin (1)", copiaDepois.identity().name());
         assertEquals(mae.id(), copiaDepois.copyOf());
 
         // Copia nova segue o nome novo da mae.
-        assertEquals(ThreatSheetStore.SaveResult.CREATED, ThreatSheetStore.createCopy(U, mae.id()));
-        assertNotNull(ThreatSheetStore.find(U, "Orc (1)"));
+        assertEquals(ThreatSheetStore.SaveResult.CREATED, ThreatSheetStore.createCopy(S, mae.id()));
+        assertNotNull(ThreatSheetStore.find(S, "Orc (1)"));
     }
 
     @Test
     @DisplayName("apagar a mae apaga mae e copias juntas")
     void apagarMaeApagaCopias() {
         ThreatSheet mae = salva("Chefe");
-        assertEquals(ThreatSheetStore.SaveResult.CREATED, ThreatSheetStore.createCopy(U, mae.id()));
-        assertEquals(ThreatSheetStore.SaveResult.CREATED, ThreatSheetStore.createCopy(U, mae.id()));
+        assertEquals(ThreatSheetStore.SaveResult.CREATED, ThreatSheetStore.createCopy(S, mae.id()));
+        assertEquals(ThreatSheetStore.SaveResult.CREATED, ThreatSheetStore.createCopy(S, mae.id()));
 
-        ThreatSheet removida = ThreatSheetStore.remove(U, "Chefe");
+        ThreatSheet removida = ThreatSheetStore.remove(S, "Chefe");
         assertNotNull(removida);
         assertEquals(mae.id(), removida.id());
-        assertTrue(ThreatSheetStore.snapshot(U).isEmpty());
-        assertNull(ThreatSheetStore.findById(U, mae.id()));
+        assertTrue(ThreatSheetStore.snapshot(S).isEmpty());
+        assertNull(ThreatSheetStore.findById(S, mae.id()));
     }
 
     @Test
     @DisplayName("apagar uma copia nao toca na mae nem nas irmas")
     void apagarCopiaNaoApagaMaeNemIrma() {
         ThreatSheet mae = salva("Dragao");
-        assertEquals(ThreatSheetStore.SaveResult.CREATED, ThreatSheetStore.createCopy(U, mae.id()));
-        assertEquals(ThreatSheetStore.SaveResult.CREATED, ThreatSheetStore.createCopy(U, mae.id()));
+        assertEquals(ThreatSheetStore.SaveResult.CREATED, ThreatSheetStore.createCopy(S, mae.id()));
+        assertEquals(ThreatSheetStore.SaveResult.CREATED, ThreatSheetStore.createCopy(S, mae.id()));
 
-        assertNotNull(ThreatSheetStore.remove(U, "Dragao (1)"));
+        assertNotNull(ThreatSheetStore.remove(S, "Dragao (1)"));
 
-        assertNotNull(ThreatSheetStore.find(U, "Dragao"));
-        assertNotNull(ThreatSheetStore.find(U, "Dragao (2)"));
-        assertNull(ThreatSheetStore.find(U, "Dragao (1)"));
+        assertNotNull(ThreatSheetStore.find(S, "Dragao"));
+        assertNotNull(ThreatSheetStore.find(S, "Dragao (2)"));
+        assertNull(ThreatSheetStore.find(S, "Dragao (1)"));
         // Nao sobrou orfao: o remanescente continua apontando para a mae.
-        ThreatSheet irma = ThreatSheetStore.find(U, "Dragao (2)");
+        ThreatSheet irma = ThreatSheetStore.find(S, "Dragao (2)");
         assertEquals(mae.id(), irma.copyOf());
     }
 
@@ -142,11 +141,11 @@ class ThreatSheetStoreTest {
     @DisplayName("copia de copia e recusada no servidor")
     void copiaDeCopiaRecusada() {
         ThreatSheet mae = salva("Troll");
-        assertEquals(ThreatSheetStore.SaveResult.CREATED, ThreatSheetStore.createCopy(U, mae.id()));
-        ThreatSheet copia = ThreatSheetStore.find(U, "Troll (1)");
+        assertEquals(ThreatSheetStore.SaveResult.CREATED, ThreatSheetStore.createCopy(S, mae.id()));
+        ThreatSheet copia = ThreatSheetStore.find(S, "Troll (1)");
 
         assertEquals(ThreatSheetStore.SaveResult.COPY_OF_COPY,
-                ThreatSheetStore.createCopy(U, copia.id()));
+                ThreatSheetStore.createCopy(S, copia.id()));
     }
 
     @Test
@@ -155,24 +154,24 @@ class ThreatSheetStoreTest {
         ThreatSheet mae = salva("Liche");
         // Uma ficha comum chamada "Liche (1)" ja existe: nao e copia, mas ocupa o nome.
         ThreatSheet ocupante = ficha("Liche (1)");
-        assertEquals(ThreatSheetStore.SaveResult.CREATED, ThreatSheetStore.save(U, ocupante, ""));
+        assertEquals(ThreatSheetStore.SaveResult.CREATED, ThreatSheetStore.save(S, ocupante, ""));
 
-        assertEquals(ThreatSheetStore.SaveResult.CREATED, ThreatSheetStore.createCopy(U, mae.id()));
+        assertEquals(ThreatSheetStore.SaveResult.CREATED, ThreatSheetStore.createCopy(S, mae.id()));
         // O nome (1) continua com a ficha comum (que nao e copia), e a copia foi para (2).
-        ThreatSheet ocupanteDepois = ThreatSheetStore.find(U, "Liche (1)");
+        ThreatSheet ocupanteDepois = ThreatSheetStore.find(S, "Liche (1)");
         assertNotNull(ocupanteDepois);
         assertFalse(ocupanteDepois.isCopy());
-        assertNotNull(ThreatSheetStore.find(U, "Liche (2)"));
+        assertNotNull(ThreatSheetStore.find(S, "Liche (2)"));
     }
 
     @Test
     @DisplayName("nome da mae no tamanho maximo ainda cabe com o sufixo")
     void nomeMaximoCabeComSufixo() {
         ThreatSheet mae = salva("a".repeat(ThreatSheet.MAX_NAME));
-        assertEquals(ThreatSheetStore.SaveResult.CREATED, ThreatSheetStore.createCopy(U, mae.id()));
+        assertEquals(ThreatSheetStore.SaveResult.CREATED, ThreatSheetStore.createCopy(S, mae.id()));
         String copiaNome = mae.identity().name().substring(0, ThreatSheet.MAX_NAME - " (200)".length())
                 + " (1)";
-        ThreatSheet copia = ThreatSheetStore.find(U, copiaNome);
+        ThreatSheet copia = ThreatSheetStore.find(S, copiaNome);
         assertNotNull(copia);
         assertTrue(copia.identity().name().length() <= ThreatSheet.MAX_NAME);
         assertEquals(mae.id(), copia.copyOf());
@@ -196,8 +195,8 @@ class ThreatSheetStoreTest {
     @DisplayName("NBT round-trip preserva o copy_of da copia")
     void nbtRoundTripPreservaCopia() {
         ThreatSheet mae = salva("Elemental");
-        assertEquals(ThreatSheetStore.SaveResult.CREATED, ThreatSheetStore.createCopy(U, mae.id()));
-        ThreatSheet copia = ThreatSheetStore.find(U, "Elemental (1)");
+        assertEquals(ThreatSheetStore.SaveResult.CREATED, ThreatSheetStore.createCopy(S, mae.id()));
+        ThreatSheet copia = ThreatSheetStore.find(S, "Elemental (1)");
 
         ThreatSheet carregado = ThreatSheet.CODEC.parse(NbtOps.INSTANCE, gravaNbt(copia)).getOrThrow();
         assertTrue(carregado.isCopy());
@@ -208,8 +207,8 @@ class ThreatSheetStoreTest {
     @DisplayName("STREAM_CODEC round-trip preserva o copy_of")
     void streamCodecRoundTripPreservaCopia() {
         ThreatSheet mae = salva("Golem");
-        assertEquals(ThreatSheetStore.SaveResult.CREATED, ThreatSheetStore.createCopy(U, mae.id()));
-        ThreatSheet copia = ThreatSheetStore.find(U, "Golem (1)");
+        assertEquals(ThreatSheetStore.SaveResult.CREATED, ThreatSheetStore.createCopy(S, mae.id()));
+        ThreatSheet copia = ThreatSheetStore.find(S, "Golem (1)");
 
         FriendlyByteBuf buf = new FriendlyByteBuf(Unpooled.buffer());
         ThreatSheet.STREAM_CODEC.encode(buf, copia);
@@ -238,9 +237,9 @@ class ThreatSheetStoreTest {
         ThreatSheet mae = salva("Horda Ligada");
         // Salva de novo, agora com o Modo Horda ligado.
         assertEquals(ThreatSheetStore.SaveResult.UPDATED,
-                ThreatSheetStore.save(U, mae.withHordeMode(true), "Horda Ligada"));
+                ThreatSheetStore.save(S, mae.withHordeMode(true), "Horda Ligada"));
 
-        ThreatSheet comHorda = ThreatSheetStore.find(U, "Horda Ligada");
+        ThreatSheet comHorda = ThreatSheetStore.find(S, "Horda Ligada");
         assertNotNull(comHorda);
         assertTrue(comHorda.hordeMode());
 
@@ -253,8 +252,8 @@ class ThreatSheetStoreTest {
     void streamCodecRoundTripPreservaModoHorda() {
         ThreatSheet mae = salva("Horda da Rede");
         assertEquals(ThreatSheetStore.SaveResult.UPDATED,
-                ThreatSheetStore.save(U, mae.withHordeMode(true), "Horda da Rede"));
-        ThreatSheet comHorda = ThreatSheetStore.find(U, "Horda da Rede");
+                ThreatSheetStore.save(S, mae.withHordeMode(true), "Horda da Rede"));
+        ThreatSheet comHorda = ThreatSheetStore.find(S, "Horda da Rede");
         assertNotNull(comHorda);
 
         FriendlyByteBuf buf = new FriendlyByteBuf(Unpooled.buffer());

@@ -90,8 +90,22 @@ public final class RollPresetStore {
                 });
     }
 
-    /** A ordem da lista. O indice e derivado dela, nunca a fonte da verdade. */
+    /** A ordem da lista pessoal, por jogador. Indice derivado, nunca fonte da verdade. */
     private static final Map<UUID, List<RollPreset>> PRESETS = new HashMap<>();
+
+    /**
+     * Dono sentinela para presets compartilhados da sessao ativa.
+     *
+     * <p>Presets de sessao nao pertencem a um UUID de jogador; este valor permite
+     * reaproveitar {@link SharedPreset} sem quebrar callers que esperam owner.
+     */
+    public static final UUID SESSION_OWNER = new UUID(0L, 1L);
+
+    /** Sessao ativa carregada em cache, ou {@code null} quando nao ha sessao ativa. */
+    private static String sessionId;
+
+    /** Presets da sessao ativa, na ordem definida pelos Mestres. */
+    private static final List<RollPreset> SESSION_PRESETS = new ArrayList<>();
 
     /**
      * Os presets <b>compartilhados</b> da mesa, com o dono de cada um.
@@ -114,13 +128,128 @@ public final class RollPresetStore {
     /**
      * Um preset compartilhado e o dono que o publicou.
      *
-     * @param owner  quem publicou (e quem pode despublicar)
+     * @param owner  quem publicou (e quem pode despublicar); para presets de sessao
+     *               usa {@link #SESSION_OWNER}
      * @param preset o preset em si
      */
     public record SharedPreset(UUID owner, RollPreset preset) {
     }
 
     private RollPresetStore() {
+    }
+
+    public static boolean hasSession() {
+        return sessionId != null && !sessionId.isBlank();
+    }
+
+    public static String sessionId() {
+        return sessionId;
+    }
+
+    /** Carrega presets da sessao ativa e limpa compartilhados volateis da sessao. */
+    public static void loadSession(String id, List<RollPreset> loaded) {
+        sessionId = id == null || id.isBlank() ? null : id;
+        SESSION_PRESETS.clear();
+        unpublishedAll(SESSION_OWNER);
+        if (sessionId == null || loaded == null) {
+            return;
+        }
+        Map<String, Boolean> seen = new HashMap<>();
+        for (RollPreset preset : loaded) {
+            if (preset == null || seen.putIfAbsent(preset.key(), Boolean.TRUE) != null) {
+                continue;
+            }
+            SESSION_PRESETS.add(preset);
+            if (SESSION_PRESETS.size() >= MAX_PRESETS) {
+                break;
+            }
+        }
+        republish(SESSION_OWNER, new ArrayList<>(SESSION_PRESETS));
+    }
+
+    /** Limpa cache de sessao e compartilhados volateis da sessao, sem tocar presets pessoais. */
+    public static void clearSessionCache() {
+        sessionId = null;
+        SESSION_PRESETS.clear();
+        unpublishedAll(SESSION_OWNER);
+    }
+
+    public static List<RollPreset> snapshotSession() {
+        return new ArrayList<>(SESSION_PRESETS);
+    }
+
+    public static List<RollPreset> listSession() {
+        return new ArrayList<>(SESSION_PRESETS);
+    }
+
+    public static int countSession() {
+        return SESSION_PRESETS.size();
+    }
+
+    public static int indexOfSession(String rawName) {
+        if (rawName == null) {
+            return -1;
+        }
+        String key = RollPreset.normalizeKey(rawName);
+        for (int i = 0; i < SESSION_PRESETS.size(); i++) {
+            if (SESSION_PRESETS.get(i).key().equals(key)) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    public static Optional<RollPreset> findSession(String rawName) {
+        int index = indexOfSession(rawName);
+        return index < 0 ? Optional.empty() : Optional.of(SESSION_PRESETS.get(index));
+    }
+
+    public static Optional<RollPreset> findSessionOwn(String rawName) {
+        return findSession(rawName);
+    }
+
+    public static boolean existsSession(String rawName) {
+        return findSession(rawName).isPresent();
+    }
+
+    public static Optional<RollPreset> putSession(RollPreset preset) {
+        if (preset == null) {
+            return Optional.empty();
+        }
+        String key = preset.key();
+        for (int i = 0; i < SESSION_PRESETS.size(); i++) {
+            if (SESSION_PRESETS.get(i).key().equals(key)) {
+                RollPreset previous = SESSION_PRESETS.set(i, preset);
+                syncShared(SESSION_OWNER, previous, preset);
+                return Optional.of(previous);
+            }
+        }
+        if (SESSION_PRESETS.size() >= MAX_PRESETS) {
+            return Optional.empty();
+        }
+        SESSION_PRESETS.add(preset);
+        syncShared(SESSION_OWNER, null, preset);
+        return Optional.empty();
+    }
+
+    public static Optional<RollPreset> removeSession(String rawName) {
+        int index = indexOfSession(rawName);
+        if (index < 0) {
+            return Optional.empty();
+        }
+        RollPreset removed = SESSION_PRESETS.remove(index);
+        unpublishShared(SESSION_OWNER, removed.key());
+        return Optional.of(removed);
+    }
+
+    public static boolean moveSession(int from, int to) {
+        if (from < 0 || to < 0 || from >= SESSION_PRESETS.size() || to >= SESSION_PRESETS.size()
+                || from == to) {
+            return false;
+        }
+        RollPreset moved = SESSION_PRESETS.remove(from);
+        SESSION_PRESETS.add(to, moved);
+        return true;
     }
 
     /**
@@ -209,6 +338,10 @@ public final class RollPresetStore {
      *
      * <p>O dono ve o preset na propria lista (ele e o unico que pode editar), e
      * nao na lista de compartilhados: mostrar duas vezes enfeitiçaria a tela.
+     *
+     * <p>Presets da sessao ativa (owner {@link #SESSION_OWNER}) aparecem como
+     * compartilhados para quem esta na lista pessoal; para mestres em modo sessao,
+     * use {@link #listSharedForSession()}.
      */
     public static List<SharedPreset> listShared(UUID viewerUuid) {
         List<SharedPreset> out = new ArrayList<>();
@@ -224,6 +357,25 @@ public final class RollPresetStore {
     public static List<String> sharedKeys(UUID viewerUuid) {
         List<String> out = new ArrayList<>();
         for (SharedPreset shared : listShared(viewerUuid)) {
+            out.add(shared.preset().key());
+        }
+        return out;
+    }
+
+    /** Presets compartilhados visiveis para um Mestre usando a lista da sessao ativa. */
+    public static List<SharedPreset> listSharedForSession() {
+        List<SharedPreset> out = new ArrayList<>();
+        for (SharedPreset shared : SHARED.values()) {
+            if (!SESSION_OWNER.equals(shared.owner())) {
+                out.add(shared);
+            }
+        }
+        return out;
+    }
+
+    public static List<String> sharedKeysForSession() {
+        List<String> out = new ArrayList<>();
+        for (SharedPreset shared : listSharedForSession()) {
             out.add(shared.preset().key());
         }
         return out;

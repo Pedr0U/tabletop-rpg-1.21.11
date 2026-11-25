@@ -92,6 +92,24 @@ public final class RpgNetworking {
     }
 
     /**
+     * Cliente -> Servidor: solicita abertura remota do container mirado.
+     *
+     * <p>Sem campos: o servidor resolve o alvo por raycast a partir do olhar do
+     * jogador e valida sessao ativa, cargo de Mestre, distancia e tipo de bloco.
+     * Usado pelo clique direito com mao principal vazia.
+     */
+    public record OpenChestRequestPayload() implements CustomPacketPayload {
+        public static final Type<OpenChestRequestPayload> TYPE = new Type<>(TabletopRpg.id("open_chest_request"));
+        public static final StreamCodec<FriendlyByteBuf, OpenChestRequestPayload> STREAM_CODEC =
+                StreamCodec.unit(new OpenChestRequestPayload());
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
+    /**
      * Servidor -> Cliente: abre a tela do Sheet Editor.
      *
      * <p>27/09/2026, primeira fatia do editor. Nao leva <b>nenhum dado</b>: e
@@ -312,13 +330,30 @@ public final class RpgNetworking {
             },
             buf -> buf.readBoolean() ? buf.readVarInt() : null);
 
-    /** Servidor -> Cliente: dados da sessão usados para montar o menu. */    public record MenuDataPayload(
+    /** Resumo de uma sessão salva, enviado ao cliente para a tela de lista. */
+    public record SessionSummary(String id, String name, boolean started, int members) {
+        public static final StreamCodec<FriendlyByteBuf, SessionSummary> STREAM_CODEC = StreamCodec.composite(
+                ByteBufCodecs.stringUtf8(8), SessionSummary::id,
+                ByteBufCodecs.stringUtf8(64), SessionSummary::name,
+                ByteBufCodecs.BOOL, SessionSummary::started,
+                ByteBufCodecs.VAR_INT, SessionSummary::members,
+                SessionSummary::new
+        );
+    }
+
+    /** Servidor -> Cliente: dados da sessão usados para montar o menu. */
+    public record MenuDataPayload(
             boolean isMaster,
             boolean isMyTurn,
             String sessionName,
             String modeName,
             String activePlayerName,
-            List<String> playerNames
+            List<String> playerNames,
+            boolean hasActiveSession,
+            boolean memberOfActive,
+            List<SessionSummary> sessions,
+            int maxMasters,
+            int masterCount
     ) implements CustomPacketPayload {
         public static final Type<MenuDataPayload> TYPE = new Type<>(TabletopRpg.id("menu_data"));
         public static final StreamCodec<FriendlyByteBuf, MenuDataPayload> STREAM_CODEC = StreamCodec.composite(
@@ -328,6 +363,11 @@ public final class RpgNetworking {
                 ByteBufCodecs.stringUtf8(64), MenuDataPayload::modeName,
                 ByteBufCodecs.stringUtf8(64), MenuDataPayload::activePlayerName,
                 ByteBufCodecs.stringUtf8(16).apply(ByteBufCodecs.list()), MenuDataPayload::playerNames,
+                ByteBufCodecs.BOOL, MenuDataPayload::hasActiveSession,
+                ByteBufCodecs.BOOL, MenuDataPayload::memberOfActive,
+                SessionSummary.STREAM_CODEC.apply(ByteBufCodecs.list()), MenuDataPayload::sessions,
+                ByteBufCodecs.VAR_INT, MenuDataPayload::maxMasters,
+                ByteBufCodecs.VAR_INT, MenuDataPayload::masterCount,
                 MenuDataPayload::new
         );
 
@@ -1773,6 +1813,7 @@ public final class RpgNetworking {
     /** Deve ser chamado no onInitialize() (lado comum). */
     public static void registerPayloads() {
         PayloadTypeRegistry.playC2S().register(MenuRequestPayload.TYPE, MenuRequestPayload.STREAM_CODEC);
+        PayloadTypeRegistry.playC2S().register(OpenChestRequestPayload.TYPE, OpenChestRequestPayload.STREAM_CODEC);
         PayloadTypeRegistry.playS2C().register(MenuDataPayload.TYPE, MenuDataPayload.STREAM_CODEC);
         PayloadTypeRegistry.playS2C().register(OpenSheetEditorPayload.TYPE,
                 OpenSheetEditorPayload.STREAM_CODEC);
@@ -1922,11 +1963,22 @@ public final class RpgNetworking {
             sendMenuToPlayer(context.player());
         });
 
+        ServerPlayNetworking.registerGlobalReceiver(OpenChestRequestPayload.TYPE, (payload, context) -> {
+            ServerPlayer player = context.player();
+            context.server().execute(() -> MasterCommands.openLookedContainer(player));
+        });
+
         // Ao entrar, o jogador só recebe o estado de "trava" (congelamento),
         // para não conseguir se mover em investigação/combate. NÃO enviamos o
         // MenuDataPayload aqui, pois isso abriria o menu automaticamente ao entrar.
         ServerPlayConnectionEvents.JOIN.register((handler, sender, server) -> {
-            sendLockToPlayer(handler.getPlayer());
+            ServerPlayer joined = handler.getPlayer();
+            SessionStore store = SessionStore.get(server);
+            if (!store.isActive()) {
+                store.join(SessionStore.DEFAULT_ID, joined.getUUID());
+            }
+            SessionStore.applyToServer(server);
+            sendLockToPlayer(joined);
             // Estado "deitado" no JOIN: sem isto o cliente ficaria 1 tick com o
             // valor antigo de `downed` (que e estatico e sobrevive a troca de
             // mundo) e um personagem deitado poderia andar nesse intervalo.
@@ -1958,12 +2010,17 @@ public final class RpgNetworking {
             if (player == null) {
                 return;
             }
+            UUID uuid = player.getUUID();
+            SessionStore store = SessionStore.get(server);
             boolean changed = false;
-            if (SessionManager.isMaster(player)) {
+            boolean wasMaster = SessionManager.isMaster(player);
+            if (wasMaster) {
                 // Com vários mestres, a sessão continua enquanto sobrar um
                 // (22/10/2026). Só o ÚLTIMO mestre que sai pausa a sessão.
                 boolean lastMaster = SessionManager.getMasterCount() <= 1;
                 SessionManager.releaseMaster(player);
+                store.releaseMaster(uuid);
+                SessionStore.applyToServer(server);
                 changed = true;
                 if (lastMaster) {
                     // Encerra a iniciativa antes de voltar para FREE: sem mestre,
@@ -2340,7 +2397,9 @@ public final class RpgNetworking {
                 return;
             }
             MinecraftServer server = sender.level().getServer();
-            SheetModelStore store = SheetModelStore.get(server);
+            SessionStore sessionStore = SessionStore.get(server);
+            SheetModelStore globalStore = SheetModelStore.get(server);
+            SheetModel current = sessionStore.effectiveSheetModel();
             SheetModel next = payload.model();
             if (next == null) {
                 return;
@@ -2350,10 +2409,16 @@ public final class RpgNetworking {
             if (!next.initiativeUseDefault() && next.initiativePericiaId().isEmpty()) {
                 return;
             }
-            if (next.equals(store.model())) {
+            if (next.equals(current)) {
                 return; // nada mudou de fato
             }
-            store.update(next);
+            if (sessionStore.hasActive()) {
+                sessionStore.replaceSheetModel(sessionStore.activeId(), next);
+            } else {
+                globalStore.update(next);
+            }
+            SheetModel effective = sessionStore.effectiveSheetModel();
+            SheetModelHolder.set(effective);
 
             // As fichas que ja existem em memoria ainda tem a lista antiga.
             // Re-alinhar aqui e o que faz o valor de quem sobreviveu a edicao
@@ -2363,13 +2428,15 @@ public final class RpgNetworking {
             // e a unica pista que fica no console de QUANTO o Mestre autorizou,
             // depois que a tela ja fechou. Sem isso, um valor cortado e um bug
             // de clamp ficam indistinguiveis de um valor que o Mestre digitou.
-            TabletopRpg.LOGGER.info("[TabletopRPG] Mestre {} editou o modelo: {} atributo(s), {} pericia(s), "
+            TabletopRpg.LOGGER.info("[TabletopRPG] Mestre {} editou o modelo{}: {} atributo(s), {} pericia(s), "
                             + "atributo {}..{}, pericia 0..{}, {} ficha(s) realinhada(s).",
-                    sender.getName().getString(), next.attributeCount(), next.periciaCount(),
-                    next.attributeValueMin(), next.attributeValueMax(), next.periciaValueMax(),
+                    sender.getName().getString(),
+                    sessionStore.hasActive() ? " da sessao " + sessionStore.activeId() : " global",
+                    effective.attributeCount(), effective.periciaCount(),
+                    effective.attributeValueMin(), effective.attributeValueMax(), effective.periciaValueMax(),
                     realinhadas);
 
-            broadcastSheetModel(server, next);
+            broadcastSheetModel(server, effective);
             // As fichas mudaram de forma (podem ter gained/lost linhas), entao
             // quem estiver olhando precisa receber a ficha nova tambem.
             for (ServerPlayer online : server.getPlayerList().getPlayers()) {
@@ -2389,21 +2456,31 @@ public final class RpgNetworking {
                 return;
             }
             MinecraftServer server = sender.level().getServer();
-            SheetModelStore store = SheetModelStore.get(server);
+            SessionStore sessionStore = SessionStore.get(server);
+            SheetModelStore globalStore = SheetModelStore.get(server);
+            SheetModel current = sessionStore.effectiveSheetModel();
             String formula = payload.formula() == null ? "" : payload.formula();
             if (!InitiativeRoller.isValidPlainFormula(formula)) {
                 return;
             }
-            SheetModel next = store.model()
+            SheetModel next = current
                     .withInitiativeFormula(formula)
                     .withInitiativePlayerFormulaRoll(payload.playerFormulaRoll());
-            if (next.equals(store.model())) {
+            if (next.equals(current)) {
                 return;
             }
-            store.update(next);
-            TabletopRpg.LOGGER.info("[TabletopRPG] Mestre {} trocou a formula padrao de iniciativa para '{}'.",
-                    sender.getName().getString(), next.initiativeFormula());
-            broadcastSheetModel(server, next);
+            if (sessionStore.hasActive()) {
+                sessionStore.replaceSheetModel(sessionStore.activeId(), next);
+            } else {
+                globalStore.update(next);
+            }
+            SheetModel effective = sessionStore.effectiveSheetModel();
+            SheetModelHolder.set(effective);
+            TabletopRpg.LOGGER.info("[TabletopRPG] Mestre {} trocou a formula padrao de iniciativa{} para '{}'.",
+                    sender.getName().getString(),
+                    sessionStore.hasActive() ? " da sessao " + sessionStore.activeId() : " global",
+                    effective.initiativeFormula());
+            broadcastSheetModel(server, effective);
         });
 
         // Menu de dar turno (04/11/2026): o Mestre escolhe a entrada e o servidor
@@ -2768,11 +2845,10 @@ public final class RpgNetworking {
 
         ServerPlayNetworking.registerGlobalReceiver(PresetMovePayload.TYPE, (payload, context) -> {
             ServerPlayer player = context.player();
-            movePresetFromScreen(player, payload);
-            // Reenvia a lista: a seta muda a ordem, e a tela que mandou o clique so
-            // tem a lista antiga. Sem este envio, a seta mexeria no servidor e a
-            // tela mostraria a ordem antiga ate fechar e abrir de novo.
-            ServerPlayNetworking.send(player, presetListPayload(player.getUUID()));
+            PresetResultPayload result = movePresetFromScreen(player, payload);
+            if (result != null) {
+                ServerPlayNetworking.send(player, result);
+            }
         });
     }
 
@@ -2802,17 +2878,42 @@ public final class RpgNetworking {
         if (player == null || player.connection == null) {
             return;
         }
-        ServerPlayNetworking.send(player, presetListPayload(player.getUUID()));
+        ServerPlayNetworking.send(player, presetListPayload(player));
+    }
+
+    private static boolean isSessionMaster(ServerPlayer player) {
+        if (player == null || player.level() == null) {
+            return false;
+        }
+        MinecraftServer server = player.level().getServer();
+        if (server == null) {
+            return false;
+        }
+        SessionStore store = SessionStore.get(server);
+        return store.isActive() && store.isMaster(player.getUUID());
+    }
+
+    private static String activeSessionId(MinecraftServer server) {
+        if (server == null) {
+            return "";
+        }
+        SessionStore store = SessionStore.get(server);
+        return store.isActive() ? store.activeId() : "";
     }
 
     /**
-     * A lista de presets que a tela mostra: os da jogadora e os compartilhados da mesa.
-     *
-     * <p><b>Por que os dois na mesma lista:</b> a tela e o lugar onde a jogadora ve o
-     * que tem para rolar. Um preset compartilhado que so aparecesse no comando seria
-     * um preset que a mesa nao ve.
+     * A lista de presets que a tela mostra. Mestre da sessao ativa ve a lista da
+     * sessao + compartilhados de outros; demais veem lista pessoal + compartilhados.
      */
-    private static List<RollPreset> presetListForScreen(UUID uuid) {
+    private static List<RollPreset> presetListForScreen(ServerPlayer player) {
+        if (isSessionMaster(player)) {
+            List<RollPreset> out = new ArrayList<>(RollPresetStore.listSession());
+            for (RollPresetStore.SharedPreset shared : RollPresetStore.listSharedForSession()) {
+                out.add(shared.preset());
+            }
+            return out;
+        }
+        UUID uuid = player.getUUID();
         List<RollPreset> out = new ArrayList<>(RollPresetStore.list(uuid));
         for (RollPresetStore.SharedPreset shared : RollPresetStore.listShared(uuid)) {
             out.add(shared.preset());
@@ -2820,9 +2921,44 @@ public final class RpgNetworking {
         return out;
     }
 
+    private static List<String> presetSharedKeys(ServerPlayer player) {
+        if (isSessionMaster(player)) {
+            return RollPresetStore.sharedKeysForSession();
+        }
+        return RollPresetStore.sharedKeys(player.getUUID());
+    }
+
     /** O pacote de lista, com os presets e a marca de quais sao compartilhados. */
-    private static PresetListPayload presetListPayload(UUID uuid) {
-        return new PresetListPayload(presetListForScreen(uuid), RollPresetStore.sharedKeys(uuid));
+    private static PresetListPayload presetListPayload(ServerPlayer player) {
+        return new PresetListPayload(presetListForScreen(player), presetSharedKeys(player));
+    }
+
+    public static void broadcastPresetListToSessionMasters(MinecraftServer server, String sessionId) {
+        if (server == null || sessionId == null || sessionId.isBlank()) {
+            return;
+        }
+        SessionStore store = SessionStore.get(server);
+        SessionStore.SessionInfo info = store.get(sessionId);
+        if (info == null) {
+            return;
+        }
+        PresetListPayload payload = new PresetListPayload(
+                sessionScreenList(),
+                RollPresetStore.sharedKeysForSession());
+        for (UUID uuid : info.masters()) {
+            ServerPlayer master = server.getPlayerList().getPlayer(uuid);
+            if (master != null && isSessionMaster(master)) {
+                ServerPlayNetworking.send(master, payload);
+            }
+        }
+    }
+
+    private static List<RollPreset> sessionScreenList() {
+        List<RollPreset> out = new ArrayList<>(RollPresetStore.listSession());
+        for (RollPresetStore.SharedPreset shared : RollPresetStore.listSharedForSession()) {
+            out.add(shared.preset());
+        }
+        return out;
     }
 
     // ------------------------------------------------------------------
@@ -2864,12 +3000,40 @@ public final class RpgNetworking {
      * <p>Joga fora a resposta para quem nao e Mestre: nao ha lista publica de ameacas,
      * e a ficha guarda a descricao e as habilidades da criatura.
      */
-    public static void sendThreatSheetList(ServerPlayer player) {
-        if (player == null || player.connection == null || !SessionManager.isMaster(player)) {
+    private static String threatSessionId(ServerPlayer player) {
+        if (player == null || player.connection == null) {
+            return null;
+        }
+        MinecraftServer server = player.level().getServer();
+        SessionStore store = server == null ? null : SessionStore.get(server);
+        if (store == null || !store.isActive() || !store.isMaster(player.getUUID())) {
+            return null;
+        }
+        return store.activeId();
+    }
+
+    private static void broadcastThreatList(MinecraftServer server, String sessionId) {
+        SessionStore store = SessionStore.get(server);
+        List<ThreatSheet> sheets = ThreatSheetStore.snapshot(sessionId);
+        store.replaceThreats(sessionId, sheets);
+        SessionStore.SessionInfo info = store.active();
+        if (info == null) {
             return;
         }
-        ServerPlayNetworking.send(player, new ThreatSheetListPayload(
-                ThreatSheetStore.snapshot(player.getUUID())));
+        for (UUID uuid : info.masters()) {
+            ServerPlayer master = server.getPlayerList().getPlayer(uuid);
+            if (master != null) {
+                ServerPlayNetworking.send(master, new ThreatSheetListPayload(sheets));
+            }
+        }
+    }
+
+    public static void sendThreatSheetList(ServerPlayer player) {
+        String sessionId = threatSessionId(player);
+        if (sessionId == null) {
+            return;
+        }
+        ServerPlayNetworking.send(player, new ThreatSheetListPayload(ThreatSheetStore.snapshot(sessionId)));
     }
 
     /**
@@ -2885,14 +3049,15 @@ public final class RpgNetworking {
      */
     private static ThreatSheetResultPayload saveThreatSheetFromScreen(ServerPlayer player,
                                                                        ThreatSheetSavePayload payload) {
-        if (!SessionManager.isMaster(player)) {
+        String sessionId = threatSessionId(player);
+        if (sessionId == null) {
             return threatSheetRefuse(player, "Só o mestre pode editar fichas de ameaça.");
         }
         if (payload == null || payload.sheet() == null) {
             return threatSheetRefuse(player, "Ficha vazia.");
         }
         ThreatSheet aligned = payload.sheet().alignedTo(SheetModelHolder.current());
-        ThreatSheetStore.SaveResult result = ThreatSheetStore.save(player, aligned, payload.originalName());
+        ThreatSheetStore.SaveResult result = ThreatSheetStore.save(sessionId, aligned, payload.originalName());
         if (!result.ok()) {
             return threatSheetRefuse(player, result.message());
         }
@@ -2907,7 +3072,7 @@ public final class RpgNetworking {
         // ficha e nova. A ficha que o cliente mandou (`aligned`) pode ter id vazio ou
         // desatualizado, e usar ela depois do save faz o mob vinculado nao ser
         // encontrado e o item nascer com id que nao existe. Relido do store.
-        ThreatSheet saved = ThreatSheetStore.find(player.getUUID(), aligned.key());
+        ThreatSheet saved = ThreatSheetStore.find(sessionId, aligned.key());
         if (saved == null) {
             saved = aligned;
         }
@@ -2919,6 +3084,7 @@ public final class RpgNetworking {
         // Modo Horda (22/10/2026): a ficha pode valer para VARIOS mobs, e TODOS eles
         // precisam do nome novo.
         MinecraftServer server = player.level().getServer();
+        broadcastThreatList(server, sessionId);
         ThreatSheetBinding.selfHeal(server);
         for (UUID bound : ThreatSheetBinding.mobsOf(server, saved.id())) {
             Mob linked = ThreatSheetBinding.mobEntity(server, bound);
@@ -2931,14 +3097,14 @@ public final class RpgNetworking {
             // "Atualizar", aberta pelo item: grava por cima e NAO entrega item, senao
             // cada edicao multiplicaria o stack na mochila (decisao do Mestre em 02/10/2026).
             return new ThreatSheetResultPayload(true, result.message(),
-                    ThreatSheetStore.snapshot(player.getUUID()), "");
+                    ThreatSheetStore.snapshot(sessionId), "");
         }
         ItemStack delivered = ModItems.giveThreatSheet(player, saved);
         String suffix = delivered == null
                 ? " (inventário cheio: a ficha foi salva, mas o item não coube)"
                 : "";
         return new ThreatSheetResultPayload(true, result.message() + suffix,
-                ThreatSheetStore.snapshot(player.getUUID()), "");
+                ThreatSheetStore.snapshot(sessionId), "");
     }
 
     /**
@@ -2949,7 +3115,7 @@ public final class RpgNetworking {
      * apagada), entao mandar a ficha pronta evita os dois desvios.
      */
     public static void sendThreatSheetOpen(ServerPlayer player, ThreatSheet sheet) {
-        if (player == null || player.connection == null || !SessionManager.isMaster(player)) {
+        if (threatSessionId(player) == null) {
             return;
         }
         ServerPlayNetworking.send(player, new ThreatSheetOpenPayload(sheet));
@@ -2963,15 +3129,17 @@ public final class RpgNetworking {
      */
     private static ThreatSheetResultPayload deleteThreatSheetFromScreen(ServerPlayer player,
                                                                         ThreatSheetDeletePayload payload) {
-        if (!SessionManager.isMaster(player)) {
+        String sessionId = threatSessionId(player);
+        if (sessionId == null) {
             return threatSheetRefuse(player, "Só o mestre pode apagar fichas de ameaça.");
         }
-        ThreatSheet removed = ThreatSheetStore.remove(player.getUUID(), payload.name());
+        ThreatSheet removed = ThreatSheetStore.remove(sessionId, payload.name());
         if (removed == null) {
             return threatSheetRefuse(player, "Essa ficha de ameaça não existe mais.");
         }
+        broadcastThreatList(player.level().getServer(), sessionId);
         return new ThreatSheetResultPayload(true, "Ficha de ameaça apagada.",
-                ThreatSheetStore.snapshot(player.getUUID()), "");
+                ThreatSheetStore.snapshot(sessionId), "");
     }
 
     /**
@@ -2980,19 +3148,24 @@ public final class RpgNetworking {
      */
     private static ThreatSheetResultPayload copyThreatSheetFromScreen(ServerPlayer player,
                                                                       ThreatSheetCopyPayload payload) {
-        if (!SessionManager.isMaster(player)) {
+        String sessionId = threatSessionId(player);
+        if (sessionId == null) {
             return threatSheetRefuse(player, "So o mestre pode copiar fichas de ameaca.");
         }
-        ThreatSheet mother = ThreatSheetStore.find(player.getUUID(), payload.motherName());
+        ThreatSheet mother = ThreatSheetStore.find(sessionId, payload.motherName());
         if (mother == null) {
             return threatSheetRefuse(player, "Essa ficha de ameaca nao existe mais.");
         }
-        ThreatSheetStore.SaveResult result = ThreatSheetStore.createCopy(player.getUUID(), mother.id());
-        String message = result.ok()
+        ThreatSheetStore.SaveResult result = ThreatSheetStore.createCopy(sessionId, mother.id());
+        boolean ok = result.ok();
+        if (ok) {
+            broadcastThreatList(player.level().getServer(), sessionId);
+        }
+        String message = ok
                 ? "Copia criada: " + mother.identity().name()
                 : result.message();
-        return new ThreatSheetResultPayload(result.ok(), message,
-                ThreatSheetStore.snapshot(player.getUUID()), "");
+        return new ThreatSheetResultPayload(ok, message,
+                ThreatSheetStore.snapshot(sessionId), "");
     }
 
     /**
@@ -3002,23 +3175,25 @@ public final class RpgNetworking {
      */
     private static ThreatSheetResultPayload newThreatSheetFromScreen(ServerPlayer player,
                                                                      ThreatSheetNewPayload payload) {
-        if (!SessionManager.isMaster(player)) {
+        String sessionId = threatSessionId(player);
+        if (sessionId == null) {
             return threatSheetRefuse(player, "So o mestre pode criar fichas de ameaca.");
         }
-        ThreatSheet created = ThreatSheetStore.createBlank(player.getUUID());
+        ThreatSheet created = ThreatSheetStore.createBlank(sessionId);
         if (created == null) {
             return threatSheetRefuse(player, ThreatSheetStore.SaveResult.LIMIT_REACHED.message());
         }
+        broadcastThreatList(player.level().getServer(), sessionId);
         return new ThreatSheetResultPayload(true,
                 "Ficha criada: " + created.identity().name(),
-                ThreatSheetStore.snapshot(player.getUUID()),
+                ThreatSheetStore.snapshot(sessionId),
                 created.identity().name());
     }
 
     /** Recusa com a lista vazia: quem nao e Mestre nao recebe nem a lista nem o motivo. */
     private static ThreatSheetResultPayload threatSheetRefuse(ServerPlayer player, String message) {
-        boolean master = SessionManager.isMaster(player);
-        List<ThreatSheet> sheets = master ? ThreatSheetStore.snapshot(player.getUUID()) : List.of();
+        String sessionId = threatSessionId(player);
+        List<ThreatSheet> sheets = sessionId == null ? List.of() : ThreatSheetStore.snapshot(sessionId);
         return new ThreatSheetResultPayload(false, message, sheets, "");
     }
 
@@ -3343,6 +3518,28 @@ public final class RpgNetworking {
         sendDiaryState(player, 0);
     }
 
+    /** Id da sessao ativa quando o jogador e Mestre dela; senao {@code null}. */
+    private static String diarySessionId(ServerPlayer player) {
+        if (player == null || player.level() == null) {
+            return null;
+        }
+        MinecraftServer server = player.level().getServer();
+        if (server == null) {
+            return null;
+        }
+        SessionStore store = SessionStore.get(server);
+        return store.isActive() && store.isMaster(player.getUUID()) ? store.activeId() : null;
+    }
+
+    private static DiaryStatePayload diaryStatePayload(ServerPlayer player, int focusId, boolean shared) {
+        return new DiaryStatePayload(
+                DiaryStatePayload.LAYOUT_VERSION,
+                shared ? DiaryStore.entriesSession() : DiaryStore.entries(player.getUUID()),
+                shared || DiaryStore.canUndo(player.getUUID()),
+                focusId,
+                shared ? List.of() : DiaryStore.pendingIds(player.getUUID()));
+    }
+
     /**
      * O mesmo estado, dizendo qual anotacao acabou de nascer.
      *
@@ -3352,12 +3549,40 @@ public final class RpgNetworking {
         if (player == null || player.connection == null) {
             return;
         }
-        ServerPlayNetworking.send(player, new DiaryStatePayload(
-                DiaryStatePayload.LAYOUT_VERSION,
-                DiaryStore.entries(player.getUUID()),
-                DiaryStore.canUndo(player.getUUID()),
-                focusId,
-                DiaryStore.pendingIds(player.getUUID())));
+        ServerPlayNetworking.send(player,
+                diaryStatePayload(player, focusId, diarySessionId(player) != null));
+    }
+
+    /**
+     * Depois de uma mutacao: Mestre da sessao ativa grava no SavedData e recebe o estado com
+     * o {@code focusId} dele; os outros Mestres online da mesma sessao recebem o mesmo
+     * conteudo sem foco. Jogador fora dessa autoridade continua no diario pessoal.
+     */
+    private static void broadcastDiaryState(ServerPlayer player, int focusId) {
+        String sessionId = diarySessionId(player);
+        if (sessionId == null) {
+            sendDiaryState(player, focusId);
+            return;
+        }
+        MinecraftServer server = player.level().getServer();
+        if (server == null) {
+            return;
+        }
+        SessionStore store = SessionStore.get(server);
+        store.replaceDiary(sessionId, DiaryStore.snapshotSession());
+        SessionStore.SessionInfo info = store.get(sessionId);
+        if (info == null) {
+            return;
+        }
+        DiaryStatePayload mine = diaryStatePayload(player, focusId, true);
+        DiaryStatePayload others = diaryStatePayload(player, 0, true);
+        for (UUID uuid : info.masters()) {
+            ServerPlayer master = server.getPlayerList().getPlayer(uuid);
+            if (master != null && isSessionMaster(master)) {
+                ServerPlayNetworking.send(master,
+                        master.getUUID().equals(player.getUUID()) ? mine : others);
+            }
+        }
     }
 
     /**
@@ -3374,35 +3599,49 @@ public final class RpgNetworking {
 
         ServerPlayNetworking.registerGlobalReceiver(DiaryCreatePayload.TYPE, (payload, context) -> {
             ServerPlayer player = context.player();
+            boolean shared = diarySessionId(player) != null;
             try {
-                DiaryStore.create(player.getUUID(), payload.parentId(), payload.title(), payload.description());
+                if (shared) {
+                    DiaryStore.createSession(payload.parentId(), payload.title(), payload.description());
+                } else {
+                    DiaryStore.create(player.getUUID(), payload.parentId(), payload.title(), payload.description());
+                }
             } catch (DiaryStore.DiaryException erro) {
                 TabletopRpg.LOGGER.warn("[TabletopRPG] Diario: criação recusada para {}: {}",
                         player.getName().getString(), erro.getMessage());
             }
-            sendDiaryState(player);
+            broadcastDiaryState(player, 0);
         });
 
         ServerPlayNetworking.registerGlobalReceiver(DiaryCreateChildPayload.TYPE, (payload, context) -> {
             ServerPlayer player = context.player();
+            boolean shared = diarySessionId(player) != null;
             int created = 0;
             try {
                 // O numero sai do servidor porque a contagem de subsecoes do pai mora aqui.
                 // Ver `DiaryCreateChildPayload`.
-                DiaryEntry entry = DiaryStore.create(player.getUUID(), payload.parentId(),
-                        DiaryStore.defaultSubsectionTitle(player.getUUID(), payload.parentId()), "");
+                DiaryEntry entry = shared
+                        ? DiaryStore.createSession(payload.parentId(),
+                                DiaryStore.defaultSubsectionTitleSession(payload.parentId()), "")
+                        : DiaryStore.create(player.getUUID(), payload.parentId(),
+                                DiaryStore.defaultSubsectionTitle(player.getUUID(), payload.parentId()), "");
                 created = entry.id();
             } catch (DiaryStore.DiaryException erro) {
                 TabletopRpg.LOGGER.warn("[TabletopRPG] Diario: criação de subseção recusada para {}: {}",
                         player.getName().getString(), erro.getMessage());
             }
-            sendDiaryState(player, created);
+            broadcastDiaryState(player, created);
         });
 
         ServerPlayNetworking.registerGlobalReceiver(DiarySavePayload.TYPE, (payload, context) -> {
             ServerPlayer player = context.player();
+            boolean shared = diarySessionId(player) != null;
             try {
-                DiaryStore.save(player.getUUID(), payload.id(), payload.title(), payload.description());
+                if (shared) {
+                    DiaryStore.saveSession(payload.id(), payload.title(), payload.description());
+                } else {
+                    DiaryStore.save(player.getUUID(), payload.id(), payload.title(), payload.description());
+                }
             } catch (DiaryStore.DiaryException erro) {
                 TabletopRpg.LOGGER.warn("[TabletopRPG] Diario: gravação recusada para {}: {}",
                         player.getName().getString(), erro.getMessage());
@@ -3410,34 +3649,46 @@ public final class RpgNetworking {
             // O `accept` vem DEPOIS do `save`, e nao junto: se o `save` foi recusado (titulo
             // vazio, por exemplo), aceitar em seguida esvaziaria a pilha de desfazer sem
             // que nada novo tivesse entrado, e a jogadora perderia o [Reverter] sem motivo.
-            if (payload.accept()) {
+            // No diario de sessao o espelho e local, entao o servidor nao aceita nada.
+            if (payload.accept() && !shared) {
                 DiaryStore.accept(player.getUUID());
             }
-            sendDiaryState(player);
+            broadcastDiaryState(player, 0);
         });
 
         ServerPlayNetworking.registerGlobalReceiver(DiaryAcceptPayload.TYPE, (payload, context) -> {
             // Sem `save` antes: nao ha texto vindo junto, entao nao ha o que gravar, e o
             // `accept` sozinho ja faz a parte que importa -- recopia o espelho e esvazia a
-            // pilha de desfazer.
-            DiaryStore.accept(context.player().getUUID());
+            // pilha de desfazer. No diario de sessao isso e local ao cliente.
+            if (diarySessionId(context.player()) == null) {
+                DiaryStore.accept(context.player().getUUID());
+            }
             sendDiaryState(context.player());
         });
 
         ServerPlayNetworking.registerGlobalReceiver(DiaryDeletePayload.TYPE, (payload, context) -> {
             ServerPlayer player = context.player();
+            boolean shared = diarySessionId(player) != null;
             // `false` = id nao existe. Nao e erro: a tela pode ter clicado num card que o
             // servidor ja tinha apagado (desfazer chegou antes do delete, por exemplo).
-            if (!DiaryStore.delete(player.getUUID(), payload.id())) {
+            boolean apagou = shared
+                    ? DiaryStore.deleteSession(payload.id())
+                    : DiaryStore.delete(player.getUUID(), payload.id());
+            if (!apagou) {
                 TabletopRpg.LOGGER.debug("[TabletopRPG] Diario: apagar id {} que não existe para {}",
                         payload.id(), player.getName().getString());
             }
-            sendDiaryState(player);
+            broadcastDiaryState(player, 0);
         });
 
         ServerPlayNetworking.registerGlobalReceiver(DiaryUndoPayload.TYPE, (payload, context) -> {
             ServerPlayer player = context.player();
-            if (!DiaryStore.undo(player.getUUID())) {
+            if (diarySessionId(player) != null) {
+                // O diario de sessao nao guarda historico de desfazer; rascunhos e Reverter
+                // sao locais. Nao devolver estado de outro Mestre aqui.
+                TabletopRpg.LOGGER.debug("[TabletopRPG] Diario: Reverter ignorado no diario da sessao para {}",
+                        player.getName().getString());
+            } else if (!DiaryStore.undo(player.getUUID())) {
                 // Mesma razao do id inexistente: um Reverter clicado duas vezes, ou um
                 // clique que chegou depois de outra delecao.
                 TabletopRpg.LOGGER.debug("[TabletopRPG] Diario: Reverter sem nada para desfazer para {}",
@@ -3448,8 +3699,12 @@ public final class RpgNetworking {
 
         ServerPlayNetworking.registerGlobalReceiver(DiaryPinPayload.TYPE, (payload, context) -> {
             ServerPlayer player = context.player();
-            DiaryStore.setPinned(player.getUUID(), payload.id(), payload.pinned());
-            sendDiaryState(player);
+            if (diarySessionId(player) != null) {
+                DiaryStore.setPinnedSession(payload.id(), payload.pinned());
+            } else {
+                DiaryStore.setPinned(player.getUUID(), payload.id(), payload.pinned());
+            }
+            broadcastDiaryState(player, 0);
         });
     }
 
@@ -3475,30 +3730,82 @@ public final class RpgNetworking {
         try {
             preset = RollPreset.create(name, payload.formula(), payload.colorId(), payload.openRoll());
         } catch (RollPreset.PresetException e) {
-            // Formula ou cor invalida: se acusa aqui, com o texto do RollPreset, que
-            // e o mesmo que o comando mostraria.
             return presetRefuse(player, "message.tabletoprpg.preset_create_failed", e.toComponent());
         }
 
-        UUID uuid = player.getUUID();
+        if (isSessionMaster(player)) {
+            return savePresetSession(player, payload, preset);
+        }
+        return savePresetPersonal(player, payload, preset);
+    }
+
+    private static PresetResultPayload savePresetSession(ServerPlayer player, PresetSavePayload payload,
+                                                         RollPreset preset) {
+        MinecraftServer server = player.level().getServer();
+        String sessionId = activeSessionId(server);
         boolean editing = payload.originalName() != null && !payload.originalName().isBlank();
-        String originalKey = editing ? RollPreset.normalizeKey(payload.originalName()) : "";
-        // Editar e ato de DONO: a busca e so entre os presets da propria jogadora.
         RollPreset original = editing
-                ? RollPresetStore.findOwn(uuid, payload.originalName()).orElse(null) : null;
+                ? RollPresetStore.findSessionOwn(payload.originalName()).orElse(null)
+                : null;
 
         if (editing && original == null) {
-            // A tela tinha um preset na tela e o servidor nao tem mais (deletado por
-            // comando, por exemplo). Dizer isso e melhor que criar um preset novo
-            // sem a jogadora pedir.
             if (RollPresetStore.findShared(payload.originalName()).isPresent()) {
                 return presetRefuse(player, "message.tabletoprpg.preset_not_owner", payload.originalName());
             }
             return presetRefuse(player, "message.tabletoprpg.preset_not_found", payload.originalName());
         }
 
-        // Colisao de nome: so recusa se o dono da chave for OUTRO preset. Editar sem
-        // mudar o nome tem que funcionar, e e o caso comum de arrumar a cor.
+        RollPreset conflict = RollPresetStore.findSessionOwn(preset.key()).orElse(null);
+        if (conflict != null && (original == null || !conflict.key().equals(original.key()))) {
+            return presetRefuse(player, "message.tabletoprpg.preset_already_exists", conflict.name());
+        }
+        if (original == null && RollPresetStore.countSession() >= RollPresetStore.MAX_PRESETS) {
+            return presetRefuse(player, "message.tabletoprpg.preset_limit",
+                    String.valueOf(RollPresetStore.MAX_PRESETS));
+        }
+
+        if (original != null && !original.key().equals(preset.key())) {
+            RollPresetStore.removeSession(original.name());
+        }
+        RollPresetStore.putSession(preset);
+        if (server != null && !sessionId.isEmpty()) {
+            SessionStore.get(server).replacePresets(sessionId, RollPresetStore.snapshotSession());
+            broadcastPresetListToSessionMasters(server, sessionId);
+        }
+
+        boolean refreshed = original != null
+                && ModItems.refreshRollPresetItems(player, preset, original.key());
+        boolean gaveItem = refreshed || ModItems.giveRollPreset(player, preset) != null;
+        if (!gaveItem) {
+            return new PresetResultPayload(false,
+                    translatableText("message.tabletoprpg.preset_no_room"),
+                    presetListForScreen(player), presetSharedKeys(player));
+        }
+
+        String message = original != null && !original.key().equals(preset.key())
+                ? translatableText("message.tabletoprpg.preset_renamed", original.name(), preset.name())
+                : original != null
+                ? translatableText("message.tabletoprpg.preset_updated",
+                        preset.name(), preset.formula(), preset.color().displayName())
+                : translatableText("message.tabletoprpg.preset_created",
+                        preset.name(), preset.formula(), preset.color().displayName());
+        return new PresetResultPayload(true, message, presetListForScreen(player), presetSharedKeys(player));
+    }
+
+    private static PresetResultPayload savePresetPersonal(ServerPlayer player, PresetSavePayload payload,
+                                                          RollPreset preset) {
+        UUID uuid = player.getUUID();
+        boolean editing = payload.originalName() != null && !payload.originalName().isBlank();
+        RollPreset original = editing
+                ? RollPresetStore.findOwn(uuid, payload.originalName()).orElse(null) : null;
+
+        if (editing && original == null) {
+            if (RollPresetStore.findShared(payload.originalName()).isPresent()) {
+                return presetRefuse(player, "message.tabletoprpg.preset_not_owner", payload.originalName());
+            }
+            return presetRefuse(player, "message.tabletoprpg.preset_not_found", payload.originalName());
+        }
+
         RollPreset conflict = RollPresetStore.findOwn(uuid, preset.key()).orElse(null);
         if (conflict != null && (original == null || !conflict.key().equals(original.key()))) {
             return presetRefuse(player, "message.tabletoprpg.preset_already_exists", conflict.name());
@@ -3508,31 +3815,19 @@ public final class RpgNetworking {
                     String.valueOf(RollPresetStore.MAX_PRESETS));
         }
 
-        // Renomear e trocar a chave: o preset velho sai e o novo entra no lugar dele.
-        // Sem este passo, o preset renomeado ficaria duplicado, com o nome novo em
-        // cima do velho.
         if (original != null && !original.key().equals(preset.key())) {
             RollPresetStore.remove(uuid, original.name());
         }
         RollPresetStore.put(uuid, preset);
 
-        // Item: sempre no save. Criar precisa (o comando cria e entrega), e renomear
-        // precisa porque o item antigo mostra o nome velho.
-        //
-        // Editar atualiza o item NO LUGAR (22/10/2026): o item carrega a flag de
-        // rolagem publica, e um item velho sem a flag rolaria em segredo quando o
-        // preset ja e publico. Se a jogadora nao tem item do preset, ela recebe um.
         boolean refreshed = original != null
                 && ModItems.refreshRollPresetItems(player, preset, original.key());
         boolean gaveItem = refreshed || ModItems.giveRollPreset(player, preset) != null;
 
         if (!gaveItem) {
-            // Sem espaco: o preset foi SALVO, so o item nao coube. Recusa com o aviso
-            // do inventario cheio e a lista atualizada, para a tela nao ficar
-            // achando que perdeu o preset.
             return new PresetResultPayload(false,
                     translatableText("message.tabletoprpg.preset_no_room"),
-                    presetListForScreen(uuid), RollPresetStore.sharedKeys(uuid));
+                    presetListForScreen(player), presetSharedKeys(player));
         }
 
         String message = original != null && !original.key().equals(preset.key())
@@ -3543,8 +3838,7 @@ public final class RpgNetworking {
                         preset.name(), preset.formula(), preset.color().displayName())
                 : translatableText("message.tabletoprpg.preset_created",
                         preset.name(), preset.formula(), preset.color().displayName());
-        return new PresetResultPayload(true, message, presetListForScreen(uuid),
-                RollPresetStore.sharedKeys(uuid));
+        return new PresetResultPayload(true, message, presetListForScreen(player), presetSharedKeys(player));
     }
 
     /**
@@ -3556,11 +3850,28 @@ public final class RpgNetworking {
      */
     private static PresetResultPayload deletePresetFromScreen(ServerPlayer player,
                                                               PresetDeletePayload payload) {
+        if (isSessionMaster(player)) {
+            MinecraftServer server = player.level().getServer();
+            String sessionId = activeSessionId(server);
+            RollPreset removed = RollPresetStore.removeSession(payload.name()).orElse(null);
+            if (removed == null) {
+                if (RollPresetStore.findShared(payload.name()).isPresent()) {
+                    return presetRefuse(player, "message.tabletoprpg.preset_not_owner", payload.name());
+                }
+                return presetRefuse(player, "message.tabletoprpg.preset_not_found", payload.name());
+            }
+            if (server != null && !sessionId.isEmpty()) {
+                SessionStore.get(server).replacePresets(sessionId, RollPresetStore.snapshotSession());
+                broadcastPresetListToSessionMasters(server, sessionId);
+            }
+            return new PresetResultPayload(true,
+                    translatableText("message.tabletoprpg.preset_deleted", removed.name()),
+                    presetListForScreen(player), presetSharedKeys(player));
+        }
+
         UUID uuid = player.getUUID();
         RollPreset removed = RollPresetStore.remove(uuid, payload.name()).orElse(null);
         if (removed == null) {
-            // Apagar e ato de DONO: um preset compartilhado de outra pessoa nao pode
-            // ser apagado por quem nao o criou.
             if (RollPresetStore.findShared(payload.name()).isPresent()) {
                 return presetRefuse(player, "message.tabletoprpg.preset_not_owner", payload.name());
             }
@@ -3568,7 +3879,7 @@ public final class RpgNetworking {
         }
         return new PresetResultPayload(true,
                 translatableText("message.tabletoprpg.preset_deleted", removed.name()),
-                presetListForScreen(uuid), RollPresetStore.sharedKeys(uuid));
+                presetListForScreen(player), presetSharedKeys(player));
     }
 
     /**
@@ -3579,20 +3890,34 @@ public final class RpgNetworking {
      * criado por comando), mover o preset pela posicao dele por nome e o que mantem
      * a seta mexendo no preset certo.
      */
-    private static void movePresetFromScreen(ServerPlayer player, PresetMovePayload payload) {
+    private static PresetResultPayload movePresetFromScreen(ServerPlayer player, PresetMovePayload payload) {
+        if (isSessionMaster(player)) {
+            MinecraftServer server = player.level().getServer();
+            String sessionId = activeSessionId(server);
+            int index = RollPresetStore.indexOfSession(payload.name());
+            if (index < 0) {
+                return null;
+            }
+            int target = payload.up() ? index - 1 : index + 1;
+            if (RollPresetStore.moveSession(index, target) && server != null && !sessionId.isEmpty()) {
+                SessionStore.get(server).replacePresets(sessionId, RollPresetStore.snapshotSession());
+                broadcastPresetListToSessionMasters(server, sessionId);
+            }
+            return null;
+        }
         int index = RollPresetStore.indexOf(player.getUUID(), payload.name());
         if (index < 0) {
-            return;
+            return null;
         }
         int target = payload.up() ? index - 1 : index + 1;
         RollPresetStore.move(player.getUUID(), index, target);
+        return new PresetResultPayload(true, "", presetListForScreen(player), presetSharedKeys(player));
     }
 
     /** Recusa com a lista atual: a tela recobra o estado sem reabrir. */
     private static PresetResultPayload presetRefuse(ServerPlayer player, String key, Object... args) {
-        UUID uuid = player.getUUID();
         return new PresetResultPayload(false, translatableText(key, args),
-                presetListForScreen(uuid), RollPresetStore.sharedKeys(uuid));
+                presetListForScreen(player), presetSharedKeys(player));
     }
 
     /**
@@ -3614,16 +3939,34 @@ public final class RpgNetworking {
         try {
             preset = RollPreset.create(name, payload.formula(), payload.colorId(), payload.openRoll());
         } catch (RollPreset.PresetException e) {
-            // Formula nao reconhecida: e agora que a tela acusa, ao salvar.
             return refuse("message.tabletoprpg.preset_create_failed", e.toComponent());
         }
 
+        if (isSessionMaster(player)) {
+            MinecraftServer server = player.level().getServer();
+            String sessionId = activeSessionId(server);
+            RollPreset existing = RollPresetStore.findSessionOwn(preset.key()).orElse(null);
+            if (existing != null) {
+                return refuse("message.tabletoprpg.preset_already_exists", existing.name());
+            }
+            if (RollPresetStore.countSession() >= RollPresetStore.MAX_PRESETS) {
+                return refuse("message.tabletoprpg.preset_limit", String.valueOf(RollPresetStore.MAX_PRESETS));
+            }
+            RollPresetStore.putSession(preset);
+            if (server != null && !sessionId.isEmpty()) {
+                SessionStore.get(server).replacePresets(sessionId, RollPresetStore.snapshotSession());
+                broadcastPresetListToSessionMasters(server, sessionId);
+            }
+            if (ModItems.giveRollPreset(player, preset) == null) {
+                return refuse("message.tabletoprpg.preset_no_room");
+            }
+            return new PresetCreateResultPayload(true, translatableText("message.tabletoprpg.preset_created",
+                    preset.name(), preset.formula(), preset.color().displayName()));
+        }
+
         UUID uuid = player.getUUID();
-        // A busca e SO entre os presets da propria jogadora: um preset compartilhado
-        // de outra pessoa nao impede a jogadora de ter um preset com o mesmo nome.
         RollPreset existing = RollPresetStore.findOwn(uuid, preset.key()).orElse(null);
         if (existing != null) {
-            // Mesma decisao do comando: create nao sobrescreve.
             return refuse("message.tabletoprpg.preset_already_exists", existing.name());
         }
         if (RollPresetStore.count(uuid) >= RollPresetStore.MAX_PRESETS) {
@@ -3632,9 +3975,6 @@ public final class RpgNetworking {
 
         RollPresetStore.put(uuid, preset);
         if (ModItems.giveRollPreset(player, preset) == null) {
-            // Sem espaco: o preset foi SALVO mesmo assim, so o item nao coube. Por
-            // isso a resposta e recusa com o texto do inventario cheio -- a jogadora
-            // ainda tem o preset, e `/rpg preset give` entrega o item depois.
             return refuse("message.tabletoprpg.preset_no_room");
         }
         return new PresetCreateResultPayload(true, translatableText("message.tabletoprpg.preset_created",
@@ -3672,7 +4012,10 @@ public final class RpgNetworking {
         if (player == null || player.connection == null) {
             return;
         }
-        boolean lock = !SessionManager.canPlayerAct(player);
+        MinecraftServer server = player.level() == null ? null : player.level().getServer();
+        SessionStore store = server == null ? null : SessionStore.get(server);
+        boolean outsideSession = store != null && store.isActive() && !SessionManager.isMaster(player) && !store.isMember(player.getUUID());
+        boolean lock = !SessionManager.canPlayerAct(player) || outsideSession;
         // Log diagnostico (08/10/2026): registra trava, modo e papel a cada envio,
         // para o repro do carrossel mostrar em que estado o cliente entrou ao voltar.
         TabletopRpg.LOGGER.info("[TabletopRPG] sendLockToPlayer para {}: locked={} modo={} mestre={}",
@@ -3810,13 +4153,28 @@ public final class RpgNetworking {
             }
         }
 
+        SessionStore store = server == null ? null : SessionStore.get(server);
+        List<SessionSummary> sessions = new ArrayList<>();
+        if (store != null) {
+            for (SessionStore.SessionInfo info : store.all()) {
+                sessions.add(new SessionSummary(info.id(), info.name(), info.started(), info.members().size()));
+            }
+        }
+        boolean hasActiveSession = store != null && store.hasActive();
+        boolean memberOfActive = store != null && store.isMember(player.getUUID());
+
         ServerPlayNetworking.send(player, new MenuDataPayload(
                 SessionManager.isMaster(player),
                 SessionManager.isActivePlayer(player),
                 SessionManager.getSessionName(),
                 SessionManager.getMode().getDisplayName(),
                 SessionManager.getActivePlayerName(),
-                playerNames
+                playerNames,
+                hasActiveSession,
+                memberOfActive,
+                sessions,
+                SessionManager.getMaxMasters(),
+                SessionManager.getMasterCount()
         ));
         sendLockToPlayer(player);
     }

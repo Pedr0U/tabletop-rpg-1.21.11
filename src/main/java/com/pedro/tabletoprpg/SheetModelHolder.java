@@ -6,9 +6,9 @@ package com.pedro.tabletoprpg;
  * <p>Existe para que {@link SheetData} possa alinhar a ficha com o modelo sem
  * precisar conhecer o mundo: o construtor de {@code SheetData} roda em todo
  * lugar (NBT, payload, ficha nova) e o unico ponto onde o modelo esta disponivel
- * e um campo estatico. O servidor o publica em
- * {@link SheetModelStore#get(net.minecraft.server.MinecraftServer)} e o cliente
- * o publica ao receber o payload de modelo.
+ * e um campo estatico. No servidor, o valor efetivo vem da sessao ativa quando
+ * houver uma, ou do fallback global/default; o cliente o publica ao receber o
+ * payload de modelo.
  *
  * <p><b>Por que um estatico e nao passar o modelo por parametro:</b> a regra de
  * alinhamento precisa valer em <i>todo</i> lugar onde uma ficha e construida,
